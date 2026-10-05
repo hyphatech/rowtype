@@ -306,11 +306,11 @@ let test_an_element_is_named () =
       in
       Alcotest.(check string)
         (format ^ ": a NULL")
-        "column 1, element 2: NULL where a value was expected"
+        "column 2, element 2: NULL where a value was expected"
         (said S.(t2 int (array int)) "select 0, array[1, null]");
       Alcotest.(check string)
         (format ^ ": not its type")
-        "column 0, element 3: expected INT, got text that is not one"
+        "column 1, element 3: expected INT, got text that is not one"
         (said (S.array S.int) "select array['1', '2', 'x']"))
 
 let () =

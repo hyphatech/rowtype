@@ -271,7 +271,7 @@ let test_type_mismatch_reported () =
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.(check bool)
             "names what was expected" true (contains m "INT");
-          Alcotest.(check bool) "names the column" true (contains m "column 0")
+          Alcotest.(check bool) "names the column" true (contains m "column 1")
       | Error (`Conflict _) ->
           Alcotest.fail "expected a decode error, got Conflict"
       | Ok _ -> Alcotest.fail "decoded TEXT as INT")
@@ -391,7 +391,7 @@ let test_parse_refuses_what_it_cannot_read () =
           ()
       with
       | Error (`Db m | `Not_serializable m) ->
-          Alcotest.(check bool) "names the column" true (contains m "column 0")
+          Alcotest.(check bool) "names the column" true (contains m "column 1")
       | Error (`Conflict _) -> Alcotest.fail "expected a decode error"
       | Ok _ -> Alcotest.fail "decoded a value nothing reads")
 
@@ -1161,7 +1161,7 @@ let test_a_shape_wider_than_the_result () =
       with
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.(check bool)
-            "the column it lacks" true (contains m "column 1")
+            "the column it lacks" true (contains m "column 2")
       | Ok _ | Error (`Conflict _) -> Alcotest.fail "decoded a column not there")
 
 (* Another database is the same server with another name, through the

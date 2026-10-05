@@ -199,7 +199,9 @@ module Make (B : Backend) = struct
     | None -> refused ~name i "NULL where a value was expected"
     | Some c -> Ok c
 
-  let row_column i = Printf.sprintf "column %d" i
+  (* Counted from 1, as a person counts them and as a backend's check of
+     statements names them. *)
+  let row_column i = Printf.sprintf "column %d" (i + 1)
 
   (* The decoded value and the next column index, so [Pair] can walk a row
      without the shapes needing to know their own offsets. [name] says where
@@ -255,7 +257,7 @@ module Make (B : Backend) = struct
           match B.elements c with
           | Error m -> refused ~name i m
           | Ok elements ->
-              (* Counted from 1, as Postgres counts an array's elements. *)
+              (* Counted from 1, as a row's columns are. *)
               let rec each k acc = function
                 | [] -> Ok (List.rev acc, i + 1)
                 | e :: rest ->
