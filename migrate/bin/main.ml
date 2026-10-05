@@ -37,10 +37,12 @@ let dir =
 let from_env_file path var =
   let value line =
     let line = String.trim line in
+    let export = "export " in
     let line =
-      match String.starts_with ~prefix:"export " line with
-      | true -> String.trim (String.sub line 7 (String.length line - 7))
-      | false -> line
+      if String.starts_with ~prefix:export line then
+        let n = String.length export in
+        String.trim (String.sub line n (String.length line - n))
+      else line
     in
     match String.index_opt line '=' with
     | Some i when String.equal (String.trim (String.sub line 0 i)) var ->

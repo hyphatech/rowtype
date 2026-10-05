@@ -38,10 +38,12 @@ let kind_of base sql =
              "%s: %S is not a directive: `no transaction` and `baseline` are"
              base word)
 
-(* A version is a UTC timestamp to the second, fourteen digits, so two
+(* A version is a UTC timestamp to the second, [YYYYMMDDHHMMSS], so two
    branches that each add a migration collide only if they did it in the same
    second -- a merge somebody has to look at, which is why a version used
    twice is refused rather than ordered. *)
+let version_digits = 14
+
 let parse path =
   let base = Filename.basename path in
   let malformed =
@@ -52,9 +54,9 @@ let parse path =
   | None -> malformed
   | Some stem -> (
       match String.index_opt stem '_' with
-      | Some 14 -> (
-          let version = String.sub stem 0 14
-          and name = String.sub stem 15 (String.length stem - 15) in
+      | Some i when i = version_digits -> (
+          let version = String.sub stem 0 i
+          and name = String.sub stem (i + 1) (String.length stem - i - 1) in
           match int_of_string_opt version with
           | Some v
             when String.for_all digit version && not (String.equal name "") -> (

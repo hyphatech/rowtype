@@ -118,7 +118,7 @@ sent, so a load is held a row at a time:
 
 ```ocaml
 Pg.copy_in db ~table:"users" ~columns:[ "name"; "email" ]
-  S.(t2 text text) (Seq.of_list users)
+  S.(t2 text text) (List.to_seq users)
 ```
 
 ## Errors and transactions

@@ -7,7 +7,7 @@ module C = Rowtype_migrate
 let check_string = Alcotest.(check string)
 
 let temp_dir () =
-  let d = Filename.temp_dir "spindle_cli" "" in
+  let d = Filename.temp_dir "rowtype_migrate_files" "" in
   at_exit (fun () ->
       Array.iter (fun f -> Sys.remove (Filename.concat d f)) (Sys.readdir d);
       Sys.rmdir d);

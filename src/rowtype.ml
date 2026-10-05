@@ -67,8 +67,8 @@ let arity = Shape.arity
 (* ------------------------------------------------------------------ *)
 (* Statements *)
 
-(* How many rows a statement answers, and so what running it gives: the one
-   runner reads it, where a function per count repeated the walk. *)
+(* How many rows a statement answers, and so what running it gives: one
+   runner reads it, so the walk over a result is written once. *)
 type _ rows =
   | Nothing : unit rows
   | One : 'r ty -> 'r rows
@@ -166,8 +166,8 @@ module Make (B : Backend) = struct
         let* xs = encode a x in
         let* ys = encode b y in
         Ok (xs @ ys)
-    | Conv (t, _, back), x -> encode t (back x)
-    | Parse (t, _, back), x -> encode t (back x)
+    | Conv (t, _, to_), x -> encode t (to_ x)
+    | Parse (t, _, to_), x -> encode t (to_ x)
     | Array t, xs ->
         if not (element t) then Error not_element
         else
@@ -240,12 +240,12 @@ module Make (B : Backend) = struct
         let* x, j = decode ~name a cells i in
         let* y, k = decode ~name b cells j in
         Ok ((x, y), k)
-    | Conv (t, fwd, _) ->
+    | Conv (t, of_, _) ->
         let* x, j = decode ~name t cells i in
-        Ok (fwd x, j)
-    | Parse (t, fwd, _) -> (
+        Ok (of_ x, j)
+    | Parse (t, of_, _) -> (
         let* x, j = decode ~name t cells i in
-        match fwd x with
+        match of_ x with
         | Some y -> Ok (y, j)
         | None -> refused ~name i "unreadable value")
     | Array t -> (

@@ -642,9 +642,9 @@ let mismatches db ~what ~counted declared actual =
   let rec go i declared actual acc =
     match (declared, actual) with
     | [], [] -> Ok (List.rev acc)
-    | column :: ds, oid :: os ->
+    | column :: declared_rest, oid :: actual_rest ->
         let* problem = mismatch db ~what i column oid in
-        go (i + 1) ds os
+        go (i + 1) declared_rest actual_rest
           (Option.fold ~none:acc ~some:(fun p -> p :: acc) problem)
     | _, _ ->
         Ok

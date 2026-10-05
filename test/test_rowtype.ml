@@ -275,7 +275,7 @@ let test_type_mismatch_reported () =
       | Ok _ -> Alcotest.fail "decoded TEXT as INT")
 
 (* A whole number in a float column arrives as "7", which must decode. *)
-let test_float_accepts_int () =
+let test_a_whole_double_reads_as_a_float () =
   on_db [ "create table f (x double precision)"; "insert into f values (7)" ]
     (fun db ->
       Alcotest.(check (option (float 0.001)))
@@ -1188,7 +1188,8 @@ let () =
             `Quick test_statements_are_checked_against_the_database;
           Alcotest.test_case "NULL as None" `Quick test_option_null;
           Alcotest.test_case "find_opt" `Quick test_find_opt;
-          Alcotest.test_case "float accepts int" `Quick test_float_accepts_int;
+          Alcotest.test_case "a whole double reads as a float" `Quick
+            test_a_whole_double_reads_as_a_float;
           Alcotest.test_case "exec_count counts rows" `Quick
             test_exec_count_counts_rows;
         ] );
