@@ -110,8 +110,9 @@ A change is done when every box holds:
 - [ ] `make lint` and `make test` pass.
 - [ ] **A change brings its tests**: the typical corner cases (empty, one,
   the boundaries, invalid input, a failure partway through), a property
-  test wherever a round trip exists, and the real server rather than a mock
-  of it.
+  test wherever a round trip exists, and the real server wherever a test
+  can run one, never a mock of it; a stub stands in only for a third
+  party's service.
 - [ ] **No partial functions**: no `failwith`, `invalid_arg`, `Option.get`,
   `Result.get_ok`, `List.hd`, `List.tl`, `List.nth`, `Obj.magic`. Errors are
   values: a `result` with a variant error, and `let*` over it.
