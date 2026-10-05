@@ -18,6 +18,14 @@ with `opam exec --switch=. --`. `make test` needs `docker compose`. Without
 `ROWTYPE_TEST_PG` the suites that need a server are skipped, and the test
 output says so. CI runs `make lint` and `make test` on OCaml 5.4 and 5.5.
 
+**Finding a name's uses.** `make setup` installs Merlin. Build the index
+once, `dune build @ocaml-index` through the switch, and then
+`ocamlmerlin single occurrences -identifier-at LINE:COL -scope project
+-filename FILE < FILE` lists every use of the name at that point, tests
+included; `outline` lists a module's values and types without reading it,
+and `type-enclosing -position LINE:COL` gives the type there. Each answers
+in JSON, where `rg` would need every hit read for a shadowed name.
+
 ## Layout
 
 ```
