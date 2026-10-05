@@ -87,13 +87,20 @@ arrive, so a result of any size is read in the memory of one row.
 | Column | Postgres | OCaml |
 |---|---|---|
 | `S.int` | `int2`, `int4`, `int8`, `oid` | `int`; an `int8` past 63 bits is refused |
+| `S.int64` | `int2`, `int4`, `int8`, `oid` | `int64`, the whole of an `int8` |
 | `S.float` | `float4`, `float8` | `float` |
 | `S.text` | `text`, `varchar`, `char`, `name`, an enum's label | `string` |
 | `S.bytes` | `bytea` | `string` |
 | `S.bool` | `bool` | `bool` |
 | `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond |
+| `S.date` | `date` | `Ptime.date` |
+| `S.timestamp` | `timestamp` | `Ptime.t`, the instant whose reading in UTC it is |
+| `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart |
 | `S.uuid` | `uuid` | `Uuidm.t` |
 | `S.json` | `json`, `jsonb` | `string`, the document |
+
+Any other type -- `numeric`, `time`, a range, `inet` -- is read as its text:
+cast it in the SQL (`price::text`) and read it with `S.text`.
 
 `S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map
 a column onto your own type. A list bound as an array writes many rows in one

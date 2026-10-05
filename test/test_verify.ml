@@ -53,7 +53,11 @@ let scalars =
         ] );
     Scalar ("bytes", S.bytes, [ "bytea" ]);
     Scalar ("bool", S.bool, [ "bool" ]);
+    Scalar ("int64", S.int64, [ "int2"; "int4"; "int8"; "oid"; "positive" ]);
     Scalar ("instant", S.instant, [ "timestamptz" ]);
+    Scalar ("date", S.date, [ "date" ]);
+    Scalar ("timestamp", S.timestamp, [ "timestamp" ]);
+    Scalar ("interval", S.interval, [ "interval" ]);
     Scalar ("uuid", S.uuid, [ "uuid" ]);
     Scalar ("json", S.json, [ "json"; "jsonb" ]);
     Scalar ("an array of int", S.array S.int, [ "int4[]" ]);

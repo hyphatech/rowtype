@@ -1,9 +1,14 @@
 (* One value drives both directions, binding and decoding, because the two
    written apart are where they come to disagree. *)
 
+(* An interval as SQL keeps one: months, days and microseconds apart, each
+   signed on its own, since a month is no fixed number of days. *)
+type interval = { months : int; days : int; microseconds : int }
+
 (* What one column holds, and all a backend is asked to encode and read. *)
 type _ scalar =
   | Int : int scalar
+  | Int64 : int64 scalar
   | Float : float scalar
   | Text : string scalar
   | Bytes : string scalar
@@ -11,6 +16,11 @@ type _ scalar =
   (* An instant, as Ptime's on this side, so a unit is never a caller's to
      get wrong, and whatever the database keeps one as on the other. *)
   | Instant : Ptime.t scalar
+  (* A date, and a timestamp with no zone: the instant whose reading in UTC
+     it is. *)
+  | Date : Ptime.date scalar
+  | Timestamp : Ptime.t scalar
+  | Interval : interval scalar
   (* A uuid as Uuidm's, and a JSON document in its own text: types of their
      own so a backend reads each exactly and checks a column is one. *)
   | Uuid : Uuidm.t scalar
@@ -34,11 +44,15 @@ type _ ty =
 
 let unit = Unit
 let int = Scalar Int
+let int64 = Scalar Int64
 let float = Scalar Float
 let text = Scalar Text
 let bytes = Scalar Bytes
 let bool = Scalar Bool
 let instant = Scalar Instant
+let date = Scalar Date
+let timestamp = Scalar Timestamp
+let interval = Scalar Interval
 let uuid = Scalar Uuid
 let json = Scalar Json
 let opt t = Opt t

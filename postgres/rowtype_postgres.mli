@@ -4,7 +4,8 @@
     Statements are Postgres's as written, [$1] for a shape's first value. An
     {!Rowtype.instant} is a [timestamptz], which keeps the microsecond too, sent
     as ISO 8601 in UTC and read back whatever the session's time zone, so a
-    connection is asked for [DateStyle=ISO]. Years 1 to 9999: within a day of
+    connection is asked for [DateStyle=ISO], and for [IntervalStyle=postgres],
+    the style an interval's text is read in. Years 1 to 9999: within a day of
     either end, a session far from UTC prints a year that a connection reading
     text cannot read. A [COMMIT] of a transaction a failed statement aborted is
     rolled back without an error, and {!commit} answers [`Rolled_back]. A result

@@ -13,13 +13,23 @@ let error_to_string : [< error ] -> string = function
 (* Shapes, re-exported so a call site writes [S.int]; the .mli makes the
    type abstract, so a caller builds a shape and never takes one apart. *)
 
+type interval = Shape.interval = {
+  months : int;
+  days : int;
+  microseconds : int;
+}
+
 type 'a scalar = 'a Shape.scalar =
   | Int : int scalar
+  | Int64 : int64 scalar
   | Float : float scalar
   | Text : string scalar
   | Bytes : string scalar
   | Bool : bool scalar
   | Instant : Ptime.t scalar
+  | Date : Ptime.date scalar
+  | Timestamp : Ptime.t scalar
+  | Interval : interval scalar
   | Uuid : Uuidm.t scalar
   | Json : string scalar
 
@@ -27,11 +37,15 @@ type 'a ty = 'a Shape.ty
 
 let unit = Shape.unit
 let int = Shape.int
+let int64 = Shape.int64
 let float = Shape.float
 let text = Shape.text
 let bytes = Shape.bytes
 let bool = Shape.bool
 let instant = Shape.instant
+let date = Shape.date
+let timestamp = Shape.timestamp
+let interval = Shape.interval
 let uuid = Shape.uuid
 let json = Shape.json
 let opt = Shape.opt

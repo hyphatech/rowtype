@@ -146,6 +146,67 @@ let test_instants () =
       refused (format ^ ": infinity")
         (reads db S.instant "select 'infinity'::timestamptz"))
 
+(* An int8 over its whole range, where [S.int] is a bit short of it. *)
+let test_int64s () =
+  round_trips ~column:"int8" S.int64 Alcotest.int64
+    [ 0L; 1L; -1L; Int64.max_int; Int64.min_int ];
+  on_each_format [] (fun format db ->
+      Alcotest.(check (result int64 reject))
+        (format ^ ": an int4, widened")
+        (Ok (-2_147_483_648L))
+        (reads db S.int64 "select (-2147483648)::int4"))
+
+(* A date at the edges of the years read, a leap day among them. *)
+let test_dates () =
+  round_trips ~column:"date" S.date
+    Alcotest.(triple int int int)
+    [ (2026, 9, 27); (1, 1, 1); (9999, 12, 31); (2024, 2, 29) ];
+  on_each_format [] (fun format db ->
+      refused (format ^ ": infinity")
+        (reads db S.date "select 'infinity'::date"))
+
+(* A timestamp is a reading on no clock: the same reading comes back in a
+   session whose time zone is not UTC. *)
+let test_timestamps () =
+  on_each_format [ "set time zone 'America/St_Johns'" ] (fun format db ->
+      List.iter
+        (fun us ->
+          Alcotest.(check int)
+            (Printf.sprintf "%d, in %s" us format)
+            us
+            (back db ~column:"timestamp" Db_target.timestamp_us us))
+        [ 0; 1; -1; 1_758_620_000_123_456 ];
+      Alcotest.(check (result int reject))
+        (format ^ ": read as the reading it is")
+        (Ok 1_758_620_000_123_456)
+        (reads db Db_target.timestamp_us
+           "select timestamp '2025-09-23 09:33:20.123456'"))
+
+(* An interval keeps its months, days and microseconds apart, each signed on
+   its own, through a session whose own style would print it otherwise. *)
+let test_intervals () =
+  let interval =
+    Alcotest.testable
+      (fun f (i : S.interval) ->
+        Format.fprintf f "%d mons %d days %d us" i.months i.days i.microseconds)
+      (fun (a : S.interval) b ->
+        a.months = b.months && a.days = b.days
+        && a.microseconds = b.microseconds)
+  in
+  round_trips ~column:"interval" S.interval interval
+    [
+      { months = 14; days = 3; microseconds = 14_706_789_000 };
+      { months = -14; days = 3; microseconds = -14_706_000_000 };
+      { months = 1; days = -1; microseconds = 0 };
+      { months = 0; days = 0; microseconds = -1_500_000 };
+      { months = 0; days = 0; microseconds = 0 };
+    ];
+  on_each_format [] (fun format db ->
+      Alcotest.(check (result interval reject))
+        (format ^ ": a month less a day is not 29 days")
+        (Ok { months = 1; days = -1; microseconds = 0 })
+        (reads db S.interval "select interval '1 mon -1 day'"))
+
 let test_uuids () =
   round_trips ~column:"uuid" Db_target.uuid_text Alcotest.string
     [
@@ -267,6 +328,10 @@ let () =
           Alcotest.test_case "bytes" `Quick test_bytes;
           Alcotest.test_case "bools" `Quick test_bools;
           Alcotest.test_case "instants" `Quick test_instants;
+          Alcotest.test_case "int64s" `Quick test_int64s;
+          Alcotest.test_case "dates" `Quick test_dates;
+          Alcotest.test_case "timestamps" `Quick test_timestamps;
+          Alcotest.test_case "intervals" `Quick test_intervals;
           Alcotest.test_case "uuids" `Quick test_uuids;
           Alcotest.test_case "JSON" `Quick test_json;
         ] );

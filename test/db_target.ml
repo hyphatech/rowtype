@@ -90,12 +90,12 @@ let with_postgres f =
   Fun.protect ~finally (fun () -> f (on_database name))
 
 (* The cases write an instant as epoch microseconds, a figure checked
-   against Postgres's own; this is the instant in that unit, converted
-   through whole seconds and their fraction, apart from how the backend
-   does it. *)
-let instant_us =
+   against Postgres's own; this is a shape of instants in that unit,
+   converted through whole seconds and their fraction, apart from how the
+   backend does it. *)
+let in_us ty =
   let us_per_s = 1_000_000 and ps_per_us = 1_000_000L in
-  Rowtype.conv Rowtype.instant
+  Rowtype.conv ty
     ~of_:(fun t ->
       let whole = Ptime.truncate ~frac_s:0 t in
       match Ptime.Span.to_int_s (Ptime.to_span whole) with
@@ -113,6 +113,9 @@ let instant_us =
       with
       | Some t -> t
       | None -> Alcotest.failf "%d microseconds is no instant" us)
+
+let instant_us = in_us Rowtype.instant
+let timestamp_us = in_us Rowtype.timestamp
 
 (* The cases write a uuid as its text; this is the uuid in that form, read
    back lowercase as Uuidm prints it. *)

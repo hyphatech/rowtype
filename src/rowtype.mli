@@ -58,6 +58,11 @@ type 'a ty
 
 val unit : unit ty
 val int : int ty
+
+val int64 : int64 ty
+(** An integer over the whole of a 64-bit column's range, which OCaml's [int] is
+    a bit short of. *)
+
 val float : float ty
 
 val text : string ty
@@ -74,6 +79,20 @@ val instant : Ptime.t ty
 (** An instant, as a [Ptime.t], so no caller converts a unit by hand: kept as
     the database keeps an instant, and its backend says to what precision and
     over which years. *)
+
+val date : Ptime.date ty
+(** A date, as Ptime's [(year, month, day)]. *)
+
+val timestamp : Ptime.t ty
+(** A timestamp with no zone, a reading on no clock: the instant whose reading
+    in UTC it is, so a caller who knows its zone moves it by that offset. *)
+
+type interval = { months : int; days : int; microseconds : int }
+(** An interval as SQL keeps one: months, days and microseconds apart, each
+    signed on its own, since a month is no fixed number of days and a day,
+    across a change of clocks, no fixed number of hours. *)
+
+val interval : interval ty
 
 val uuid : Uuidm.t ty
 (** A [uuid], as a [Uuidm.t]. *)
@@ -232,6 +251,7 @@ type any =
 (** What one column holds: all a backend is asked to encode and read. *)
 type _ scalar =
   | Int : int scalar
+  | Int64 : int64 scalar
   | Float : float scalar
   | Text : string scalar
   | Bytes : string scalar  (** a string of any bytes, a [bytea] in Postgres *)
@@ -239,6 +259,9 @@ type _ scalar =
   | Instant : Ptime.t scalar
       (** an instant, kept however the database keeps one -- a [timestamptz] in
           Postgres -- so an instant means the same to every backend *)
+  | Date : Ptime.date scalar
+  | Timestamp : Ptime.t scalar  (** a reading on no clock, as {!timestamp} *)
+  | Interval : interval scalar
   | Uuid : Uuidm.t scalar  (** a uuid *)
   | Json : string scalar  (** a JSON document, as its text *)
 

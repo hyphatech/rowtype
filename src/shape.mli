@@ -10,13 +10,19 @@
 
 (** {1 Shapes} *)
 
+type interval = { months : int; days : int; microseconds : int }
+
 type _ scalar =
   | Int : int scalar
+  | Int64 : int64 scalar
   | Float : float scalar
   | Text : string scalar
   | Bytes : string scalar
   | Bool : bool scalar
   | Instant : Ptime.t scalar
+  | Date : Ptime.date scalar
+  | Timestamp : Ptime.t scalar
+  | Interval : interval scalar
   | Uuid : Uuidm.t scalar
   | Json : string scalar
 
@@ -31,11 +37,15 @@ type _ ty =
 
 val unit : unit ty
 val int : int ty
+val int64 : int64 ty
 val float : float ty
 val text : string ty
 val bytes : string ty
 val bool : bool ty
 val instant : Ptime.t ty
+val date : Ptime.date ty
+val timestamp : Ptime.t ty
+val interval : interval ty
 val uuid : Uuidm.t ty
 val json : string ty
 val opt : 'a ty -> 'a option ty

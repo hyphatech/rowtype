@@ -23,13 +23,25 @@ module Echo = struct
       (V
          (match s with
          | S.Int -> string_of_int v
+         | S.Int64 -> Int64.to_string v
          | S.Instant -> Ptime.to_rfc3339 ~frac_s:12 v
+         | S.Timestamp -> Ptime.to_rfc3339 ~frac_s:12 v
+         | S.Date ->
+             let y, m, d = v in
+             Printf.sprintf "%d %d %d" y m d
+         | S.Interval ->
+             Printf.sprintf "%d %d %d" v.months v.days v.microseconds
          | S.Float -> Printf.sprintf "%h" v
          | S.Text -> v
          | S.Bytes -> v
          | S.Uuid -> Uuidm.to_string v
          | S.Json -> v
          | S.Bool -> string_of_bool v))
+
+  let instant_of v =
+    match Ptime.of_rfc3339 v with
+    | Ok (t, _, _) -> Ok t
+    | Error _ -> Error "an instant"
 
   let read : type a. a S.scalar -> cell -> (a, string) result =
    fun s c ->
@@ -39,10 +51,16 @@ module Echo = struct
     | V v -> (
         match s with
         | S.Int -> some "an int" (int_of_string_opt v)
-        | S.Instant -> (
-            match Ptime.of_rfc3339 v with
-            | Ok (t, _, _) -> Ok t
-            | Error _ -> Error "an instant")
+        | S.Int64 -> some "an int64" (Int64.of_string_opt v)
+        | S.Instant -> instant_of v
+        | S.Timestamp -> instant_of v
+        | S.Date ->
+            some "a date"
+              (Scanf.sscanf_opt v "%d %d %d" (fun y m d -> (y, m, d)))
+        | S.Interval ->
+            some "an interval"
+              (Scanf.sscanf_opt v "%d %d %d" (fun months days microseconds ->
+                   { S.months; days; microseconds }))
         | S.Float -> some "a float" (float_of_string_opt v)
         | S.Text -> Ok v
         | S.Bytes -> Ok v
@@ -103,10 +121,34 @@ let uuid =
     (fun b -> Option.value ~default:Uuidm.nil (Uuidm.of_binary_string b))
     (QCheck.Gen.string_size ~gen:QCheck.Gen.char (QCheck.Gen.return 16))
 
+(* Any date Ptime holds. *)
+let date = QCheck.Gen.map Ptime.to_date instant
+
+(* Any interval: each part signed on its own. *)
+let interval =
+  QCheck.Gen.map3
+    (fun months days microseconds -> { S.months; days; microseconds })
+    QCheck.Gen.int QCheck.Gen.int QCheck.Gen.int
+
+let equal_interval (a : S.interval) (b : S.interval) =
+  a.months = b.months && a.days = b.days && a.microseconds = b.microseconds
+
 let scalars =
   let open QCheck.Gen in
   [
     scalar S.int int Int.equal string_of_int "int";
+    scalar S.int64 int64 Int64.equal Int64.to_string "int64";
+    scalar S.date date
+      (fun (y, m, d) (y', m', d') -> y = y' && m = m' && d = d')
+      (fun (y, m, d) -> Printf.sprintf "%d-%d-%d" y m d)
+      "date";
+    scalar S.timestamp instant Ptime.equal
+      (Ptime.to_rfc3339 ~frac_s:12)
+      "timestamp";
+    scalar S.interval interval equal_interval
+      (fun (i : S.interval) ->
+        Printf.sprintf "%d %d %d" i.months i.days i.microseconds)
+      "interval";
     scalar S.float float Float.equal (Printf.sprintf "%h") "float";
     scalar S.text string String.equal (Printf.sprintf "%S") "text";
     scalar S.bytes string String.equal (Printf.sprintf "%S") "bytes";

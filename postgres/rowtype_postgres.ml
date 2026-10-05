@@ -72,11 +72,17 @@ module Backend = struct
     Some
       (match s with
       | S.Int -> Pg.Text.int v
+      | S.Int64 -> Pg.Text.int64 v
       | S.Float -> Pg.Text.float v
       | S.Text -> v
       | S.Bytes -> Pg.Text.bytes v
       | S.Bool -> Pg.Text.bool v
       | S.Instant -> Pg.Text.timestamptz v
+      | S.Date -> Pg.Text.date v
+      | S.Timestamp -> Pg.Text.timestamp v
+      | S.Interval ->
+          Pg.Text.interval
+            { months = v.months; days = v.days; microseconds = v.microseconds }
       | S.Uuid -> Uuidm.to_string v
       | S.Json -> v)
 
@@ -97,11 +103,24 @@ module Backend = struct
     in
     match s with
     | S.Int -> as_ "INT" (Pg.Value.int column raw)
+    | S.Int64 -> as_ "INT8" (Pg.Value.int64 column raw)
     | S.Float -> as_ "FLOAT" (Pg.Value.float column raw)
     | S.Text -> as_ "TEXT" (Pg.Value.text column raw)
     | S.Bytes -> as_ "BYTEA" (Pg.Value.bytes column raw)
     | S.Bool -> as_ "BOOL" (Pg.Value.bool column raw)
     | S.Instant -> as_ "TIMESTAMPTZ" (Pg.Value.timestamptz column raw)
+    | S.Date -> as_ "DATE" (Pg.Value.date column raw)
+    | S.Timestamp -> as_ "TIMESTAMP" (Pg.Value.timestamp column raw)
+    | S.Interval ->
+        as_ "INTERVAL"
+          (Option.map
+             (fun (i : Pg.Interval.t) ->
+               {
+                 S.months = i.months;
+                 days = i.days;
+                 microseconds = i.microseconds;
+               })
+             (Pg.Value.interval column raw))
     | S.Uuid -> as_ "UUID" (Pg.Value.uuid column raw)
     | S.Json -> as_ "JSON" (Pg.Value.json column raw)
 
@@ -277,13 +296,17 @@ let copy_in t ?schema ~table ~columns row rows =
 (* Connections *)
 
 (* The driver reads a date or an instant in text only as [DateStyle=ISO]
-   writes it, and a connection that keeps no statements reads every cell in
-   text, so every connection asks for it, over any style the caller named. *)
-let with_iso_dates given =
+   writes it, and an interval only as [IntervalStyle=postgres] does, and a
+   connection that keeps no statements reads every cell in text, so every
+   connection asks for both, over any style the caller named. *)
+let with_output_styles given =
   ("DateStyle", "ISO")
+  :: ("IntervalStyle", "postgres")
   :: List.filter
        (fun (name, _) ->
-         not (String.equal (String.lowercase_ascii name) "datestyle"))
+         match String.lowercase_ascii name with
+         | "datestyle" | "intervalstyle" -> false
+         | _ -> true)
        (Option.value given ~default:[])
 
 let conninfo target =
@@ -302,7 +325,7 @@ let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?statement_cache
     (fun pg -> { pg; observe; now = (fun () -> Eio.Time.Mono.now clock) })
     (Result.map_error db_error
        (Pg.connect ~sw ~net ~clock
-          ~parameters:(with_iso_dates parameters)
+          ~parameters:(with_output_styles parameters)
           ?timeout_s ?statement_cache c))
 
 let close t = Pg.close t.pg
@@ -327,7 +350,7 @@ module Pool = struct
       (fun pool -> { pool; observe; now = (fun () -> Eio.Time.Mono.now clock) })
       (Result.map_error db_error
          (Pg.Pool.create ~sw ~net ~clock
-            ~parameters:(with_iso_dates parameters)
+            ~parameters:(with_output_styles parameters)
             ?timeout_s ?statement_cache ?size ?wait_s ?reset ?max_lifetime_s
             ?idle_check_s c))
 
@@ -502,11 +525,15 @@ let rec resolve db oid =
 
 let scalar_name : type a. a S.scalar -> string = function
   | S.Int -> "int"
+  | S.Int64 -> "int64"
   | S.Float -> "float"
   | S.Text -> "text"
   | S.Bytes -> "bytes"
   | S.Bool -> "bool"
   | S.Instant -> "instant"
+  | S.Date -> "date"
+  | S.Timestamp -> "timestamp"
+  | S.Interval -> "interval"
   | S.Uuid -> "uuid"
   | S.Json -> "json"
 
@@ -526,7 +553,10 @@ let oid_float8 = 701
 let oid_unknown = 705
 let oid_bpchar = 1042
 let oid_varchar = 1043
+let oid_date = 1082
+let oid_timestamp = 1114
 let oid_timestamptz = 1184
+let oid_interval = 1186
 let oid_uuid = 2950
 let oid_jsonb = 3802
 
@@ -537,13 +567,15 @@ let fits : type a. a S.scalar -> resolved -> bool =
  fun scalar t ->
   match (scalar, t) with
   | S.Text, Enum _ -> true
-  | (S.Int | S.Float | S.Bytes | S.Bool | S.Instant | S.Uuid | S.Json), Enum _
-    ->
+  | ( ( S.Int | S.Int64 | S.Float | S.Bytes | S.Bool | S.Instant | S.Date
+      | S.Timestamp | S.Interval | S.Uuid | S.Json ),
+      Enum _ ) ->
       false
-  | ( (S.Int | S.Float | S.Text | S.Bytes | S.Bool | S.Instant | S.Uuid | S.Json),
+  | ( ( S.Int | S.Int64 | S.Float | S.Text | S.Bytes | S.Bool | S.Instant
+      | S.Date | S.Timestamp | S.Interval | S.Uuid | S.Json ),
       Array _ ) ->
       false
-  | S.Int, Base (oid, _) ->
+  | (S.Int | S.Int64), Base (oid, _) ->
       List.mem oid [ oid_int8; oid_int2; oid_int4; oid_oid ]
   | S.Float, Base (oid, _) -> List.mem oid [ oid_float4; oid_float8 ]
   | S.Text, Base (oid, _) ->
@@ -560,6 +592,9 @@ let fits : type a. a S.scalar -> resolved -> bool =
   | S.Bytes, Base (oid, _) -> oid = oid_bytea
   | S.Bool, Base (oid, _) -> oid = oid_bool
   | S.Instant, Base (oid, _) -> oid = oid_timestamptz
+  | S.Date, Base (oid, _) -> oid = oid_date
+  | S.Timestamp, Base (oid, _) -> oid = oid_timestamp
+  | S.Interval, Base (oid, _) -> oid = oid_interval
   | S.Uuid, Base (oid, _) -> oid = oid_uuid
   | S.Json, Base (oid, _) -> List.mem oid [ oid_json; oid_jsonb ]
 
