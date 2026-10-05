@@ -134,9 +134,10 @@ A change is done when every box holds:
   `Hashtbl`'s keys: accepted over plain data -- an `int`, a `char`, a
   `string` -- where nothing can hold a closure or an abstract type, and this
   rule broken over anything else.
-- [ ] **No `open`.** Alias modules instead: `module S = Rowtype`. The one
-  exception is `open Shape` in `src/rowtype.ml`, whose walk exists to
-  pattern-match that GADT; `test_style` names it.
+- [ ] **No `open`**, local ones (`M.( ... )`) included. Alias modules
+  instead: `module S = Rowtype`. The one exception is `open Shape` in
+  `src/rowtype.ml`, whose walk exists to pattern-match that GADT;
+  `test_style` names it.
 - [ ] **No silenced warnings.** The warning set in `dune` is the linter, and
   a warning that looks wrong is a code shape that is wrong.
 - [ ] **An `.mli` per library module.** Abstract types, hidden

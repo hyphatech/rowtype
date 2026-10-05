@@ -188,18 +188,58 @@ let no_banned_identifier () =
   in
   Alcotest.(check (list string)) "banned identifiers" [] found
 
+(* Every local open, [M.(...)], [M.[...]] or [M.{...}], with its line and
+   module: a bracket after a path whose last name is capitalised. An array's
+   or a string's index follows a value's name, which is not. An operator
+   reached by its path, [M.( + )], is matched too; bind it to a name. *)
+let local_opens code =
+  let n = String.length code in
+  let is_name_char = function
+    | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '\'' -> true
+    | _ -> false
+  in
+  let rec go i line acc =
+    if i + 1 >= n then List.rev acc
+    else if Char.equal code.[i] '\n' then go (i + 1) (line + 1) acc
+    else if
+      Char.equal code.[i] '.'
+      && match code.[i + 1] with '(' | '[' | '{' -> true | _ -> false
+    then (
+      let j = ref i in
+      while !j > 0 && is_name_char code.[!j - 1] do
+        decr j
+      done;
+      match code.[!j] with
+      | 'A' .. 'Z' when !j < i ->
+          go (i + 1) line ((line, String.sub code !j (i - !j)) :: acc)
+      | _ -> go (i + 1) line acc)
+    else go (i + 1) line acc
+  in
+  go 0 1 []
+
 let no_open_but_the_named () =
+  let allowed file name =
+    List.exists
+      (fun (f, m) -> String.equal f file && String.equal m name)
+      allowed_opens
+  in
   let found =
     List.concat_map
       (fun file ->
+        let code = code_of (read_source file) in
+        let local =
+          List.filter_map
+            (fun (line, name) ->
+              if allowed file name then None
+              else
+                Some
+                  (Printf.sprintf "%s:%d: %s.( ... ) -- use a module alias" file
+                     line name))
+            (local_opens code)
+        in
         let rec opens = function
           | (line, "open") :: (_, name) :: rest ->
-              let allowed =
-                List.exists
-                  (fun (f, m) -> String.equal f file && String.equal m name)
-                  allowed_opens
-              in
-              if allowed then opens rest
+              if allowed file name then opens rest
               else
                 Printf.sprintf "%s:%d: open %s -- use a module alias" file line
                   name
@@ -207,7 +247,7 @@ let no_open_but_the_named () =
           | _ :: rest -> opens rest
           | [] -> []
         in
-        opens (identifiers (code_of (read_source file))))
+        local @ opens (identifiers code))
       (sources ~dirs:(dirs @ command_dirs) ".ml" @ sources ".mli")
   in
   Alcotest.(check (list string)) "opens" [] found

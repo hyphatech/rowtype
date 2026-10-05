@@ -22,10 +22,13 @@ module Arg = Cmdliner.Arg
 module Cmd = Cmdliner.Cmd
 module Term = Cmdliner.Term
 
+(* Cmdliner's [$], bound here so no term opens [Term] to reach it. *)
+let ( $ ) = Term.app
+
 let dir =
-  Arg.(
-    value & opt string "migrations"
-    & info [ "dir" ] ~docv:"DIR" ~doc:"Where the migration files are.")
+  Arg.value
+    (Arg.opt Arg.string "migrations"
+       (Arg.info [ "dir" ] ~docv:"DIR" ~doc:"Where the migration files are."))
 
 (* NAME=value lines, as a .env holds them: a blank line or a # comment says
    nothing, an [export] may come before the name, and one pair of quotes
@@ -66,54 +69,51 @@ let from_env_file path var =
    names wins over what the shell happens to hold. *)
 let url =
   let url =
-    Arg.(
-      value
-      & opt (some string) None
-      & info [ "url" ] ~docv:"URL"
-          ~doc:"The database, as a postgres:// URL or a keyword list.")
+    Arg.value
+      (Arg.opt (Arg.some Arg.string) None
+         (Arg.info [ "url" ] ~docv:"URL"
+            ~doc:"The database, as a postgres:// URL or a keyword list."))
   and var =
-    Arg.(
-      value & opt string "DATABASE_URL"
-      & info [ "env" ] ~docv:"NAME"
-          ~doc:
-            "The variable that holds the database's URL, when $(b,--url) is \
-             not given.")
+    Arg.value
+      (Arg.opt Arg.string "DATABASE_URL"
+         (Arg.info [ "env" ] ~docv:"NAME"
+            ~doc:
+              "The variable that holds the database's URL, when $(b,--url) is \
+               not given."))
   and env_file =
-    Arg.(
-      value
-      & opt (some string) None
-      & info [ "env-file" ] ~docv:"FILE"
-          ~doc:
-            "Read the variable from this file of NAME=value lines, as a .env \
-             holds them, rather than from the environment.")
+    Arg.value
+      (Arg.opt (Arg.some Arg.string) None
+         (Arg.info [ "env-file" ] ~docv:"FILE"
+            ~doc:
+              "Read the variable from this file of NAME=value lines, as a .env \
+               holds them, rather than from the environment."))
   in
-  Term.(
-    const (fun url var env_file ->
-        match (url, env_file) with
-        | Some u, _ -> Ok u
-        | None, Some path -> from_env_file path var
-        | None, None -> (
-            match Sys.getenv_opt var with
-            | Some u when not (String.equal (String.trim u) "") -> Ok u
-            | Some _ | None ->
-                Error (Printf.sprintf "no database: give --url, or set %s" var)))
-    $ url $ var $ env_file)
+  Term.const (fun url var env_file ->
+      match (url, env_file) with
+      | Some u, _ -> Ok u
+      | None, Some path -> from_env_file path var
+      | None, None -> (
+          match Sys.getenv_opt var with
+          | Some u when not (String.equal (String.trim u) "") -> Ok u
+          | Some _ | None ->
+              Error (Printf.sprintf "no database: give --url, or set %s" var)))
+  $ url $ var $ env_file
 
 let table =
-  Arg.(
-    value & opt string M.default_table
-    & info [ "table" ] ~docv:"NAME"
-        ~doc:
-          "The table the database's record of its migrations is kept in, after \
-           a schema and a dot if it names one.")
+  Arg.value
+    (Arg.opt Arg.string M.default_table
+       (Arg.info [ "table" ] ~docv:"NAME"
+          ~doc:
+            "The table the database's record of its migrations is kept in, \
+             after a schema and a dot if it names one."))
 
 let lock =
-  Arg.(
-    value & opt int M.default_lock
-    & info [ "lock" ] ~docv:"N"
-        ~doc:
-          "The advisory lock migrating takes, the same for every process that \
-           migrates one database.")
+  Arg.value
+    (Arg.opt Arg.int M.default_lock
+       (Arg.info [ "lock" ] ~docv:"N"
+          ~doc:
+            "The advisory lock migrating takes, the same for every process \
+             that migrates one database."))
 
 let with_db url f =
   let* url = url in
@@ -124,20 +124,20 @@ let up =
   Cmd.v
     (Cmd.info "up"
        ~doc:"Apply every migration in $(b,--dir) the database has not recorded.")
-    Term.(
-      const (fun dir url lock table ->
-          exits
-            (let* ms = M.of_directory dir in
-             with_db url (fun conn -> M.run ~lock ~table conn ms)))
-      $ dir $ url $ lock $ table)
+    (Term.const (fun dir url lock table ->
+         exits
+           (let* ms = M.of_directory dir in
+            with_db url (fun conn -> M.run ~lock ~table conn ms)))
+    $ dir $ url $ lock $ table)
 
 let status =
   let check =
-    Arg.(
-      value & flag
-      & info [ "check" ]
-          ~doc:
-            "Exit 1 while any migration is pending, so a script can wait on it.")
+    Arg.value
+      (Arg.flag
+         (Arg.info [ "check" ]
+            ~doc:
+              "Exit 1 while any migration is pending, so a script can wait on \
+               it."))
   in
   let show ~check (st : M.status) =
     List.iter (fun (v, n) -> Printf.printf "applied  %d_%s\n" v n) st.applied;
@@ -175,54 +175,55 @@ let status =
   in
   Cmd.v
     (Cmd.info "status" ~doc:"List the migrations applied, and those pending.")
-    Term.(
-      const (fun dir url table check ->
-          exits
-            (let* ms = M.of_directory dir in
-             let* st = with_db url (fun conn -> M.status ~table conn ms) in
-             show ~check st))
-      $ dir $ url $ table $ check)
+    (Term.const (fun dir url table check ->
+         exits
+           (let* ms = M.of_directory dir in
+            let* st = with_db url (fun conn -> M.status ~table conn ms) in
+            show ~check st))
+    $ dir $ url $ table $ check)
 
 let new_ =
-  let name = Arg.(required & pos 0 (some string) None & info [] ~docv:"NAME") in
+  let name =
+    Arg.required
+      (Arg.pos 0 (Arg.some Arg.string) None (Arg.info [] ~docv:"NAME"))
+  in
   Cmd.v
     (Cmd.info "new" ~doc:"Write an empty migration, stamped with the time now.")
-    Term.(
-      const (fun dir n ->
-          exits
-            (Result.map print_endline
-               (M.new_migration ~dir ~now:(Unix.gettimeofday ()) n)))
-      $ dir $ name)
+    (Term.const (fun dir n ->
+         exits
+           (Result.map print_endline
+              (M.new_migration ~dir ~now:(Unix.gettimeofday ()) n)))
+    $ dir $ name)
 
 let pg_dump =
-  Arg.(
-    value
-    & opt string "pg_dump --dbname={url}"
-    & info [ "pg-dump" ] ~docv:"CMD"
-        ~doc:
-          "The pg_dump to run, which must be the server's major version. \
-           $(b,{url}) and $(b,{database}) stand for the database it dumps.")
+  Arg.value
+    (Arg.opt Arg.string "pg_dump --dbname={url}"
+       (Arg.info [ "pg-dump" ] ~docv:"CMD"
+          ~doc:
+            "The pg_dump to run, which must be the server's major version. \
+             $(b,{url}) and $(b,{database}) stand for the database it dumps."))
 
 let restrict_key =
-  Arg.(
-    value & opt string "rowtype"
-    & info [ "restrict-key" ] ~docv:"KEY"
-        ~doc:
-          "The key pg_dump's restrict lines carry, fixed so the file is the \
-           same on every run.")
+  Arg.value
+    (Arg.opt Arg.string "rowtype"
+       (Arg.info [ "restrict-key" ] ~docv:"KEY"
+          ~doc:
+            "The key pg_dump's restrict lines carry, fixed so the file is the \
+             same on every run."))
 
 let dump =
   let output =
-    Arg.(
-      value & opt string "db/schema.sql"
-      & info [ "o"; "output" ] ~docv:"FILE" ~doc:"Where the schema is written.")
+    Arg.value
+      (Arg.opt Arg.string "db/schema.sql"
+         (Arg.info [ "o"; "output" ] ~docv:"FILE"
+            ~doc:"Where the schema is written."))
   and check =
-    Arg.(
-      value & flag
-      & info [ "check" ]
-          ~doc:
-            "Write nothing; fail if $(b,--output) is not what the migrations \
-             make.")
+    Arg.value
+      (Arg.flag
+         (Arg.info [ "check" ]
+            ~doc:
+              "Write nothing; fail if $(b,--output) is not what the migrations \
+               make."))
   in
   let run dir url lock table output check pg_dump restrict_key =
     let* migrations = M.of_directory dir in
@@ -256,10 +257,9 @@ let dump =
        ~doc:
          "Write what the migrations add up to, dumped from a scratch database \
           on the server $(b,--url) names.")
-    Term.(
-      const (fun dir url lock table output check pg_dump key ->
-          exits (run dir url lock table output check pg_dump key))
-      $ dir $ url $ lock $ table $ output $ check $ pg_dump $ restrict_key)
+    (Term.const (fun dir url lock table output check pg_dump key ->
+         exits (run dir url lock table output check pg_dump key))
+    $ dir $ url $ lock $ table $ output $ check $ pg_dump $ restrict_key)
 
 (* The baseline is written before a file is removed, and removed only once
    the library has proved it: an interrupted squash leaves a directory
@@ -267,7 +267,8 @@ let dump =
    and git holds the rest. *)
 let squash =
   let through =
-    Arg.(required & pos 0 (some int) None & info [] ~docv:"VERSION")
+    Arg.required
+      (Arg.pos 0 (Arg.some Arg.int) None (Arg.info [] ~docv:"VERSION"))
   in
   let run dir url lock table pg_dump restrict_key through =
     let* migrations = M.of_directory dir in
@@ -315,19 +316,17 @@ let squash =
          "Replace every migration through $(i,VERSION) with one baseline, \
           proved on scratch databases on the server $(b,--url) names to make \
           what they made.")
-    Term.(
-      const (fun dir url lock table pg_dump key through ->
-          exits (run dir url lock table pg_dump key through))
-      $ dir $ url $ lock $ table $ pg_dump $ restrict_key $ through)
+    (Term.const (fun dir url lock table pg_dump key through ->
+         exits (run dir url lock table pg_dump key through))
+    $ dir $ url $ lock $ table $ pg_dump $ restrict_key $ through)
 
 let on_database name ~doc f =
   Cmd.v (Cmd.info name ~doc)
-    Term.(
-      const (fun url ->
-          exits
-            (let* url = url in
-             in_eio (fun ~sw ~net ~mono_clock -> f ~sw ~net ~mono_clock url)))
-      $ url)
+    (Term.const (fun url ->
+         exits
+           (let* url = url in
+            in_eio (fun ~sw ~net ~mono_clock -> f ~sw ~net ~mono_clock url)))
+    $ url)
 
 let create =
   on_database "create" ~doc:"Make the database the URL names." M.create
