@@ -284,11 +284,22 @@ type reading = {
   behind : migration option;
 }
 
+module Versions = Map.Make (Int)
+
+(* Each side by its versions, so matching the two is a lookup and not a walk
+   of the other list for every entry. *)
 let read migrations recorded =
-  let find v = List.find_opt (fun m -> m.version = v) migrations in
-  let recorded_as v =
-    List.find_map (fun (w, s) -> if w = v then Some s else None) recorded
+  let files =
+    List.fold_left
+      (fun acc m -> Versions.add m.version m acc)
+      Versions.empty migrations
+  and sums =
+    List.fold_left
+      (fun acc (v, s) -> Versions.add v s acc)
+      Versions.empty recorded
   in
+  let find v = Versions.find_opt v files in
+  let recorded_as v = Versions.find_opt v sums in
   (* A baseline stands for every migration up to its version, whose files
      are gone. Where the database recorded that version -- by the migration
      the baseline replaced, or by the baseline itself -- it is applied, and
