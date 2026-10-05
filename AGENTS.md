@@ -142,7 +142,7 @@ A change is done when every box holds:
 - [ ] **An `.mli` per library module.** Abstract types, hidden
   constructors; the contract in odoc in the `.mli`, the reasons in the
   `.ml`. It exports what a user needs, and nothing more.
-- [ ] **A library never prints, exits or reads the environment.** It logs
+- [ ] **The library never prints, exits or reads the environment.** It logs
   on its own `Logs` source. The command in `migrate/bin/` is where the
   environment is read.
 - [ ] **A meaning is a type.** A state is a variant, never a string or a
@@ -150,6 +150,9 @@ A change is done when every box holds:
   element, a returned value -- is a type of its own, never a bare `int` or
   `string` whose meaning the caller has to remember. A labelled argument
   that names its unit at every call (`~timeout_s`) is enough.
+- [ ] **Advanced types only where they delete real duplication.** A GADT
+  earns its place by describing a thing once that would otherwise be
+  described twice; otherwise, records and variants.
 - [ ] **Cancellation leaves nothing held.** A fiber cancelled at any effect
   releases what it held: a connection goes back to its pool or is closed,
   and a lock is let go. A catch-all handler (`with _ ->`,
