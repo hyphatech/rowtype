@@ -1,0 +1,86 @@
+; Where a suite's database comes from: ROWTYPE_TEST_PG, and a database of
+; a case's own on it.
+
+(library
+ (name db_target)
+ (modules db_target)
+ (libraries rowtype rowtype-postgres eio eio_main unix alcotest))
+
+; The Postgres backend: statements, scalars, failures, the pool, verify and
+; COPY.
+
+(tests
+ (names test_rowtype test_types test_errors test_pool test_verify test_copy)
+ (package rowtype-postgres)
+ (modules
+  test_rowtype
+  test_types
+  test_errors
+  test_pool
+  test_verify
+  test_copy)
+ (libraries
+  rowtype
+  rowtype-postgres
+  db_target
+  eio
+  eio_main
+  logs
+  alcotest
+  qcheck-core))
+
+; Migrations against a real Postgres.
+
+(test
+ (name test_migrate)
+ (package rowtype-migrate)
+ (modules test_migrate)
+ (libraries
+  rowtype
+  rowtype-postgres
+  rowtype-migrate
+  db_target
+  eio
+  eio_main
+  unix
+  alcotest))
+
+; The walk of a shape, against a backend that echoes its parameters, which
+; needs no database.
+
+(test
+ (name test_shape)
+ (package rowtype)
+ (modules test_shape)
+ (libraries rowtype alcotest qcheck-core qcheck-alcotest))
+
+; The migration files' pieces, which need no database.
+
+(test
+ (name test_migrate_files)
+ (package rowtype-migrate)
+ (modules test_migrate_files)
+ (libraries rowtype-migrate unix alcotest))
+
+; The house rules, read off the source.
+
+(test
+ (name test_style)
+ (package rowtype)
+ (modules test_style)
+ (libraries alcotest)
+ (deps
+  (glob_files ../src/*.ml)
+  (glob_files ../src/*.mli)
+  (glob_files ../postgres/*.ml)
+  (glob_files ../postgres/*.mli)
+  (glob_files ../migrate/*.ml)
+  (glob_files ../migrate/*.mli)
+  (glob_files ../migrate/bin/*.ml)))
+
+; The command, where it needs no database.
+
+(cram
+ (applies_to command)
+ (package rowtype-migrate)
+ (deps %{bin:rowtype-migrate}))

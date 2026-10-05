@@ -1,0 +1,6 @@
+; Shapes and the backend signature: one value describes a query once, for
+; any SQL database. Links no database library, and nothing of ours.
+
+(library
+ (name rowtype)
+ (public_name rowtype))
