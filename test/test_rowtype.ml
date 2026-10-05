@@ -1,6 +1,8 @@
 module S = Rowtype
 module Pg = Rowtype_postgres
 
+let ( let* ) = Result.bind
+
 let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
@@ -728,6 +730,30 @@ let test_a_raise_rolls_back_and_passes () =
       ok (insert db 2);
       Alcotest.(check int) "and the connection writes on" 1 (committed db))
 
+(* A transaction cancelled inside its work keeps nothing and holds nothing:
+   the cancellation passes as itself, and the connection takes the next
+   transaction. *)
+let test_a_cancelled_transaction_keeps_nothing () =
+  on_db [ "create table t (n int)" ] (fun db ->
+      let answer =
+        Eio.Fiber.first
+          (fun () ->
+            ignore
+              (T.within db (fun db ->
+                   let* () = insert db 1 in
+                   Pg.run db (S.exec ~params:S.unit "select pg_sleep(5)") ())
+                : (unit, _) result);
+            "finished")
+          (fun () ->
+            Eio.Time.Mono.sleep (Db_target.mono ()) 0.3;
+            "cancelled")
+      in
+      Alcotest.(check string) "the work was cancelled" "cancelled" answer;
+      (match T.within db (fun db -> insert db 2) with
+      | Ok () -> ()
+      | Error _ -> Alcotest.fail "the next transaction failed");
+      Alcotest.(check int) "only the next one was kept" 1 (committed db))
+
 (* A transaction inside another on one connection would have its COMMIT
    end the outer one too, which Postgres only warns about: it is refused
    before it begins, and the outer one goes on whole. *)
@@ -1215,6 +1241,8 @@ let () =
             test_a_refusal_rolls_back_unless_it_says;
           Alcotest.test_case "a transaction begins at its level" `Quick
             test_a_transaction_begins_at_its_level;
+          Alcotest.test_case "a cancelled transaction keeps nothing" `Quick
+            test_a_cancelled_transaction_keeps_nothing;
           Alcotest.test_case "a raise rolls back and passes" `Quick
             test_a_raise_rolls_back_and_passes;
           Alcotest.test_case "a transaction inside another is refused" `Quick

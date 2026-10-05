@@ -440,6 +440,9 @@ module Transaction = struct
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match work db with
+        (* A cancelled fiber can send nothing, a rollback included: the
+           driver closes the connection, which ends the transaction. *)
+        | exception (Eio.Cancel.Cancelled _ as ex) -> raise ex
         | exception ex ->
             let trace = Printexc.get_raw_backtrace () in
             rollback db;
