@@ -1,5 +1,5 @@
-(* The migration files' pieces, without a database: reading them, and
-   naming a new one. *)
+(* The migration files' pieces, without a database: reading them, naming a
+   new one, and what a squash refuses before it connects. *)
 
 module C = Rowtype_migrate
 
@@ -173,6 +173,44 @@ let test_a_new_migration_refuses_what_would_collide () =
     "a second later" false
     (refused "two" ~now:a_second_later)
 
+let version n =
+  match C.version_of_int n with
+  | Some v -> v
+  | None -> Alcotest.failf "%d is not a version" n
+
+(* A squash is through one of the files, and has something before it to
+   replace; both are refused before the server is asked anything, which is
+   why the URL names no server. *)
+let test_a_squash_refuses_what_it_cannot_squash () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let squash ~through migrations =
+    match
+      C.squash ~sw ~net:(Eio.Stdenv.net env)
+        ~mono_clock:(Eio.Stdenv.mono_clock env)
+        ~pg_dump:"pg_dump" ~restrict_key:"rowtype" ~through:(version through)
+        ~migrations "postgres://nowhere.invalid/x"
+    with
+    | Ok _ -> "squashed"
+    | Error (`Invalid _) -> "invalid"
+    | Error (`Files _) -> "files"
+    | Error e -> words e
+  in
+  let m n name kind = { C.version = version n; name; kind; sql = "select 1" } in
+  let first = m 20260101000000 "first" C.Transaction
+  and second = m 20260102000000 "second" C.Transaction
+  and baseline = m 20260101000000 "baseline" C.Baseline in
+  Alcotest.(check string)
+    "through no migration's version" "invalid"
+    (squash ~through:20260103000000 [ first; second ]);
+  Alcotest.(check string)
+    "through a baseline with nothing before it" "invalid"
+    (squash ~through:20260101000000 [ baseline; second ]);
+  Alcotest.(check string)
+    "a list whose baseline is not the oldest" "files"
+    (squash ~through:20260102000000
+       [ m 20260100000000 "older" C.Transaction; baseline; second ])
+
 let () =
   Alcotest.run "migrate files"
     [
@@ -184,6 +222,11 @@ let () =
             test_a_directive_is_the_first_line;
           Alcotest.test_case "a baseline is the oldest and the only one" `Quick
             test_a_baseline_is_the_oldest_and_the_only_one;
+        ] );
+      ( "squash",
+        [
+          Alcotest.test_case "it refuses what it cannot squash" `Quick
+            test_a_squash_refuses_what_it_cannot_squash;
         ] );
       ( "migrations",
         [
