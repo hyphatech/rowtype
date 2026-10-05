@@ -138,9 +138,11 @@ let parse path =
 
 (* A baseline stands for every migration before it, so it is the oldest, and
    there is one. *)
-let listed ms =
-  let ms = List.sort (fun a b -> Int.compare a.version b.version) ms in
-  match (List.filter is_baseline ms, ms) with
+let listed migrations =
+  let migrations =
+    List.sort (fun a b -> Int.compare a.version b.version) migrations
+  in
+  match (List.filter is_baseline migrations, migrations) with
   | [], _ -> Ok ()
   | [ b ], oldest :: _ when oldest.version = b.version -> Ok ()
   | [ b ], _ ->
@@ -158,7 +160,7 @@ let listed ms =
               b.version b.name))
 
 let of_files paths =
-  let* ms =
+  let* migrations =
     List.fold_left
       (fun acc p ->
         let* acc = acc in
@@ -166,7 +168,9 @@ let of_files paths =
         Ok (m :: acc))
       (Ok []) paths
   in
-  let ms = List.sort (fun a b -> Int.compare a.version b.version) ms in
+  let migrations =
+    List.sort (fun a b -> Int.compare a.version b.version) migrations
+  in
   let rec twice = function
     | a :: (b :: _ as rest) ->
         if a.version = b.version then
@@ -175,9 +179,9 @@ let of_files paths =
         else twice rest
     | [ _ ] | [] -> Ok ()
   in
-  let* () = twice ms in
-  let* () = listed ms in
-  Ok ms
+  let* () = twice migrations in
+  let* () = listed migrations in
+  Ok migrations
 
 let of_directory dir =
   match Sys.readdir dir with
@@ -761,9 +765,9 @@ let squash ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
                 through))
     | true, _ -> Ok ()
   in
-  let dumped ms =
+  let dumped migrations =
     Result.map statements
-      (migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations:ms url
+      (migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url
          (baseline_argv ~template:pg_dump ~restrict_key ~table))
   in
   let* made = dumped replaced in

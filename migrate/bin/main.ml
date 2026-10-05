@@ -133,8 +133,8 @@ let up =
        ~doc:"Apply every migration in $(b,--dir) the database has not recorded.")
     (Term.const (fun dir url lock table ->
          exits
-           (let* ms = told (M.of_directory dir) in
-            with_db url (fun conn -> M.run ~lock ~table conn ms)))
+           (let* migrations = told (M.of_directory dir) in
+            with_db url (fun conn -> M.run ~lock ~table conn migrations)))
     $ dir $ url $ lock $ table)
 
 let status =
@@ -146,31 +146,31 @@ let status =
               "Exit 1 while any migration is pending, so a script can wait on \
                it."))
   in
-  let show ~check (st : M.status) =
+  let show ~check (status : M.status) =
     let number (v : M.version) = (v :> int) in
     List.iter
       (fun (v, n) -> Printf.printf "applied  %d_%s\n" (number v) n)
-      st.applied;
+      status.applied;
     List.iter
       (fun (m : M.migration) ->
         Printf.printf "pending  %d_%s\n" (number m.version) m.name)
-      st.pending;
+      status.pending;
     List.iter
       (fun v ->
         Printf.printf "unknown  %d (from a newer checkout)\n" (number v))
-      st.unknown;
+      status.unknown;
     List.iter
       (fun v -> Printf.printf "edited   %d (changed since it ran)\n" (number v))
-      st.edited;
+      status.edited;
     List.iter
       (fun v ->
         Printf.printf "late     %d (older than one applied)\n" (number v))
-      st.late;
+      status.late;
     Option.iter
       (fun v ->
         Printf.printf "behind   %d (a baseline it has not reached)\n" (number v))
-      st.behind;
-    match (st.behind, st.unknown, st.edited, st.late) with
+      status.behind;
+    match (status.behind, status.unknown, status.edited, status.late) with
     | Some _, _, _, _ ->
         Error
           "the database is behind the squash: migrate it with a build from \
@@ -181,18 +181,20 @@ let status =
     | None, [], [], _ :: _ ->
         Error "a migration is older than one already applied"
     | None, [], [], [] -> (
-        match st.pending with
-        | _ :: _ as ms when check ->
-            Error (Printf.sprintf "%d pending" (List.length ms))
+        match status.pending with
+        | _ :: _ as pending when check ->
+            Error (Printf.sprintf "%d pending" (List.length pending))
         | _ :: _ | [] -> Ok ())
   in
   Cmd.v
     (Cmd.info "status" ~doc:"List the migrations applied, and those pending.")
     (Term.const (fun dir url table check ->
          exits
-           (let* ms = told (M.of_directory dir) in
-            let* st = with_db url (fun conn -> M.status ~table conn ms) in
-            show ~check st))
+           (let* migrations = told (M.of_directory dir) in
+            let* status =
+              with_db url (fun conn -> M.status ~table conn migrations)
+            in
+            show ~check status))
     $ dir $ url $ table $ check)
 
 let new_ =

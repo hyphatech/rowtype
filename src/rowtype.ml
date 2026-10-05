@@ -272,10 +272,10 @@ module Make (B : Backend) = struct
   (* A row that does not decode is the answer, and the rows after it are
      passed over rather than stopped: the backend is reading them already,
      and leaving its reply half-read would leave its connection mid-reply. *)
-  let fold_cells db st args ~init ~row =
-    let* params = encode st.params args in
+  let fold_cells db statement args ~init ~row =
+    let* params = encode statement.params args in
     match
-      B.fold db st.sql params ~init:(Ok init) ~row:(fun acc cells ->
+      B.fold db statement.sql params ~init:(Ok init) ~row:(fun acc cells ->
           match acc with Error _ -> acc | Ok acc -> row acc cells)
     with
     | Ok (answer, _) -> answer
@@ -286,8 +286,8 @@ module Make (B : Backend) = struct
   (* The first row, decoded, and how many there were: [find] and [find_opt]
      count, because a statement that promised one row and answered several
      is wrong, and saying how many is what finds it. *)
-  let first_of db st args ty =
-    fold_cells db st args ~init:(None, 0) ~row:(fun (first, n) cells ->
+  let first_of db statement args ty =
+    fold_cells db statement args ~init:(None, 0) ~row:(fun (first, n) cells ->
         match first with
         | Some _ -> Ok (first, n + 1)
         | None ->
@@ -300,27 +300,27 @@ module Make (B : Backend) = struct
          (Printf.sprintf "the statement answered %d rows, not %s" count expected))
 
   let answer : type p r. conn -> (p, r) statement -> p -> (r, error) result =
-   fun db st args ->
-    match st.rows with
-    | Nothing -> fold_cells db st args ~init:() ~row:(fun () _ -> Ok ())
+   fun db statement args ->
+    match statement.rows with
+    | Nothing -> fold_cells db statement args ~init:() ~row:(fun () _ -> Ok ())
     | At_most_one ty -> (
-        let* first, count = first_of db st args ty in
+        let* first, count = first_of db statement args ty in
         match first with
         | Some _ when count > 1 -> answered count "at most one"
         | Some _ | None -> Ok first)
     | One ty -> (
-        let* first, count = first_of db st args ty in
+        let* first, count = first_of db statement args ty in
         match first with
         | Some v when count = 1 -> Ok v
         | Some _ | None -> answered count "one")
     | Every ty ->
         Result.map List.rev
-          (fold_cells db st args ~init:[] ~row:(fun acc cells ->
+          (fold_cells db statement args ~init:[] ~row:(fun acc cells ->
                let* v = decode_row ty cells in
                Ok (v :: acc)))
     | Count -> (
-        let* params = encode st.params args in
-        match B.fold db st.sql params ~init:() ~row:(fun () _ -> ()) with
+        let* params = encode statement.params args in
+        match B.fold db statement.sql params ~init:() ~row:(fun () _ -> ()) with
         | Ok ((), count) -> Ok count
         | Error f -> Error (B.error f))
 
@@ -334,17 +334,20 @@ module Make (B : Backend) = struct
       init:acc ->
       (acc -> r -> acc) ->
       (acc, error) result =
-   fun db st args ~init f ->
-    match st.rows with
+   fun db statement args ~init f ->
+    match statement.rows with
     | Every ty ->
-        fold_cells db st args ~init ~row:(fun acc cells ->
+        fold_cells db statement args ~init ~row:(fun acc cells ->
             let* v = decode_row ty cells in
             Ok (f acc v))
-    | One _ -> Result.map (List.fold_left f init) (answer db st args)
+    | One _ -> Result.map (List.fold_left f init) (answer db statement args)
 
   let bind ty v = widen (encode ty v)
-  let run db st args = widen (answer db st args)
-  let fold db st args ~init f = widen (fold_list db st args ~init f)
+  let run db statement args = widen (answer db statement args)
+
+  let fold db statement args ~init f =
+    widen (fold_list db statement args ~init f)
+
   let exec_raw db sql = widen (Result.map_error B.error (B.script db sql))
   let commit db = widen (Result.map_error B.error (B.commit db))
 end
@@ -370,12 +373,12 @@ type declared = {
   row : column list option;
 }
 
-let declared (Any st) =
+let declared (Any statement) =
   {
-    sql = st.sql;
-    parameters = columns st.params;
+    sql = statement.sql;
+    parameters = columns statement.params;
     row =
-      (match st.rows with
+      (match statement.rows with
       | Nothing | Count -> None
       | One t -> Some (columns t)
       | At_most_one t -> Some (columns t)

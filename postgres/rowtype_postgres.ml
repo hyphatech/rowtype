@@ -141,7 +141,7 @@ module Backend = struct
          none, behind a pooler that cannot carry them, reads text. *)
       (Pg.query pg sql ~params
          ~binary:(Pg.statement_cache pg > 0)
-         ~columns:(fun cs -> columns := cs)
+         ~columns:(fun described -> columns := described)
          ~init
          ~row:(fun acc cells ->
            row acc
@@ -680,14 +680,16 @@ let problems db (declared : S.declared) =
 let verify db statements =
   let rec each found = function
     | [] -> if List.is_empty found then Ok () else Error (List.rev found)
-    | st :: rest -> (
-        let declared = S.declared st in
+    | statement :: rest -> (
+        let declared = S.declared statement in
         match problems db declared with
         | Error m -> Error [ "the check could not run: " ^ m ]
-        | Ok ps ->
+        | Ok statement_problems ->
             each
               (List.rev_append
-                 (List.map (fun p -> first_line declared.sql ^ ": " ^ p) ps)
+                 (List.map
+                    (fun p -> first_line declared.sql ^ ": " ^ p)
+                    statement_problems)
                  found)
               rest)
   in

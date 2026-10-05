@@ -7,7 +7,7 @@ module S = Rowtype
 
 (* A cell as this backend keeps one: a scalar's text, or an array's
    elements. *)
-type cell = V of string | L of cell option list
+type cell = Value of string | Elements of cell option list
 
 module Echo = struct
   type conn = unit
@@ -20,7 +20,7 @@ module Echo = struct
   let param : type a. a S.scalar -> a -> param =
    fun s v ->
     Some
-      (V
+      (Value
          (match s with
          | S.Int -> string_of_int v
          | S.Int64 -> Int64.to_string v
@@ -47,8 +47,8 @@ module Echo = struct
    fun s c ->
     let some what = function Some x -> Ok x | None -> Error what in
     match c with
-    | L _ -> Error "an array where a scalar was expected"
-    | V v -> (
+    | Elements _ -> Error "an array where a scalar was expected"
+    | Value v -> (
         match s with
         | S.Int -> some "an int" (int_of_string_opt v)
         | S.Int64 -> some "an int64" (Int64.of_string_opt v)
@@ -73,11 +73,11 @@ module Echo = struct
 
   let fold () _ params ~init ~row = Ok (row init (Array.of_list params), 1)
   let script () _ = Ok ()
-  let array elements = Some (L elements)
+  let array elements = Some (Elements elements)
 
   let elements = function
-    | L elements -> Ok elements
-    | V _ -> Error "a scalar where an array was expected"
+    | Elements elements -> Ok elements
+    | Value _ -> Error "a scalar where an array was expected"
 
   let commit () = Ok `Committed
   let error m = `Db m
