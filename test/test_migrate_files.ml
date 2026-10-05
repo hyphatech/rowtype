@@ -1,6 +1,5 @@
-(* The migration files' pieces, without a database: reading them, naming a
-   new one, spelling the pg_dump a dump runs, and making the
-   dump stable. *)
+(* The migration files' pieces, without a database: reading them, and
+   naming a new one. *)
 
 module C = Rowtype_migrate
 
@@ -163,50 +162,6 @@ let test_a_new_migration_refuses_what_would_collide () =
     (refused "two" ~now:noon);
   Alcotest.(check bool) "a second later" false (refused "two" ~now:(noon +. 1.))
 
-let test_pg_dump_is_spelled_without_a_shell () =
-  Alcotest.(check (list string))
-    "each word its own argument, the placeholders filled"
-    [
-      "docker";
-      "compose";
-      "exec";
-      "-T";
-      "db";
-      "pg_dump";
-      "-d";
-      "app_schema_1";
-      "--schema-only";
-      "--no-owner";
-      "--no-privileges";
-      "--restrict-key=app";
-    ]
-    (C.pg_dump_argv ~template:"docker  compose exec -T db pg_dump -d {database}"
-       ~url:"postgres://h/app_schema_1" ~database:"app_schema_1"
-       ~restrict_key:"app");
-  Alcotest.(check (list string))
-    "the default, by URL"
-    [
-      "pg_dump";
-      "--dbname=postgres://h/x";
-      "--schema-only";
-      "--no-owner";
-      "--no-privileges";
-      "--restrict-key=app";
-    ]
-    (C.pg_dump_argv ~template:"pg_dump --dbname={url}" ~url:"postgres://h/x"
-       ~database:"x" ~restrict_key:"app")
-
-let test_a_dump_forgets_its_versions () =
-  check_string "only the schema is left"
-    "--\n-- PostgreSQL database dump\n--\n\ncreate table t ();\n"
-    (C.normalise_dump
-       "--\n\
-        -- PostgreSQL database dump\n\
-        --\n\
-        -- Dumped from database version 18.1\n\
-        -- Dumped by pg_dump version 18.1\n\n\
-        create table t ();\n")
-
 let () =
   Alcotest.run "migrate files"
     [
@@ -227,12 +182,5 @@ let () =
             test_a_new_migration_makes_its_directory;
           Alcotest.test_case "a new one refuses what would collide" `Quick
             test_a_new_migration_refuses_what_would_collide;
-        ] );
-      ( "schema",
-        [
-          Alcotest.test_case "pg_dump is spelled without a shell" `Quick
-            test_pg_dump_is_spelled_without_a_shell;
-          Alcotest.test_case "a dump forgets its versions" `Quick
-            test_a_dump_forgets_its_versions;
         ] );
     ]

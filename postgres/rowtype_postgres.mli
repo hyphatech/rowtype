@@ -173,17 +173,6 @@ end
     nothing, and one whose errors are ordinary variants maps once, in its own
     bracket. *)
 module Transaction : sig
-  type failure =
-    [ `Busy of float  (** no connection within the wait, in seconds *)
-    | `Not_committed of string
-      (** the transaction could not begin, its [COMMIT] failed, or the work
-          returned [Ok] from a transaction a failed statement had aborted: in
-          words for the log *)
-    | `Not_serializable of string
-      (** its [COMMIT] found it could not be ordered with a concurrent
-          transaction, as a statement's {!Rowtype.error} says when one does *)
-    ]
-
   (** How much of what concurrent transactions commit this one sees, as the SQL
       standard names the levels: Postgres's [begin isolation level]. *)
   type isolation = Read_committed | Repeatable_read | Serializable

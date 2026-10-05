@@ -200,9 +200,15 @@ val dump :
   string ->
   (string, string) result
 (** What the migrations add up to from nothing: a database of its own on the
-    server the URL names, migrated, dumped by {!pg_dump_argv}'s command,
-    {!normalise_dump}ed, and dropped however that went -- never what some
-    database has drifted to. *)
+    server the URL names, migrated, dumped, and dropped however that went --
+    never what some database has drifted to.
+
+    [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
+    replaced in each word by the scratch database's; it is not given to a shell,
+    so a word cannot hold a space. It dumps the schema alone, with
+    [restrict_key] as the key a dump otherwise makes up afresh each time, and
+    the lines naming the versions of the server and of [pg_dump] are removed, so
+    the file changes only when the schema does. *)
 
 val squash :
   sw:Eio.Switch.t ->
@@ -227,19 +233,3 @@ val squash :
     history makes, or nothing is answered. Writing it and removing the files it
     replaced is the caller's. Refused: a [through] that is no migration's
     version, and one that is the baseline's with nothing before it. *)
-
-val pg_dump_argv :
-  template:string ->
-  url:string ->
-  database:string ->
-  restrict_key:string ->
-  string list
-(** The [pg_dump] command line: [template] split on spaces, with [{url}] and
-    [{database}] replaced in each word, followed by the flags that make a
-    schema-only dump stable -- [restrict_key] among them, which a dump otherwise
-    makes up afresh each time. The template is not given to a shell, so a word
-    cannot hold a space. *)
-
-val normalise_dump : string -> string
-(** A schema dump with the lines naming the versions of the server and of
-    [pg_dump] removed, so the file changes only when the schema does. *)

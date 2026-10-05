@@ -402,9 +402,6 @@ end
 (* Transactions *)
 
 module Transaction = struct
-  type failure =
-    [ `Busy of float | `Not_committed of string | `Not_serializable of string ]
-
   type isolation = Read_committed | Repeatable_read | Serializable
 
   (* No level named is the database's own default, so a plain [begin]. *)
