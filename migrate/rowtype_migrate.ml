@@ -539,7 +539,9 @@ let pg_dump_argv ~template ~url ~database ~restrict_key =
       "--restrict-key=" ^ restrict_key;
     ]
 
-(* Not through a shell: nothing in the template is interpreted twice. *)
+(* Not through a shell: nothing in the template is interpreted twice. A
+   failure names the program and never its arguments, which hold the URL and
+   so its password. *)
 let capture argv =
   match argv with
   | [] -> Error "no pg_dump command"
@@ -551,9 +553,7 @@ let capture argv =
           let out = In_channel.input_all ic in
           match Unix.close_process_in ic with
           | Unix.WEXITED 0 -> Ok out
-          | Unix.WEXITED n ->
-              Error
-                (Printf.sprintf "%s exited with %d" (String.concat " " argv) n)
+          | Unix.WEXITED n -> Error (Printf.sprintf "%s exited with %d" prog n)
           | Unix.WSIGNALED n | Unix.WSTOPPED n ->
               Error (Printf.sprintf "%s was stopped by signal %d" prog n)))
 
@@ -579,6 +579,14 @@ let connect ~sw ~net ~mono_clock url =
        ~parameters:[ ("client_min_messages", "warning") ]
        c)
 
+(* A finaliser runs in a fiber that may be cancelled, where any IO raises
+   again: shielded, it does its work, and the cancellation goes on as itself
+   rather than wrapped in [Fun.Finally_raised]. *)
+let closing conn f =
+  Fun.protect
+    ~finally:(fun () -> Eio.Cancel.protect (fun () -> Pg.close conn))
+    (fun () -> f conn)
+
 (* A database that is not there is the one failure to connect with a next
    step to name, and the server's own database says whether it is that. *)
 let missing ~sw ~net ~mono_clock url e =
@@ -586,9 +594,7 @@ let missing ~sw ~net ~mono_clock url e =
     let* c = Result.map_error S.error_to_string (Pg.conninfo url) in
     let* server = db (Pg.on_database ~server:url "postgres") in
     let* admin = connect ~sw ~net ~mono_clock server in
-    Fun.protect
-      ~finally:(fun () -> Pg.close admin)
-      (fun () ->
+    closing admin (fun admin ->
         Result.map
           (fun there -> (c.database, there))
           (db
@@ -607,7 +613,7 @@ let missing ~sw ~net ~mono_clock url e =
 
 let with_connection ~sw ~net ~mono_clock url f =
   match connect ~sw ~net ~mono_clock url with
-  | Ok conn -> Fun.protect ~finally:(fun () -> Pg.close conn) (fun () -> f conn)
+  | Ok conn -> closing conn f
   | Error e -> Error (missing ~sw ~net ~mono_clock url e)
 
 (* A database's name cannot be a parameter either; quoted, it is any name a
@@ -641,10 +647,12 @@ let migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url dump =
       let* () = db (Pg.exec_raw admin ("create database " ^ quoted scratch)) in
       Fun.protect
         ~finally:(fun () ->
-          ignore
-            (Pg.exec_raw admin
-               ("drop database if exists " ^ quoted scratch ^ " with (force)")
-              : (unit, S.error) result))
+          Eio.Cancel.protect (fun () ->
+              ignore
+                (Pg.exec_raw admin
+                   ("drop database if exists " ^ quoted scratch
+                  ^ " with (force)")
+                  : (unit, S.error) result)))
         (fun () ->
           let* target = db (Pg.on_database ~server:url scratch) in
           let* () =

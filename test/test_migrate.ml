@@ -474,6 +474,66 @@ let test_a_dump_is_what_the_migrations_make () =
                  "-- Dumped";
                ]))
 
+(* A pg_dump that fails is named, and never with its arguments: the URL in
+   them holds the password. *)
+let test_a_failed_dump_names_no_password () =
+  Db_target.with_postgres (fun target ->
+      let password =
+        match (ok (Pg.conninfo target) : Pg.Conninfo.t).password with
+        | Some p -> p
+        | None -> Alcotest.fail "ROWTYPE_TEST_PG names no password to keep out"
+      in
+      match
+        Rowtype_migrate.dump ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+          ~mono_clock:(Db_target.mono ()) ~pg_dump:"false --dbname={url}"
+          ~restrict_key:"rowtype" ~migrations:[] target
+      with
+      | Ok _ -> Alcotest.fail "a pg_dump that failed made a dump"
+      | Error m ->
+          Alcotest.(check bool)
+            ("the program, and no password: " ^ m)
+            true
+            (contains m "false" && not (contains m password)))
+
+(* A dump cancelled while it migrates drops its scratch database, and its
+   fiber ends cancelled, as itself. *)
+let test_a_cancelled_dump_leaves_nothing () =
+  Db_target.with_postgres (fun target ->
+      let migrations =
+        [
+          {
+            Rowtype_migrate.version = 20260101000000;
+            name = "slow";
+            kind = Transaction;
+            sql = "select pg_sleep(5)";
+          };
+        ]
+      in
+      let answer =
+        Eio.Fiber.first
+          (fun () ->
+            ignore
+              (Rowtype_migrate.dump ~sw:(Db_target.sw ())
+                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                 ~pg_dump:"true" ~restrict_key:"rowtype" ~migrations target
+                : (string, string) result);
+            "finished")
+          (fun () ->
+            Eio.Time.Mono.sleep (Db_target.mono ()) 0.5;
+            "cancelled")
+      in
+      Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
+      let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
+      Db_target.admin (fun db ->
+          Alcotest.(check bool)
+            "its scratch database is gone" false
+            (ok
+               (Pg.run db
+                  (S.find ~params:S.text ~row:S.bool
+                     "select exists (select 1 from pg_database where datname = \
+                      $1)")
+                  scratch))))
+
 (* A squash's baseline stands for the history it replaced: a database made
    from it and what came after holds the schema and the rows the whole
    history makes, and a database migrated before the squash takes the new
@@ -598,6 +658,10 @@ let () =
             test_a_dump_is_what_the_migrations_make;
           Alcotest.test_case "a squash stands for its history" `Quick
             test_a_squash_stands_for_its_history;
+          Alcotest.test_case "a failed dump names no password" `Quick
+            test_a_failed_dump_names_no_password;
+          Alcotest.test_case "a cancelled dump leaves nothing" `Quick
+            test_a_cancelled_dump_leaves_nothing;
         ] );
       ( "the database",
         [
