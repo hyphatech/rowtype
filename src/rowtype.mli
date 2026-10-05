@@ -47,6 +47,8 @@ type error =
     every function that fails answers [[> error]]. *)
 
 val error_to_string : [< error ] -> string
+(** In words for a log, which never hold a parameter's value: a conflict by its
+    constraint's name, anything else as it was told. *)
 
 (** {1 Shapes}
 
@@ -277,9 +279,14 @@ module type Backend = sig
   (** One non-NULL column of a row, as the database sent it. *)
 
   type failure
+  (** What the database or the connection answered instead of a result; told as
+      {!type-error} by [error]. *)
 
   val null : param
+  (** A NULL, bound to one placeholder. *)
+
   val param : 'a scalar -> 'a -> param
+  (** A value bound to one placeholder, as the scalar says to send it. *)
 
   val read : 'a scalar -> cell -> ('a, string) result
   (** A cell as a scalar, or what was expected and what came instead, in words.
@@ -362,11 +369,14 @@ end
 type column = Column : 'a scalar -> column | Array_of of column list
 
 type declared = {
-  sql : string;
+  sql : string;  (** as it is sent *)
   parameters : column list;  (** in placeholder order, an option transparent *)
   row : column list option;
       (** each column read, in order; [None] where the rows are discarded --
           {!exec} and {!exec_count} *)
 }
+(** What one statement says it takes and answers, for a backend's check of it
+    against the database. *)
 
 val declared : any -> declared
+(** What the statement declares. *)

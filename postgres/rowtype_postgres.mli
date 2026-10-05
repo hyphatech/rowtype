@@ -79,6 +79,8 @@ val connect :
     and [commit] among them, and nothing unless given. *)
 
 val close : conn -> unit
+(** Close it for good, telling the server; its next statement says so. A no-op
+    on one already closed. *)
 
 val revive : conn -> unit
 (** Make again a connection a failure closed -- the server restarted, say -- in
@@ -86,10 +88,11 @@ val revive : conn -> unit
     again stays closed, and its next statement says so. *)
 
 val timeout_s : conn -> float option
+(** The bound on every read and write, in seconds, [None] for none. *)
 
 val set_timeout_s : conn -> float option -> unit
-(** The bound on every read and write, [None] for none: lifted around work that
-    runs longer, a migration. *)
+(** Set {!timeout_s}: lifted around work that runs longer, a migration, and put
+    back after it. *)
 
 (** Connections made up front and lent one at a time, as [Postgres_eio.Pool]
     lends them. *)
@@ -152,6 +155,9 @@ module Listener : sig
     ?heartbeat_s:float ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
+  (** A connection that only listens, as {!connect} makes one; [heartbeat_s] is
+      how long {!next} waits in silence before it pings the server, 10 unless
+      given. *)
 
   val listen : t -> string -> (unit, [> Rowtype.error ]) result
   (** [LISTEN] on a channel named exactly as given. *)
@@ -161,6 +167,7 @@ module Listener : sig
       and said so. After {!close}, an error. *)
 
   val close : t -> unit
+  (** Close it for good; {!next} then answers an error. *)
 end
 
 (** One transaction on one connection, and its own failures told apart from the
