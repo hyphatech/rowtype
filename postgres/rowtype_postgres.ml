@@ -61,8 +61,16 @@ module Backend = struct
   type nonrec conn = conn
   type param = string option
 
-  (* A cell is read by its column, which says its type and its format. *)
-  type cell = Pg.Column.t * string
+  (* A cell and how it is read. A column the server described says its type
+     and format. An array's element has no type of its own: it is text,
+     read with its array's column set to text, whose type a reader of text
+     never asks. A column past the ones described is one no server sends,
+     and is refused rather than guessed at. *)
+  type cell =
+    | Described of Pg.Column.t * string
+    | Element of Pg.Column.t * string
+    | Undescribed
+
   type failure = Pg.error
 
   let null = None
@@ -87,19 +95,14 @@ module Backend = struct
       | S.Json -> v)
 
   (* A refusal names the column's type and never its value, which may be a
-     token or an address and would reach a log. An array's element is a
-     cell of no type, read from its text. *)
-  let read : type a. a S.scalar -> cell -> (a, string) result =
-   fun s (column, raw) ->
+     token or an address and would reach a log; [got] says what came instead
+     of a value of the scalar's type. *)
+  let read_as : type a.
+      a S.scalar -> Pg.Column.t -> string -> got:string -> (a, string) result =
+   fun s column raw ~got ->
     let as_ expected = function
       | Some v -> Ok v
-      | None when column.type_oid = 0 ->
-          Error
-            (Printf.sprintf "expected %s, got text that is not one" expected)
-      | None ->
-          Error
-            (Printf.sprintf "expected %s, got a value of type %d" expected
-               column.type_oid)
+      | None -> Error (Printf.sprintf "expected %s, got %s" expected got)
     in
     match s with
     | S.Int -> as_ "INT" (Pg.Value.int column raw)
@@ -124,15 +127,24 @@ module Backend = struct
     | S.Uuid -> as_ "UUID" (Pg.Value.uuid column raw)
     | S.Json -> as_ "JSON" (Pg.Value.json column raw)
 
-  (* A column past the ones described -- which no server sends -- is read
-     as text. *)
+  let read : type a. a S.scalar -> cell -> (a, string) result =
+   fun s cell ->
+    match cell with
+    | Described (column, raw) ->
+        read_as s column raw
+          ~got:
+            (Printf.sprintf "a value of type %d"
+               (Pg.Oid.to_int column.type_oid))
+    | Element (column, raw) -> read_as s column raw ~got:"text that is not one"
+    | Undescribed -> Error "a column the server did not describe"
+
   let fold t sql params ~init ~row =
     timed t sql @@ fun () ->
     let pg = t.pg in
     let columns = ref [||] in
-    let column i =
-      if i < Array.length !columns then !columns.(i)
-      else { Pg.Column.name = ""; type_oid = 0; format = Pg.Column.Text }
+    let cell i raw =
+      if i < Array.length !columns then Described (!columns.(i), raw)
+      else Undescribed
     in
     Result.map
       (fun (acc, tag) -> (acc, Option.value (Pg.Tag.rows tag) ~default:0))
@@ -144,10 +156,7 @@ module Backend = struct
          ~columns:(fun described -> columns := described)
          ~init
          ~row:(fun acc cells ->
-           row acc
-             (Array.mapi
-                (fun i c -> Option.map (fun v -> (column i, v)) c)
-                cells)))
+           row acc (Array.mapi (fun i c -> Option.map (cell i) c) cells)))
 
   let script t sql = timed t sql @@ fun () -> Pg.script t.pg sql
 
@@ -175,51 +184,52 @@ module Backend = struct
      what Postgres writes: [{1,"a b",NULL}], a quoted element's escapes
      undone and an unquoted NULL none. Each element is a cell in text, read
      as the element's scalar reads one. *)
-  let elements ((column : Pg.Column.t), raw) =
-    let cell v =
-      (({ column with type_oid = 0; format = Pg.Column.Text } : Pg.Column.t), v)
-    in
-    let n = String.length raw in
-    let rec quoted i b =
-      if i >= n then Error "an unended quoted element"
-      else
-        match raw.[i] with
-        | '"' -> Ok (Buffer.contents b, i + 1)
-        | '\\' when i + 1 < n ->
-            Buffer.add_char b raw.[i + 1];
-            quoted (i + 2) b
-        | c ->
-            Buffer.add_char b c;
-            quoted (i + 1) b
-    in
-    let rec plain i =
-      if i < n && raw.[i] <> ',' && raw.[i] <> '}' then plain (i + 1) else i
-    in
-    let rec go i acc =
-      let* element, j =
-        if i < n && raw.[i] = '"' then
-          Result.map
-            (fun (v, j) -> (Some (cell v), j))
-            (quoted (i + 1) (Buffer.create 16))
-        else
-          let j = plain i in
-          let text = String.trim (String.sub raw i (j - i)) in
-          if String.contains text '{' then
-            Error "an array of more than one dimension"
-          else if String.equal (String.uppercase_ascii text) "NULL" then
-            Ok (None, j)
-          else Ok (Some (cell text), j)
-      in
-      if j < n && raw.[j] = ',' then go (j + 1) (element :: acc)
-      else if j = n - 1 && raw.[j] = '}' then Ok (List.rev (element :: acc))
-      else Error "not an array"
-    in
-    match column.format with
-    | Pg.Column.Binary -> Error "an array in binary, which is read in text"
-    | Pg.Column.Text ->
-        if String.equal raw "{}" then Ok []
-        else if n >= 2 && raw.[0] = '{' then go 1 []
-        else Error "not an array"
+  let elements cell =
+    match cell with
+    | Element _ | Undescribed -> Error "not an array"
+    | Described (column, raw) -> (
+        let cell v = Element ({ column with format = Pg.Column.Text }, v) in
+        let n = String.length raw in
+        let rec quoted i b =
+          if i >= n then Error "an unended quoted element"
+          else
+            match raw.[i] with
+            | '"' -> Ok (Buffer.contents b, i + 1)
+            | '\\' when i + 1 < n ->
+                Buffer.add_char b raw.[i + 1];
+                quoted (i + 2) b
+            | c ->
+                Buffer.add_char b c;
+                quoted (i + 1) b
+        in
+        let rec plain i =
+          if i < n && raw.[i] <> ',' && raw.[i] <> '}' then plain (i + 1) else i
+        in
+        let rec go i acc =
+          let* element, j =
+            if i < n && raw.[i] = '"' then
+              Result.map
+                (fun (v, j) -> (Some (cell v), j))
+                (quoted (i + 1) (Buffer.create 16))
+            else
+              let j = plain i in
+              let text = String.trim (String.sub raw i (j - i)) in
+              if String.contains text '{' then
+                Error "an array of more than one dimension"
+              else if String.equal (String.uppercase_ascii text) "NULL" then
+                Ok (None, j)
+              else Ok (Some (cell text), j)
+          in
+          if j < n && raw.[j] = ',' then go (j + 1) (element :: acc)
+          else if j = n - 1 && raw.[j] = '}' then Ok (List.rev (element :: acc))
+          else Error "not an array"
+        in
+        match column.format with
+        | Pg.Column.Binary -> Error "an array in binary, which is read in text"
+        | Pg.Column.Text ->
+            if String.equal raw "{}" then Ok []
+            else if n >= 2 && raw.[0] = '{' then go 1 []
+            else Error "not an array")
 
   (* A transaction a failed statement aborted is not an error to COMMIT:
      the server rolls it back and says so in the command tag. *)
@@ -665,7 +675,8 @@ let problems db (declared : S.declared) =
   | Ok d ->
       let* parameters =
         mismatches db ~what:"parameter" ~counted:"parameters"
-          declared.parameters d.parameters
+          declared.parameters
+          (List.map Pg.Oid.to_int d.parameters)
       in
       let* columns =
         match declared.row with
@@ -673,7 +684,9 @@ let problems db (declared : S.declared) =
         | Some row ->
             mismatches db ~what:"column" ~counted:"columns" row
               (Array.to_list
-                 (Array.map (fun (c : Pg.Column.t) -> c.type_oid) d.columns))
+                 (Array.map
+                    (fun (c : Pg.Column.t) -> Pg.Oid.to_int c.type_oid)
+                    d.columns))
       in
       Ok (parameters @ columns)
 
