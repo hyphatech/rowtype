@@ -108,6 +108,10 @@ The rules are ranked, because they conflict:
 A change is done when every box holds:
 
 - [ ] `make lint` and `make test` pass.
+- [ ] **A change brings its tests**: the typical corner cases (empty, one,
+  the boundaries, invalid input, a failure partway through), a property
+  test wherever a round trip exists, and the real server rather than a mock
+  of it.
 - [ ] **No partial functions**: no `failwith`, `invalid_arg`, `Option.get`,
   `Result.get_ok`, `List.hd`, `List.tl`, `List.nth`, `Obj.magic`. Errors are
   values: a `result` with a variant error, and `let*` over it.
@@ -120,11 +124,18 @@ A change is done when every box holds:
   a warning that looks wrong is a code shape that is wrong.
 - [ ] **An `.mli` per library module.** Abstract types, hidden
   constructors; the contract in odoc in the `.mli`, the reasons in the
-  `.ml`.
+  `.ml`. It exports what a user needs, and nothing more.
 - [ ] **A library never prints, exits or reads the environment.** It logs
   on its own `Logs` source. The command in `migrate/bin/` is where the
   environment is read.
-- [ ] **Variants over strings and booleans** for anything with states.
+- [ ] **A meaning is a type.** A state is a variant, never a string or a
+  boolean; a unit or an identifier that travels unnamed -- a column, an
+  element, a returned value -- is a type of its own, never a bare `int` or
+  `string` whose meaning the caller has to remember. A labelled argument
+  that names its unit at every call (`~timeout_s`) is enough.
+- [ ] **Cancellation leaves nothing held.** A fiber cancelled at any effect
+  releases what it held: a connection goes back to its pool or is closed,
+  and a lock is let go.
 - [ ] **Labelled arguments** where a call would otherwise be ambiguous, and
   optional arguments with defaults, followed by `()`.
 - [ ] **Stdlib naming**: `t`, `create`/`make`, `of_x`/`to_x`, `*_opt`,
@@ -133,6 +144,9 @@ A change is done when every box holds:
   abbreviations beyond the stdlib's (`b` a buffer, `n` a count, `f` a
   function).
 - [ ] **A number with a reason is a named constant**, the reason beside it.
+- [ ] **No needless cost.** No quadratic walk where a linear one is as
+  clear, and no whole result held where streaming is as simple. A claim
+  about speed comes with a measurement.
 - [ ] **Plain stdlib.** No Base, Core or Lwt.
 - [ ] **`ocamlformat` decides layout.** Never format by hand.
 
