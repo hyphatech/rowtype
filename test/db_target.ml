@@ -88,3 +88,28 @@ let with_postgres f =
         exec db (Printf.sprintf "drop database if exists %s with (force)" name))
   in
   Fun.protect ~finally (fun () -> f (on_database name))
+
+(* The cases write an instant as epoch microseconds, a figure checked
+   against Postgres's own; this is the instant in that unit, converted
+   through whole seconds and their fraction, apart from how the backend
+   does it. *)
+let instant_us =
+  let us_per_s = 1_000_000 and ps_per_us = 1_000_000L in
+  Rowtype.conv Rowtype.instant
+    ~of_:(fun t ->
+      let whole = Ptime.truncate ~frac_s:0 t in
+      match Ptime.Span.to_int_s (Ptime.to_span whole) with
+      | None -> Alcotest.fail "an instant past an int of seconds"
+      | Some s ->
+          let _, ps = Ptime.Span.to_d_ps (Ptime.frac_s t) in
+          (s * us_per_s) + Int64.to_int (Int64.div ps ps_per_us))
+    ~to_:(fun us ->
+      let s = Int.div us us_per_s - if us mod us_per_s < 0 then 1 else 0 in
+      let frac = us - (s * us_per_s) in
+      match
+        Option.bind
+          (Ptime.Span.of_d_ps (0, Int64.mul (Int64.of_int frac) ps_per_us))
+          (fun f -> Ptime.of_span (Ptime.Span.add (Ptime.Span.of_int_s s) f))
+      with
+      | Some t -> t
+      | None -> Alcotest.failf "%d microseconds is no instant" us)

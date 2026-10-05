@@ -134,7 +134,7 @@ let test_instants () =
           Alcotest.(check int)
             (Printf.sprintf "%d, in %s" us format)
             us
-            (back db ~column:"timestamptz" S.instant us))
+            (back db ~column:"timestamptz" Db_target.instant_us us))
         [
           0;
           1;

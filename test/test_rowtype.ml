@@ -431,7 +431,7 @@ let test_statements_are_checked_against_the_database () =
                "select c::colour::text, p from v where n = $1");
           S.Any
             (S.list ~params:S.unit
-               ~row:(S.t3 S.text S.int S.instant)
+               ~row:(S.t3 S.text S.int Db_target.instant_us)
                "select c, p, at from v");
           S.Any
             (S.exec ~params:(S.t2 S.text S.bytes)
@@ -489,7 +489,8 @@ let test_arrays_round_trip () =
               ~params:
                 (S.t6 (S.array S.int)
                    (S.array (S.opt S.float))
-                   (S.array S.text) (S.array S.bytes) (S.array S.instant)
+                   (S.array S.text) (S.array S.bytes)
+                   (S.array Db_target.instant_us)
                    (S.array S.text))
               "insert into a values ($1, $2, $3, $4, $5, $6)")
            ( [ 1; -2; 3 ],
@@ -505,7 +506,8 @@ let test_arrays_round_trip () =
                 ~row:
                   (S.t6 (S.array S.int)
                      (S.array (S.opt S.float))
-                     (S.array S.text) (S.array S.bytes) (S.array S.instant)
+                     (S.array S.text) (S.array S.bytes)
+                     (S.array Db_target.instant_us)
                      (S.array S.text))
                 "select n, f, t, b, at, k from a")
              ())
@@ -595,20 +597,21 @@ let test_an_instant_round_trips () =
           ok (Pg.exec_raw db "delete from i");
           ok
             (Pg.run db
-               (S.exec ~params:S.instant "insert into i values ($1)")
+               (S.exec ~params:Db_target.instant_us "insert into i values ($1)")
                us);
           Alcotest.(check (option int))
             (string_of_int us) (Some us)
             (ok
                (Pg.run db
-                  (S.find_opt ~params:S.unit ~row:S.instant "select t from i")
+                  (S.find_opt ~params:S.unit ~row:Db_target.instant_us
+                     "select t from i")
                   ())))
         moments;
       Alcotest.(check (option bool))
         "and the database agrees about which instant" (Some true)
         (ok
            (Pg.run db
-              (S.find_opt ~params:S.instant ~row:S.bool
+              (S.find_opt ~params:Db_target.instant_us ~row:S.bool
                  "select $1::timestamptz = timestamptz '2025-09-23 \
                   09:33:20.123456+00'")
               1_758_620_000_123_456)))

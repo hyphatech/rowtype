@@ -4,7 +4,7 @@
 (library
  (name db_target)
  (modules db_target)
- (libraries rowtype rowtype-postgres eio eio_main unix alcotest))
+ (libraries rowtype rowtype-postgres ptime eio eio_main unix alcotest))
 
 ; The Postgres backend: statements, scalars, failures, the pool, verify and
 ; COPY.
@@ -52,7 +52,7 @@
  (name test_shape)
  (package rowtype)
  (modules test_shape)
- (libraries rowtype alcotest qcheck-core qcheck-alcotest))
+ (libraries rowtype ptime alcotest qcheck-core qcheck-alcotest))
 
 ; The migration files' pieces, which need no database.
 

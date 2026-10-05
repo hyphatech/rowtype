@@ -8,9 +8,9 @@ type _ scalar =
   | Text : string scalar
   | Bytes : string scalar
   | Bool : bool scalar
-  (* An instant, as epoch microseconds on this side, and whatever the
-     database keeps one as on the other. *)
-  | Instant : int scalar
+  (* An instant, as Ptime's on this side, so a unit is never a caller's to
+     get wrong, and whatever the database keeps one as on the other. *)
+  | Instant : Ptime.t scalar
   (* A uuid and a JSON document, each in its own text: types of their own
      so a backend reads each exactly and checks a column is one. *)
   | Uuid : string scalar

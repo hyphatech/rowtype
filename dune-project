@@ -22,6 +22,8 @@
  (depends
   (ocaml
    (>= 5.4))
+  (ptime
+   (>= 1.2.0))
   (alcotest
    (and
     :with-test
@@ -55,6 +57,8 @@
    (= :version))
   (postgres-eio
    (>= 0.1.0))
+  (ptime
+   (>= 1.2.0))
   (eio
    (>= 1.5))
   (logs

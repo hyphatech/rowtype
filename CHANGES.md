@@ -6,7 +6,7 @@ First release.
 
 - `rowtype`: a query's parameters and rows described once, binding and
   decoding both, with every failure a polymorphic variant; integers,
-  floats, text, bytes, bools, instants to the microsecond, uuids, JSON,
+  floats, text, bytes, bools, instants as `Ptime.t` to the microsecond, uuids, JSON,
   options, arrays and your own types; `fold` over a result without
   holding it.
 - `rowtype-postgres`: the Postgres backend over postgres-eio, with a pool,

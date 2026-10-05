@@ -91,7 +91,7 @@ arrive, so a result of any size is read in the memory of one row.
 | `S.text` | `text`, `varchar`, `char`, `name`, an enum's label | `string` |
 | `S.bytes` | `bytea` | `string` |
 | `S.bool` | `bool` | `bool` |
-| `S.instant` | `timestamptz` | `int`, microseconds since the epoch |
+| `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond |
 | `S.uuid` | `uuid` | `string`, lowercase |
 | `S.json` | `json`, `jsonb` | `string`, the document |
 

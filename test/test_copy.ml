@@ -55,7 +55,8 @@ let test_every_value_comes_back () =
        timestamptz, id uuid, doc json, tags text[], n int4)";
     ] (fun db ->
       let row =
-        S.t10 S.int S.float S.text S.bytes S.bool S.instant S.uuid S.json
+        S.t10 S.int S.float S.text S.bytes S.bool Db_target.instant_us S.uuid
+          S.json
           (S.array (S.opt S.text))
           (S.opt S.int)
       in
@@ -101,7 +102,7 @@ let test_every_value_comes_back () =
       Alcotest.(check (list int))
         "timestamptz"
         (List.mapi (fun k _ -> 1_700_000_000_123_456 + k) texts)
-        (read S.instant "at");
+        (read Db_target.instant_us "at");
       Alcotest.(check (list string))
         "uuid"
         (List.mapi

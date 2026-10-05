@@ -70,9 +70,10 @@ val bytes : string ty
 
 val bool : bool ty
 
-val instant : int ty
-(** An instant, as epoch microseconds: kept as the database keeps an instant,
-    and its backend says to what precision and over which years. *)
+val instant : Ptime.t ty
+(** An instant, as a [Ptime.t], so no caller converts a unit by hand: kept as
+    the database keeps an instant, and its backend says to what precision and
+    over which years. *)
 
 val uuid : string ty
 (** A [uuid], in its canonical text, lowercase: [0190c0fe-...]. *)
@@ -235,10 +236,9 @@ type _ scalar =
   | Text : string scalar
   | Bytes : string scalar  (** a string of any bytes, a [bytea] in Postgres *)
   | Bool : bool scalar
-  | Instant : int scalar
-      (** epoch microseconds, kept however the database keeps an instant -- a
-          [timestamptz] in Postgres -- so an instant means the same to every
-          backend *)
+  | Instant : Ptime.t scalar
+      (** an instant, kept however the database keeps one -- a [timestamptz] in
+          Postgres -- so an instant means the same to every backend *)
   | Uuid : string scalar  (** a uuid, in its canonical text *)
   | Json : string scalar  (** a JSON document, as its text *)
 

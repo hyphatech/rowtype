@@ -23,7 +23,7 @@ module Echo = struct
       (V
          (match s with
          | S.Int -> string_of_int v
-         | S.Instant -> string_of_int v
+         | S.Instant -> Ptime.to_rfc3339 ~frac_s:12 v
          | S.Float -> Printf.sprintf "%h" v
          | S.Text -> v
          | S.Bytes -> v
@@ -39,7 +39,10 @@ module Echo = struct
     | V v -> (
         match s with
         | S.Int -> some "an int" (int_of_string_opt v)
-        | S.Instant -> some "an instant" (int_of_string_opt v)
+        | S.Instant -> (
+            match Ptime.of_rfc3339 v with
+            | Ok (t, _, _) -> Ok t
+            | Error _ -> Error "an instant")
         | S.Float -> some "a float" (float_of_string_opt v)
         | S.Text -> Ok v
         | S.Bytes -> Ok v
@@ -78,6 +81,19 @@ type any_shape = Shape : 'a shape -> any_shape
 let scalar ty gen equal print name =
   Shape { ty; gen; equal; print; name; all_null = (fun _ -> false) }
 
+(* Any instant Ptime holds, to the picosecond: a day of its range and a
+   moment of the day. *)
+let instant =
+  let open QCheck.Gen in
+  let first, _ = Ptime.Span.to_d_ps (Ptime.to_span Ptime.min) in
+  let last, _ = Ptime.Span.to_d_ps (Ptime.to_span Ptime.max) in
+  map2
+    (fun d ps ->
+      Option.value ~default:Ptime.epoch
+        (Option.bind (Ptime.Span.of_d_ps (d, ps)) Ptime.of_span))
+    (int_range first last)
+    (map Int64.of_int (int_range 0 (86_400_000_000_000 - 1)))
+
 let scalars =
   let open QCheck.Gen in
   [
@@ -86,7 +102,7 @@ let scalars =
     scalar S.text string String.equal (Printf.sprintf "%S") "text";
     scalar S.bytes string String.equal (Printf.sprintf "%S") "bytes";
     scalar S.bool bool Bool.equal string_of_bool "bool";
-    scalar S.instant int Int.equal string_of_int "instant";
+    scalar S.instant instant Ptime.equal (Ptime.to_rfc3339 ~frac_s:12) "instant";
     scalar S.uuid string String.equal (Printf.sprintf "%S") "uuid";
     scalar S.json string String.equal (Printf.sprintf "%S") "json";
   ]

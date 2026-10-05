@@ -3,4 +3,4 @@
 (library
  (name rowtype_postgres)
  (public_name rowtype-postgres)
- (libraries rowtype postgres-eio eio logs mtime))
+ (libraries rowtype postgres-eio ptime eio logs mtime))

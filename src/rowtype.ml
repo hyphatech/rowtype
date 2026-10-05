@@ -19,7 +19,7 @@ type 'a scalar = 'a Shape.scalar =
   | Text : string scalar
   | Bytes : string scalar
   | Bool : bool scalar
-  | Instant : int scalar
+  | Instant : Ptime.t scalar
   | Uuid : string scalar
   | Json : string scalar
 

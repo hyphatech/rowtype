@@ -57,6 +57,26 @@ let db_error = function
            (Pg.Server_error.sqlstate e))
   | e -> `Db (Pg.error_to_string e)
 
+(* The driver keeps an instant as epoch microseconds and Ptime as days and
+   picoseconds into the day. Below the microsecond is dropped, rounding
+   towards the past, since a [timestamptz] cannot hold it. *)
+let us_per_day = 86_400_000_000
+let ps_per_us = 1_000_000L
+
+let us_of_ptime t =
+  let d, ps = Ptime.Span.to_d_ps (Ptime.to_span t) in
+  (d * us_per_day) + Int64.to_int (Int64.div ps ps_per_us)
+
+let ptime_of_us us =
+  let d =
+    if us < 0 && us mod us_per_day <> 0 then (us / us_per_day) - 1
+    else us / us_per_day
+  in
+  let us_into_day = us - (d * us_per_day) in
+  Option.bind
+    (Ptime.Span.of_d_ps (d, Int64.mul (Int64.of_int us_into_day) ps_per_us))
+    Ptime.of_span
+
 module Backend = struct
   type nonrec conn = conn
   type param = string option
@@ -76,7 +96,7 @@ module Backend = struct
       | S.Text -> v
       | S.Bytes -> Pg.Text.bytes v
       | S.Bool -> Pg.Text.bool v
-      | S.Instant -> Pg.Text.timestamptz v
+      | S.Instant -> Pg.Text.timestamptz (us_of_ptime v)
       | S.Uuid -> v
       | S.Json -> v)
 
@@ -101,7 +121,11 @@ module Backend = struct
     | S.Text -> as_ "TEXT" (Pg.Value.text column raw)
     | S.Bytes -> as_ "BYTEA" (Pg.Value.bytes column raw)
     | S.Bool -> as_ "BOOL" (Pg.Value.bool column raw)
-    | S.Instant -> as_ "TIMESTAMPTZ" (Pg.Value.timestamptz column raw)
+    | S.Instant -> (
+        let* us = as_ "TIMESTAMPTZ" (Pg.Value.timestamptz column raw) in
+        match ptime_of_us us with
+        | Some t -> Ok t
+        | None -> Error "expected TIMESTAMPTZ, got one outside years 0 to 9999")
     | S.Uuid -> as_ "UUID" (Pg.Value.uuid column raw)
     | S.Json -> as_ "JSON" (Pg.Value.json column raw)
 
