@@ -13,6 +13,7 @@ depends: [
   "dune" {>= "3.18"}
   "ocaml" {>= "5.4"}
   "ptime" {>= "1.2.0"}
+  "uuidm" {>= "0.9.10"}
   "alcotest" {with-test & >= "1.9.1"}
   "qcheck-core" {with-test & >= "0.91"}
   "qcheck-alcotest" {with-test & >= "0.91"}

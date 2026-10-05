@@ -75,8 +75,8 @@ val instant : Ptime.t ty
     the database keeps an instant, and its backend says to what precision and
     over which years. *)
 
-val uuid : string ty
-(** A [uuid], in its canonical text, lowercase: [0190c0fe-...]. *)
+val uuid : Uuidm.t ty
+(** A [uuid], as a [Uuidm.t]. *)
 
 val json : string ty
 (** A [json] or [jsonb] document, as its text; parsing it is the caller's. *)
@@ -239,7 +239,7 @@ type _ scalar =
   | Instant : Ptime.t scalar
       (** an instant, kept however the database keeps one -- a [timestamptz] in
           Postgres -- so an instant means the same to every backend *)
-  | Uuid : string scalar  (** a uuid, in its canonical text *)
+  | Uuid : Uuidm.t scalar  (** a uuid *)
   | Json : string scalar  (** a JSON document, as its text *)
 
 (** A database, as {!Make} needs it. *)

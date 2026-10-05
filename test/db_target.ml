@@ -113,3 +113,11 @@ let instant_us =
       with
       | Some t -> t
       | None -> Alcotest.failf "%d microseconds is no instant" us)
+
+(* The cases write a uuid as its text; this is the uuid in that form, read
+   back lowercase as Uuidm prints it. *)
+let uuid_text =
+  Rowtype.conv Rowtype.uuid ~of_:Uuidm.to_string ~to_:(fun s ->
+      match Uuidm.of_string s with
+      | Some u -> u
+      | None -> Alcotest.failf "%S is no uuid" s)

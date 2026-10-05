@@ -11,9 +11,9 @@ type _ scalar =
   (* An instant, as Ptime's on this side, so a unit is never a caller's to
      get wrong, and whatever the database keeps one as on the other. *)
   | Instant : Ptime.t scalar
-  (* A uuid and a JSON document, each in its own text: types of their own
-     so a backend reads each exactly and checks a column is one. *)
-  | Uuid : string scalar
+  (* A uuid as Uuidm's, and a JSON document in its own text: types of their
+     own so a backend reads each exactly and checks a column is one. *)
+  | Uuid : Uuidm.t scalar
   | Json : string scalar
 
 type _ ty =

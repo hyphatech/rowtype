@@ -147,7 +147,7 @@ let test_instants () =
         (reads db S.instant "select 'infinity'::timestamptz"))
 
 let test_uuids () =
-  round_trips ~column:"uuid" S.uuid Alcotest.string
+  round_trips ~column:"uuid" Db_target.uuid_text Alcotest.string
     [
       "00000000-0000-0000-0000-000000000000";
       "0190c0fe-7a1b-7c3d-8e4f-a0b1c2d3e4f5";
@@ -156,7 +156,8 @@ let test_uuids () =
       Alcotest.(check string)
         (format ^ ": written in capitals, read in lower case")
         "ffffffff-ffff-ffff-ffff-ffffffffffff"
-        (back db ~column:"uuid" S.uuid "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"))
+        (back db ~column:"uuid" Db_target.uuid_text
+           "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"))
 
 let test_json () =
   let doc = {|{"a": [1, 2.5, null], "b": "Ω", "c": {"d": true}}|} in

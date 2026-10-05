@@ -92,7 +92,7 @@ arrive, so a result of any size is read in the memory of one row.
 | `S.bytes` | `bytea` | `string` |
 | `S.bool` | `bool` | `bool` |
 | `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond |
-| `S.uuid` | `uuid` | `string`, lowercase |
+| `S.uuid` | `uuid` | `Uuidm.t` |
 | `S.json` | `json`, `jsonb` | `string`, the document |
 
 `S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map

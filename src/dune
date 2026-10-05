@@ -1,8 +1,8 @@
 ; Shapes and the backend signature: one value describes a query once, for
-; any SQL database. Links no database library, and nothing but ptime, whose
-; type an instant is.
+; any SQL database. Links no database library, and nothing but ptime and
+; uuidm, whose types an instant and a uuid are.
 
 (library
  (name rowtype)
  (public_name rowtype)
- (libraries ptime))
+ (libraries ptime uuidm))

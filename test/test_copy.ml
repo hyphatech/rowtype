@@ -55,8 +55,8 @@ let test_every_value_comes_back () =
        timestamptz, id uuid, doc json, tags text[], n int4)";
     ] (fun db ->
       let row =
-        S.t10 S.int S.float S.text S.bytes S.bool Db_target.instant_us S.uuid
-          S.json
+        S.t10 S.int S.float S.text S.bytes S.bool Db_target.instant_us
+          Db_target.uuid_text S.json
           (S.array (S.opt S.text))
           (S.opt S.int)
       in
@@ -108,7 +108,7 @@ let test_every_value_comes_back () =
         (List.mapi
            (fun k _ -> Printf.sprintf "0190c0fe-0000-7000-8000-%012d" k)
            texts)
-        (read S.uuid "id");
+        (read Db_target.uuid_text "id");
       Alcotest.(check (list string))
         "json"
         (List.mapi (fun k _ -> Printf.sprintf {|{"k": %d}|} k) texts)
@@ -237,13 +237,13 @@ let test_a_load_rolls_back_with_its_transaction () =
 (* A value the database refuses is worded from its code, as a statement's
    is: COPY's own words quote the line. *)
 let test_no_value_in_a_failure () =
-  on_db [ "create table s (id uuid)" ] (fun db ->
+  on_db [ "create table s (n int4)" ] (fun db ->
       let secret = "secret-7f3a91" in
       match
-        Pg.copy_in db ~table:"s" ~columns:[ "id" ] S.uuid
+        Pg.copy_in db ~table:"s" ~columns:[ "n" ] S.text
           (List.to_seq [ secret ])
       with
-      | Ok _ -> Alcotest.fail "a value that is no uuid was written"
+      | Ok _ -> Alcotest.fail "a value that is no integer was written"
       | Error e ->
           let m = S.error_to_string e in
           let n = String.length secret in

@@ -624,10 +624,12 @@ let test_uuid_and_json_round_trip () =
       let id = "0190c0fe-7a1b-7c3d-8e4f-a0b1c2d3e4f5"
       and doc = {|{"b": [1, 2], "a": "x"}|} in
       let insert =
-        S.exec ~params:S.(t3 uuid json json) "insert into d values ($1, $2, $3)"
+        S.exec
+          ~params:S.(t3 Db_target.uuid_text json json)
+          "insert into d values ($1, $2, $3)"
       and select =
         S.find ~params:S.unit
-          ~row:S.(t3 uuid json json)
+          ~row:S.(t3 Db_target.uuid_text json json)
           "select id, doc, data from d"
       in
       ok (Pg.run db insert (String.uppercase_ascii id, doc, doc));

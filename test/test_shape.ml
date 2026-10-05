@@ -27,7 +27,7 @@ module Echo = struct
          | S.Float -> Printf.sprintf "%h" v
          | S.Text -> v
          | S.Bytes -> v
-         | S.Uuid -> v
+         | S.Uuid -> Uuidm.to_string v
          | S.Json -> v
          | S.Bool -> string_of_bool v))
 
@@ -46,7 +46,10 @@ module Echo = struct
         | S.Float -> some "a float" (float_of_string_opt v)
         | S.Text -> Ok v
         | S.Bytes -> Ok v
-        | S.Uuid -> Ok v
+        | S.Uuid -> (
+            match Uuidm.of_string v with
+            | Some u -> Ok u
+            | None -> Error "a uuid")
         | S.Json -> Ok v
         | S.Bool -> some "a bool" (bool_of_string_opt v))
 
@@ -94,6 +97,12 @@ let instant =
     (int_range first last)
     (map Int64.of_int (int_range 0 (86_400_000_000_000 - 1)))
 
+(* Any uuid: sixteen bytes, whatever their version. *)
+let uuid =
+  QCheck.Gen.map
+    (fun b -> Option.value ~default:Uuidm.nil (Uuidm.of_binary_string b))
+    (QCheck.Gen.string_size ~gen:QCheck.Gen.char (QCheck.Gen.return 16))
+
 let scalars =
   let open QCheck.Gen in
   [
@@ -103,7 +112,7 @@ let scalars =
     scalar S.bytes string String.equal (Printf.sprintf "%S") "bytes";
     scalar S.bool bool Bool.equal string_of_bool "bool";
     scalar S.instant instant Ptime.equal (Ptime.to_rfc3339 ~frac_s:12) "instant";
-    scalar S.uuid string String.equal (Printf.sprintf "%S") "uuid";
+    scalar S.uuid uuid Uuidm.equal Uuidm.to_string "uuid";
     scalar S.json string String.equal (Printf.sprintf "%S") "json";
   ]
 

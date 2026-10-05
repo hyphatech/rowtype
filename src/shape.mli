@@ -17,7 +17,7 @@ type _ scalar =
   | Bytes : string scalar
   | Bool : bool scalar
   | Instant : Ptime.t scalar
-  | Uuid : string scalar
+  | Uuid : Uuidm.t scalar
   | Json : string scalar
 
 type _ ty =
@@ -36,7 +36,7 @@ val text : string ty
 val bytes : string ty
 val bool : bool ty
 val instant : Ptime.t ty
-val uuid : string ty
+val uuid : Uuidm.t ty
 val json : string ty
 val opt : 'a ty -> 'a option ty
 val array : 'a ty -> 'a list ty
