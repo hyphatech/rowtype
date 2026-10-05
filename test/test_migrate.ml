@@ -118,7 +118,12 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
       let st = ok_s (Rowtype_migrate.status db [ second ]) in
       Alcotest.(check (list int))
         "a version this list does not know" [ 20260101000000 ]
-        (numbers st.unknown))
+        (numbers st.unknown);
+      Alcotest.(check (option int))
+        "and run refuses it" (Some 20260101000000)
+        (match Rowtype_migrate.run db [ second ] with
+        | Error (`Unknown v) -> Some (number v)
+        | Ok () | Error _ -> None))
 
 (* A migration is known by its text: one edited after it ran is refused,
    one merged after a later one ran is refused, and a database migrated
@@ -573,8 +578,8 @@ let test_a_cancelled_dump_leaves_nothing () =
 
 (* A squash's baseline stands for the history it replaced: a database made
    from it and what came after holds the schema and the rows the whole
-   history makes, and a database migrated before the squash takes the new
-   list as its own. *)
+   history makes, a database migrated before the squash takes the new list
+   as its own, and a baseline that cannot be proved is not answered. *)
 let test_a_squash_stands_for_its_history () =
   match pg_dump with
   | None ->
@@ -666,7 +671,25 @@ let test_a_squash_stands_for_its_history () =
               | Ok () -> ()
               | Error m ->
                   Alcotest.failf "a database from before was refused: %s"
-                    (words m)))
+                    (words m)));
+      (* A migration after the baseline whose rows differ on every run makes
+         two databases that cannot dump the same: nothing is squashed. *)
+      Db_target.with_postgres (fun target ->
+          match
+            Rowtype_migrate.squash ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+              ~mono_clock:(Db_target.mono ()) ~pg_dump ~restrict_key:"rowtype"
+              ~through:(version 20260101000000)
+              ~migrations:
+                [
+                  m 20260101000000 "a" "create table a (n float8)";
+                  m 20260102000000 "chance" "insert into a select random()";
+                ]
+              target
+          with
+          | Error `Unproved -> ()
+          | Ok _ ->
+              Alcotest.fail "a baseline that is not the history was proved"
+          | Error e -> Alcotest.failf "not unproved: %s" (words e))
 
 let () =
   Db_target.required ~suite:"rowtype-migrate";
