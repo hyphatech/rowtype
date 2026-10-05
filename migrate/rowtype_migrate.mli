@@ -144,8 +144,7 @@ val with_connection :
     URL says [connect_timeout], and nothing after that, since an administrator's
     statement runs as long as it takes; notices off, since
     [create table if not exists] is one on every run. A database the server does
-    not have is said so, naming [rowtype-migrate create]; any other failure to
-    connect is the driver's. *)
+    not have is [`No_database]; any other failure to connect is the driver's. *)
 
 val create :
   sw:Eio.Switch.t ->

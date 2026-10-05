@@ -112,7 +112,10 @@ let parse path =
   let base = Filename.basename path in
   let malformed =
     Error
-      (`Files (base ^ ": a migration is <14-digit UTC timestamp>_<name>.sql"))
+      (`Files
+         (Printf.sprintf
+            "%s: a migration is <%d-digit UTC timestamp>_<name>.sql" base
+            version_digits))
   in
   let digit c = c >= '0' && c <= '9' in
   match Filename.chop_suffix_opt ~suffix:".sql" base with
