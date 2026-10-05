@@ -85,9 +85,9 @@ val revive : conn -> unit
     place, with its parameters. A no-op on an open one; one that cannot be made
     again stays closed, and its next statement says so. *)
 
-val timeout : conn -> float option
+val timeout_s : conn -> float option
 
-val set_timeout : conn -> float option -> unit
+val set_timeout_s : conn -> float option -> unit
 (** The bound on every read and write, [None] for none: lifted around work that
     runs longer, a migration. *)
 

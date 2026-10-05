@@ -5,7 +5,20 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
-let ok_s = function Ok v -> v | Error m -> Alcotest.failf "unexpected: %s" m
+let words = Rowtype_migrate.error_to_string
+
+let ok_s = function
+  | Ok v -> v
+  | Error e -> Alcotest.failf "unexpected: %s" (words e)
+
+(* A version from its fourteen digits, and back. *)
+let version n =
+  match Rowtype_migrate.version_of_int n with
+  | Some v -> v
+  | None -> Alcotest.failf "%d is not a version" n
+
+let number (v : Rowtype_migrate.version) = (v :> int)
+let numbers = List.map number
 
 (* Each case gets a database of its own. See [db_target.ml]. *)
 let on_db setup f =
@@ -43,7 +56,7 @@ let contains haystack needle =
 let test_a_migration_is_unbounded () =
   Db_target.with_postgres (fun target ->
       let db = connect ~statement_timeout_ms:100 target in
-      Pg.set_timeout db (Some 0.2);
+      Pg.set_timeout_s db (Some 0.2);
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -51,7 +64,7 @@ let test_a_migration_is_unbounded () =
              Rowtype_migrate.run db
                [
                  {
-                   Rowtype_migrate.version = 20260101000000;
+                   Rowtype_migrate.version = version 20260101000000;
                    name = "slow";
                    kind = Transaction;
                    sql = "select pg_sleep(0.3); create table slow (n int)";
@@ -59,10 +72,11 @@ let test_a_migration_is_unbounded () =
                ]
            with
           | Ok () -> ()
-          | Error m -> Alcotest.failf "the migration was cut short: %s" m);
+          | Error m ->
+              Alcotest.failf "the migration was cut short: %s" (words m));
           Alcotest.(check (option (float 0.)))
-            "the read bound back" (Some 0.2) (Pg.timeout db);
-          Pg.set_timeout db None;
+            "the read bound back" (Some 0.2) (Pg.timeout_s db);
+          Pg.set_timeout_s db None;
           match Pg.exec_raw db "select pg_sleep(1)" with
           | Error _ -> ()
           | Ok () -> Alcotest.fail "the request bound did not come back"))
@@ -71,8 +85,13 @@ let test_a_migration_is_unbounded () =
    as the table that records it, so a status is safe against production. *)
 let test_a_status_says_what_is_pending_and_writes_nothing () =
   on_db [] (fun db ->
-      let m version name =
-        { Rowtype_migrate.version; name; kind = Transaction; sql = "select 1" }
+      let m v name =
+        {
+          Rowtype_migrate.version = version v;
+          name;
+          kind = Transaction;
+          sql = "select 1";
+        }
       in
       let first = m 20260101000000 "first"
       and second = m 20260102000000 "second" in
@@ -95,35 +114,39 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
       Alcotest.(check (list (pair int string)))
         "one applied"
         [ (20260101000000, "first") ]
-        st.applied;
+        (List.map (fun (v, n) -> (number v, n)) st.applied);
       let st = ok_s (Rowtype_migrate.status db [ second ]) in
       Alcotest.(check (list int))
-        "a version this list does not know" [ 20260101000000 ] st.unknown)
+        "a version this list does not know" [ 20260101000000 ]
+        (numbers st.unknown))
 
 (* A migration is known by its text: one edited after it ran is refused,
    one merged after a later one ran is refused, and a database migrated
    before the digests were kept has them recorded on its next run. *)
 let test_a_migration_is_held_to_what_ran () =
   on_db [] (fun db ->
-      let m version name sql =
-        { Rowtype_migrate.version; name; kind = Transaction; sql }
+      let m v name sql =
+        { Rowtype_migrate.version = version v; name; kind = Transaction; sql }
       in
       let first = m 20260101000000 "first" "create table a (n int)"
       and third = m 20260103000000 "third" "create table c (n int)" in
       ignore (ok_s (Rowtype_migrate.run db [ first; third ]));
-      let refused ms sub =
-        match Rowtype_migrate.run db ms with
-        | Error e -> contains e sub
-        | Ok () -> false
-      in
-      Alcotest.(check bool)
-        "an edited one" true
-        (refused
-           [ m 20260101000000 "first" "create table a (n bigint)"; third ]
-           "edited");
-      Alcotest.(check bool)
-        "a late one" true
-        (refused [ first; m 20260102000000 "second" "select 1"; third ] "older");
+      Alcotest.(check (option string))
+        "an edited one" (Some "first")
+        (match
+           Rowtype_migrate.run db
+             [ m 20260101000000 "first" "create table a (n bigint)"; third ]
+         with
+        | Error (`Edited (m : Rowtype_migrate.migration)) -> Some m.name
+        | Ok () | Error _ -> None);
+      Alcotest.(check (option string))
+        "a late one" (Some "second")
+        (match
+           Rowtype_migrate.run db
+             [ first; m 20260102000000 "second" "select 1"; third ]
+         with
+        | Error (`Late (m : Rowtype_migrate.migration)) -> Some m.name
+        | Ok () | Error _ -> None);
       let st =
         ok_s
           (Rowtype_migrate.status db
@@ -136,7 +159,7 @@ let test_a_migration_is_held_to_what_ran () =
       Alcotest.(check (pair (list int) (list int)))
         "and a status says both"
         ([ 20260101000000 ], [ 20260102000000 ])
-        (st.edited, st.late);
+        (numbers st.edited, numbers st.late);
       ok (Pg.exec_raw db "update schema_migrations set checksum = null");
       ignore (ok_s (Rowtype_migrate.run db [ first; third ]));
       Alcotest.(check (list (option string)))
@@ -147,7 +170,7 @@ let test_a_migration_is_held_to_what_ran () =
               (S.list ~params:S.int
                  ~row:S.(opt text)
                  "select checksum from schema_migrations where version = $1")
-              first.version)))
+              (number first.version))))
 
 (* A migration that fails leaves the database at the version before it:
    what it ran and its row rolled back, what follows it not run, said by
@@ -160,8 +183,13 @@ let test_a_failed_migration_stops_where_it_failed () =
           Pg.close db;
           Pg.close other)
         (fun () ->
-          let m version name sql =
-            { Rowtype_migrate.version; name; kind = Transaction; sql }
+          let m v name sql =
+            {
+              Rowtype_migrate.version = version v;
+              name;
+              kind = Transaction;
+              sql;
+            }
           in
           let first = m 20260101000000 "first" "create table a (n int)"
           and broken =
@@ -169,15 +197,14 @@ let test_a_failed_migration_stops_where_it_failed () =
           and third = m 20260103000000 "third" "create table c (n int)" in
           (match Rowtype_migrate.run db [ first; broken; third ] with
           | Ok () -> Alcotest.fail "a broken migration was applied"
-          | Error e ->
-              Alcotest.(check bool)
-                ("named: " ^ e) true
-                (contains e "migration 20260102000000_broken failed"));
+          | Error (`Failed ((m : Rowtype_migrate.migration), _)) ->
+              Alcotest.(check string) "named" "broken" m.name
+          | Error e -> Alcotest.failf "not the migration's: %s" (words e));
           let st = ok_s (Rowtype_migrate.status db [ first; broken; third ]) in
           Alcotest.(check (list (pair int string)))
             "the one before it applied"
             [ (20260101000000, "first") ]
-            st.applied;
+            (List.map (fun (v, n) -> (number v, n)) st.applied);
           Alcotest.(check (list (option bool)))
             "nothing of it or after it" [ Some false; Some false ]
             (List.map
@@ -215,7 +242,7 @@ let test_a_lost_connection_names_its_migration () =
         Rowtype_migrate.run db
           [
             {
-              Rowtype_migrate.version = 20260101000000;
+              Rowtype_migrate.version = version 20260101000000;
               name = "lost";
               kind = Transaction;
               sql = "select pg_terminate_backend(pg_backend_pid())";
@@ -223,10 +250,9 @@ let test_a_lost_connection_names_its_migration () =
           ]
       with
       | Ok () -> Alcotest.fail "a lost connection migrated"
-      | Error e ->
-          Alcotest.(check bool)
-            ("named: " ^ e) true
-            (contains e "migration 20260101000000_lost failed"))
+      | Error (`Failed ((m : Rowtype_migrate.migration), _)) ->
+          Alcotest.(check string) "named" "lost" m.name
+      | Error e -> Alcotest.failf "not the migration's: %s" (words e))
 
 (* What Postgres refuses inside a transaction runs on its own, and is
    recorded once it has; a run cut off before the row runs the file again,
@@ -235,14 +261,14 @@ let test_a_migration_can_run_outside_a_transaction () =
   on_db [] (fun db ->
       let table =
         {
-          Rowtype_migrate.version = 20260101000000;
+          Rowtype_migrate.version = version 20260101000000;
           name = "table";
           kind = Transaction;
           sql = "create table t (n int)";
         }
       and index kind =
         {
-          Rowtype_migrate.version = 20260102000000;
+          Rowtype_migrate.version = version 20260102000000;
           name = "index";
           kind;
           sql = "create index concurrently if not exists t_n on t (n)";
@@ -277,7 +303,9 @@ let test_a_migration_can_run_outside_a_transaction () =
    it runs it -- in the session a pg_dump leaves, which is put back for what
    follows -- and a database behind it is refused, by all three readers. *)
 let test_a_baseline_stands_for_what_it_replaced () =
-  let m version name kind sql = { Rowtype_migrate.version; name; kind; sql } in
+  let m v name kind sql =
+    { Rowtype_migrate.version = version v; name; kind; sql }
+  in
   let a = m 20260101000000 "a" Transaction "create table a (n int)"
   and b = m 20260102000000 "b" Transaction "insert into a values (1)"
   and c = m 20260103000000 "c" Transaction "create table c (n int)" in
@@ -295,9 +323,11 @@ let test_a_baseline_stands_for_what_it_replaced () =
       let st = ok_s (Rowtype_migrate.status db squashed) in
       Alcotest.(check (pair (list int) (list int)))
         "what it replaced is history, not unknown" ([], [])
-        (st.unknown, st.edited);
+        (numbers st.unknown, numbers st.edited);
       Alcotest.(check int) "and the rest applied" 3 (List.length st.applied);
-      Alcotest.(check (option int)) "and nothing behind" None st.behind);
+      Alcotest.(check (option int))
+        "and nothing behind" None
+        (Option.map number st.behind));
   on_db [] (fun db ->
       ok_s (Rowtype_migrate.run db squashed);
       Alcotest.(check int)
@@ -316,15 +346,14 @@ let test_a_baseline_stands_for_what_it_replaced () =
               ())));
   on_db [] (fun db ->
       ok_s (Rowtype_migrate.run db [ a ]);
-      let says e = contains e "squash" in
       Alcotest.(check bool)
         "behind it, run refuses" true
         (match Rowtype_migrate.run db squashed with
-        | Error e -> says e
-        | Ok () -> false);
+        | Error (`Behind _) -> true
+        | Ok () | Error _ -> false);
       Alcotest.(check (option int))
         "and a status says" (Some 20260102000000)
-        (ok_s (Rowtype_migrate.status db squashed)).behind)
+        (Option.map number (ok_s (Rowtype_migrate.status db squashed)).behind))
 
 (* A record may be kept in a table of its own, in a schema of its own, so
    two applications can share a database; a name that would have to be
@@ -333,7 +362,7 @@ let test_a_record_can_have_a_table_of_its_own () =
   on_db [ "create schema app" ] (fun db ->
       let one =
         {
-          Rowtype_migrate.version = 20260101000000;
+          Rowtype_migrate.version = version 20260101000000;
           name = "one";
           kind = Transaction;
           sql = "create table app.one (n int)";
@@ -355,9 +384,12 @@ let test_a_record_can_have_a_table_of_its_own () =
       in
       Alcotest.(check int) "read back from it" 1 (List.length st.applied);
       Alcotest.(check bool)
-        "a name that is not a table's" false
-        (Result.is_ok
-           (Rowtype_migrate.run ~table:"m; drop table app.one" db [ one ])))
+        "a name that is not a table's" true
+        (match
+           Rowtype_migrate.run ~table:"m; drop table app.one" db [ one ]
+         with
+        | Error (`Invalid _) -> true
+        | Ok () | Error _ -> false))
 
 let on_server f url =
   f ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
@@ -375,11 +407,9 @@ let test_a_database_is_made_and_dropped () =
   in
   (match connects () with
   | Ok () -> Alcotest.fail "a database there before it was made"
-  | Error m ->
-      Alcotest.(check bool)
-        ("names what makes it: " ^ m)
-        true
-        (contains m "rowtype-migrate create"));
+  | Error (`No_database missing) ->
+      Alcotest.(check string) "names it" name missing
+  | Error e -> Alcotest.failf "not said missing: %s" (words e));
   ok_s (on_server Rowtype_migrate.create url);
   Fun.protect
     ~finally:(fun () -> ignore (on_server Rowtype_migrate.drop url))
@@ -402,8 +432,13 @@ let test_two_migrators_take_turns () =
           Pg.close a;
           Pg.close b)
         (fun () ->
-          let m version name sql =
-            { Rowtype_migrate.version; name; kind = Transaction; sql }
+          let m v name sql =
+            {
+              Rowtype_migrate.version = version v;
+              name;
+              kind = Transaction;
+              sql;
+            }
           in
           let migrations =
             [
@@ -418,7 +453,8 @@ let test_two_migrators_take_turns () =
               (fun () -> Rowtype_migrate.run b migrations)
           in
           List.iter
-            (function Ok () -> () | Error m -> Alcotest.failf "refused: %s" m)
+            (function
+              | Ok () -> () | Error m -> Alcotest.failf "refused: %s" (words m))
             [ first; second ];
           Alcotest.(check int)
             "each migration ran once" 1
@@ -444,7 +480,7 @@ let test_a_dump_is_what_the_migrations_make () =
       let migrations =
         [
           {
-            Rowtype_migrate.version = 20260101000000;
+            Rowtype_migrate.version = version 20260101000000;
             name = "a";
             kind = Transaction;
             sql = "create table made (n int)";
@@ -489,11 +525,12 @@ let test_a_failed_dump_names_no_password () =
           ~restrict_key:"rowtype" ~migrations:[] target
       with
       | Ok _ -> Alcotest.fail "a pg_dump that failed made a dump"
-      | Error m ->
+      | Error (`Dump m) ->
           Alcotest.(check bool)
             ("the program, and no password: " ^ m)
             true
-            (contains m "false" && not (contains m password)))
+            (contains m "false" && not (contains m password))
+      | Error e -> Alcotest.failf "not the dump's: %s" (words e))
 
 (* A dump cancelled while it migrates drops its scratch database, and its
    fiber ends cancelled, as itself. *)
@@ -502,7 +539,7 @@ let test_a_cancelled_dump_leaves_nothing () =
       let migrations =
         [
           {
-            Rowtype_migrate.version = 20260101000000;
+            Rowtype_migrate.version = version 20260101000000;
             name = "slow";
             kind = Transaction;
             sql = "select pg_sleep(5)";
@@ -516,7 +553,7 @@ let test_a_cancelled_dump_leaves_nothing () =
               (Rowtype_migrate.dump ~sw:(Db_target.sw ())
                  ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
                  ~pg_dump:"true" ~restrict_key:"rowtype" ~migrations target
-                : (string, string) result);
+                : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
             Eio.Time.Mono.sleep (Db_target.mono ()) 0.5;
@@ -545,8 +582,8 @@ let test_a_squash_stands_for_its_history () =
         "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
       Alcotest.skip ()
   | Some pg_dump ->
-      let m version name sql =
-        { Rowtype_migrate.version; name; kind = Transaction; sql }
+      let m v name sql =
+        { Rowtype_migrate.version = version v; name; kind = Transaction; sql }
       in
       let history =
         [
@@ -560,20 +597,20 @@ let test_a_squash_stands_for_its_history () =
             match
               Rowtype_migrate.squash ~sw:(Db_target.sw ())
                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ()) ~pg_dump
-                ~restrict_key:"rowtype" ~through:20260102000000
+                ~restrict_key:"rowtype" ~through:(version 20260102000000)
                 ~migrations:history target
             with
             | Ok baseline -> baseline
-            | Error m -> Alcotest.failf "the squash was refused: %s" m
+            | Error m -> Alcotest.failf "the squash was refused: %s" (words m)
           in
           Alcotest.(check int)
             "its version is the last it replaced" 20260102000000
-            baseline.version;
+            (number baseline.version);
           let squashed =
             baseline
             :: List.filter
                  (fun (m : Rowtype_migrate.migration) ->
-                   m.version > 20260102000000)
+                   number m.version > 20260102000000)
                  history
           in
           let rows db =
@@ -591,7 +628,8 @@ let test_a_squash_stands_for_its_history () =
             (fun () ->
               (match Rowtype_migrate.run fresh squashed with
               | Ok () -> ()
-              | Error m -> Alcotest.failf "the squashed list was refused: %s" m);
+              | Error m ->
+                  Alcotest.failf "the squashed list was refused: %s" (words m));
               Alcotest.(check (list (pair int (option string))))
                 "the rows the history wrote, and its last column"
                 [ (1, None); (2, None) ]
@@ -604,28 +642,31 @@ let test_a_squash_stands_for_its_history () =
             (fun () ->
               (match Rowtype_migrate.run before history with
               | Ok () -> ()
-              | Error m -> Alcotest.failf "the history was refused: %s" m);
+              | Error m ->
+                  Alcotest.failf "the history was refused: %s" (words m));
               let baseline =
                 match
                   Rowtype_migrate.squash ~sw:(Db_target.sw ())
                     ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                    ~pg_dump ~restrict_key:"rowtype" ~through:20260102000000
-                    ~migrations:history target
+                    ~pg_dump ~restrict_key:"rowtype"
+                    ~through:(version 20260102000000) ~migrations:history target
                 with
                 | Ok b -> b
-                | Error m -> Alcotest.failf "the squash was refused: %s" m
+                | Error m ->
+                    Alcotest.failf "the squash was refused: %s" (words m)
               in
               let squashed =
                 baseline
                 :: List.filter
                      (fun (m : Rowtype_migrate.migration) ->
-                       m.version > 20260102000000)
+                       number m.version > 20260102000000)
                      history
               in
               match Rowtype_migrate.run before squashed with
               | Ok () -> ()
               | Error m ->
-                  Alcotest.failf "a database from before was refused: %s" m))
+                  Alcotest.failf "a database from before was refused: %s"
+                    (words m)))
 
 let () =
   Db_target.required ~suite:"rowtype-migrate";

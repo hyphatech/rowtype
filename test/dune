@@ -60,7 +60,7 @@
  (name test_migrate_files)
  (package rowtype-migrate)
  (modules test_migrate_files)
- (libraries rowtype-migrate unix alcotest))
+ (libraries rowtype-migrate ptime unix alcotest))
 
 ; The house rules, read off the source.
 

@@ -2,13 +2,82 @@ module S = Rowtype
 module Pg = Rowtype_postgres
 
 type kind = Transaction | No_transaction | Baseline
-type migration = { version : int; name : string; kind : kind; sql : string }
+
+(* A version is a UTC timestamp to the second, [YYYYMMDDHHMMSS], so two
+   branches that each add a migration collide only if they did it in the same
+   second -- a merge somebody has to look at, which is why a version used
+   twice is refused rather than ordered. The interface keeps it private, so a
+   version a program makes has fourteen digits; one a database recorded is
+   whatever it recorded. *)
+type version = int
+
+let version_digits = 14
+
+(* The numbers of fourteen digits. *)
+let lowest_version = 10_000_000_000_000
+let highest_version = 99_999_999_999_999
+
+let version_of_int n =
+  if n >= lowest_version && n <= highest_version then Some n else None
+
+type migration = { version : version; name : string; kind : kind; sql : string }
+
+type error =
+  [ S.error
+  | `Files of string
+  | `Invalid of string
+  | `Behind of migration
+  | `Unknown of version
+  | `Edited of migration
+  | `Late of migration
+  | `Failed of migration * S.error
+  | `No_database of string
+  | `Dump of string
+  | `Unproved ]
+
+let error_to_string : [< error ] -> string = function
+  | `Files m | `Invalid m | `Dump m -> m
+  | `Behind b ->
+      Printf.sprintf
+        "the database's record stops before migration %d, the baseline that \
+         replaced every migration up to it: migrate it with a build from \
+         before the squash, then with this one"
+        b.version
+  | `Unknown v ->
+      Printf.sprintf
+        "the database has migration %d, which these files do not: it was \
+         migrated from a newer checkout, and applying these would run a \
+         history that is not its own"
+        v
+  | `Edited m ->
+      Printf.sprintf
+        "migration %d_%s was edited after it ran: its text is not what the \
+         database applied, and a schema that has run changes by the next \
+         migration, never by rewriting one"
+        m.version m.name
+  | `Late m ->
+      Printf.sprintf
+        "migration %d_%s is older than one this database has applied: it was \
+         merged after a later one ran, and would run out of the order it was \
+         written in; give it a version later than every applied one"
+        m.version m.name
+  | `Failed (m, e) ->
+      Printf.sprintf "migration %d_%s failed: %s" m.version m.name
+        (S.error_to_string e)
+  | `No_database name ->
+      Printf.sprintf
+        "there is no database %S on that server: make it with `rowtype-migrate \
+         create`"
+        name
+  | `Unproved ->
+      "the baseline and the migrations after it do not make the database the \
+       whole history makes, so nothing was squashed"
+  | (`Conflict _ | `Not_serializable _ | `Db _) as e -> S.error_to_string e
 
 let is_baseline m =
   match m.kind with Baseline -> true | Transaction | No_transaction -> false
 
 let ( let* ) = Result.bind
-let db r = Result.map_error S.error_to_string r
 
 (* ------------------------------------------------------------------ *)
 (* The files *)
@@ -34,20 +103,16 @@ let kind_of base sql =
     | "baseline" -> Ok Baseline
     | word ->
         Error
-          (Printf.sprintf
-             "%s: %S is not a directive: `no transaction` and `baseline` are"
-             base word)
-
-(* A version is a UTC timestamp to the second, [YYYYMMDDHHMMSS], so two
-   branches that each add a migration collide only if they did it in the same
-   second -- a merge somebody has to look at, which is why a version used
-   twice is refused rather than ordered. *)
-let version_digits = 14
+          (`Files
+             (Printf.sprintf
+                "%s: %S is not a directive: `no transaction` and `baseline` are"
+                base word))
 
 let parse path =
   let base = Filename.basename path in
   let malformed =
-    Error (base ^ ": a migration is <14-digit UTC timestamp>_<name>.sql")
+    Error
+      (`Files (base ^ ": a migration is <14-digit UTC timestamp>_<name>.sql"))
   in
   let digit c = c >= '0' && c <= '9' in
   match Filename.chop_suffix_opt ~suffix:".sql" base with
@@ -57,14 +122,14 @@ let parse path =
       | Some i when i = version_digits -> (
           let version = String.sub stem 0 i
           and name = String.sub stem (i + 1) (String.length stem - i - 1) in
-          match int_of_string_opt version with
+          match Option.bind (int_of_string_opt version) version_of_int with
           | Some v
             when String.for_all digit version && not (String.equal name "") -> (
               match In_channel.with_open_bin path In_channel.input_all with
               | sql ->
                   let* kind = kind_of base sql in
                   Ok { version = v; name; kind; sql }
-              | exception Sys_error m -> Error m)
+              | exception Sys_error m -> Error (`Files m))
           | Some _ | None -> malformed)
       | Some _ | None -> malformed)
 
@@ -77,15 +142,17 @@ let listed ms =
   | [ b ], oldest :: _ when oldest.version = b.version -> Ok ()
   | [ b ], _ ->
       Error
-        (Printf.sprintf
-           "migration %d_%s is a baseline and not the oldest: a baseline \
-            stands for every migration before it"
-           b.version b.name)
+        (`Files
+           (Printf.sprintf
+              "migration %d_%s is a baseline and not the oldest: a baseline \
+               stands for every migration before it"
+              b.version b.name))
   | _ :: b :: _, _ ->
       Error
-        (Printf.sprintf
-           "migration %d_%s is a second baseline: there is one, the oldest"
-           b.version b.name)
+        (`Files
+           (Printf.sprintf
+              "migration %d_%s is a second baseline: there is one, the oldest"
+              b.version b.name))
 
 let of_files paths =
   let* ms =
@@ -100,7 +167,8 @@ let of_files paths =
   let rec twice = function
     | a :: (b :: _ as rest) ->
         if a.version = b.version then
-          Error (Printf.sprintf "two migrations at version %d" a.version)
+          Error
+            (`Files (Printf.sprintf "two migrations at version %d" a.version))
         else twice rest
     | [ _ ] | [] -> Ok ()
   in
@@ -110,7 +178,7 @@ let of_files paths =
 
 let of_directory dir =
   match Sys.readdir dir with
-  | exception Sys_error m -> Error m
+  | exception Sys_error m -> Error (`Files m)
   | files ->
       Array.to_list files
       |> List.filter (fun f -> Filename.check_suffix f ".sql")
@@ -118,9 +186,10 @@ let of_directory dir =
       |> of_files
 
 let stamp now =
-  let t = Unix.gmtime now in
-  Printf.sprintf "%04d%02d%02d%02d%02d%02d" (t.tm_year + 1900) (t.tm_mon + 1)
-    t.tm_mday t.tm_hour t.tm_min t.tm_sec
+  let (year, month, day), ((hour, minute, second), _) =
+    Ptime.to_date_time now
+  in
+  Printf.sprintf "%04d%02d%02d%02d%02d%02d" year month day hour minute second
 
 let valid_name n =
   String.length n > 0
@@ -133,20 +202,21 @@ let valid_name n =
 let rec directory dir =
   if Sys.file_exists dir then
     if Sys.is_directory dir then Ok ()
-    else Error (dir ^ " is there, and is not a directory")
+    else Error (`Files (dir ^ " is there, and is not a directory"))
   else
     let* () = directory (Filename.dirname dir) in
     match Sys.mkdir dir 0o755 with
     | () -> Ok ()
-    | exception Sys_error m -> Error m
+    | exception Sys_error m -> Error (`Files m)
 
 let new_migration ~dir ~now name =
   if not (valid_name name) then
     Error
-      (Printf.sprintf
-         "%S is not a migration name: lower-case letters, digits and \
-          underscores"
-         name)
+      (`Invalid
+         (Printf.sprintf
+            "%S is not a migration name: lower-case letters, digits and \
+             underscores"
+            name))
   else
     let stamp = stamp now in
     let taken =
@@ -156,8 +226,10 @@ let new_migration ~dir ~now name =
     in
     if taken then
       Error
-        (Printf.sprintf
-           "a migration at %s already exists: wait a second and ask again" stamp)
+        (`Files
+           (Printf.sprintf
+              "a migration at %s already exists: wait a second and ask again"
+              stamp))
     else
       let* () = directory dir in
       let path = Filename.concat dir (stamp ^ "_" ^ name ^ ".sql") in
@@ -170,7 +242,7 @@ let new_migration ~dir ~now name =
               ))
       with
       | () -> Ok path
-      | exception Sys_error m -> Error m
+      | exception Sys_error m -> Error (`Files m)
 
 (* ------------------------------------------------------------------ *)
 (* The database's record *)
@@ -195,44 +267,40 @@ let table_name t =
   | ([ _ ] | [ _; _ ]) as parts when List.for_all identifier parts -> Ok t
   | _ ->
       Error
-        (Printf.sprintf
-           "%S is not a table's name: lower-case letters, digits and \
-            underscores, after a schema and a dot if it names one"
-           t)
+        (`Invalid
+           (Printf.sprintf
+              "%S is not a table's name: lower-case letters, digits and \
+               underscores, after a schema and a dot if it names one"
+              t))
 
 (* The table and its checksum column, which a database migrated before
    there was one gains here; its rows' sums are recorded on first sight. *)
 let applied ~table conn =
   let* () =
-    db
-      (Pg.exec_raw conn
-         (Printf.sprintf
-            {|create table if not exists %s (
-                version bigint primary key,
-                name text not null,
-                applied_at timestamptz not null default now());
-              alter table %s
-                add column if not exists checksum text|}
-            table table))
+    Pg.exec_raw conn
+      (Printf.sprintf
+         {|create table if not exists %s (
+             version bigint primary key,
+             name text not null,
+             applied_at timestamptz not null default now());
+           alter table %s
+             add column if not exists checksum text|}
+         table table)
   in
-  db
-    (Pg.run conn
-       (S.list ~params:S.unit
-          ~row:(S.t2 S.int (S.opt S.text))
-          (Printf.sprintf "select version, checksum from %s order by version"
-             table))
-       ())
+  Pg.run conn
+    (S.list ~params:S.unit
+       ~row:(S.t2 S.int (S.opt S.text))
+       (Printf.sprintf "select version, checksum from %s order by version" table))
+    ()
 
 let record ~table conn m =
-  db
-    (Pg.run conn
-       (S.exec ~params:(S.t3 S.int S.text S.text)
-          (Printf.sprintf
-             "insert into %s (version, name, checksum) values ($1, $2, $3)"
-             table))
-       (m.version, m.name, sum m))
+  Pg.run conn
+    (S.exec ~params:(S.t3 S.int S.text S.text)
+       (Printf.sprintf
+          "insert into %s (version, name, checksum) values ($1, $2, $3)" table))
+    (m.version, m.name, sum m)
 
-let failed m e = Printf.sprintf "migration %d_%s failed: %s" m.version m.name e
+let failed m = function Ok v -> Ok v | Error e -> Error (`Failed (m, e))
 
 (* One transaction per file, with the row that records it, so a failure
    leaves the database at exactly the version before it.
@@ -246,18 +314,18 @@ let apply ~table conn m =
      migration that moves the search path -- a baseline does -- would
      otherwise leave the record's table out of it. *)
   let in_transaction () =
-    let* () = db (Pg.exec_raw conn "begin") in
+    let* () = failed m (Pg.exec_raw conn "begin") in
     match
       let* () = record ~table conn m in
-      let* () = db (Pg.exec_raw conn m.sql) in
-      db (Pg.commit conn)
+      let* () = Pg.exec_raw conn m.sql in
+      Pg.commit conn
     with
     | Ok `Committed -> Ok ()
     | Ok `Rolled_back ->
-        Error (failed m "its transaction was aborted, and rolled back")
+        Error (`Failed (m, `Db "its transaction was aborted, and rolled back"))
     | Error e ->
         ignore (Pg.exec_raw conn "rollback" : (unit, S.error) result);
-        Error (failed m e)
+        Error (`Failed (m, e))
   in
   match m.kind with
   | Transaction -> in_transaction ()
@@ -267,17 +335,17 @@ let apply ~table conn m =
          back, so every migration after it would run in the dump's session.
          Put back, with the run's own unbounded statements. *)
       let* () = in_transaction () in
-      db (Pg.exec_raw conn "reset all; set statement_timeout = 0")
+      Pg.exec_raw conn "reset all; set statement_timeout = 0"
   | No_transaction ->
-      Result.map_error (failed m)
-        (let* () = db (Pg.exec_raw conn m.sql) in
+      failed m
+        (let* () = Pg.exec_raw conn m.sql in
          record ~table conn m)
 
 (* What a list and a database's record come to: the migrations to apply,
    in order, and the four ways the two can disagree. *)
 type reading = {
   to_apply : migration list;
-  unknown : int list;
+  unknown : version list;
   edited : migration list;
   late : migration list;
   unsummed : migration list;
@@ -342,38 +410,15 @@ let read migrations recorded =
     behind;
   }
 
-let edited_refusal m =
-  Printf.sprintf
-    "migration %d_%s was edited after it ran: its text is not what the \
-     database applied, and a schema that has run changes by the next \
-     migration, never by rewriting one"
-    m.version m.name
-
-let behind_refusal b =
-  Printf.sprintf
-    "the database's record stops before migration %d, the baseline that \
-     replaced every migration up to it: migrate it with a build from before \
-     the squash, then with this one"
-    b.version
-
+(* The first way a list and a record disagree, in the order a person would
+   untangle them: a database behind a squash, then one from a newer
+   checkout, then an edited file, then a late one. *)
 let refusal r =
   match (r.behind, r.unknown, r.edited, r.late) with
-  | Some b, _, _, _ -> Some (behind_refusal b)
-  | None, v :: _, _, _ ->
-      Some
-        (Printf.sprintf
-           "the database has migration %d, which these files do not: it was \
-            migrated from a newer checkout, and applying these would run a \
-            history that is not its own"
-           v)
-  | None, [], m :: _, _ -> Some (edited_refusal m)
-  | None, [], [], m :: _ ->
-      Some
-        (Printf.sprintf
-           "migration %d_%s is older than one this database has applied: it \
-            was merged after a later one ran, and would run out of the order \
-            it was written in; give it a version later than every applied one"
-           m.version m.name)
+  | Some b, _, _, _ -> Some (`Behind b)
+  | None, v :: _, _, _ -> Some (`Unknown v)
+  | None, [], m :: _, _ -> Some (`Edited m)
+  | None, [], [], m :: _ -> Some (`Late m)
   | None, [], [], [] -> None
 
 let pending ~table conn migrations =
@@ -381,18 +426,17 @@ let pending ~table conn migrations =
   let* recorded = applied ~table conn in
   let r = read migrations recorded in
   match refusal r with
-  | Some e -> Error e
+  | Some refused -> Error refused
   | None ->
       let* () =
         List.fold_left
           (fun acc m ->
             let* () = acc in
-            db
-              (Pg.run conn
-                 (S.exec ~params:(S.t2 S.text S.int)
-                    (Printf.sprintf
-                       "update %s set checksum = $1 where version = $2" table))
-                 (sum m, m.version)))
+            Pg.run conn
+              (S.exec ~params:(S.t2 S.text S.int)
+                 (Printf.sprintf
+                    "update %s set checksum = $1 where version = $2" table))
+              (sum m, m.version))
           (Ok ()) r.unsummed
       in
       List.fold_left
@@ -414,33 +458,30 @@ let default_lock = 7_265_756_171
    release's, which a lost connection has already made. *)
 let run ?(lock = default_lock) ?(table = default_table) conn migrations =
   let* table = table_name table in
-  let reads = Pg.timeout conn in
-  Pg.set_timeout conn None;
-  Fun.protect ~finally:(fun () -> Pg.set_timeout conn reads) @@ fun () ->
-  let* () = db (Pg.exec_raw conn "set statement_timeout = 0") in
+  let reads = Pg.timeout_s conn in
+  Pg.set_timeout_s conn None;
+  Fun.protect ~finally:(fun () -> Pg.set_timeout_s conn reads) @@ fun () ->
+  let* () = Pg.exec_raw conn "set statement_timeout = 0" in
   let* () =
-    db (Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock)
+    Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock
   in
   let outcome = pending ~table conn migrations in
   let released =
     let* () =
-      db
-        (Pg.run conn
-           (S.exec ~params:S.int "select pg_advisory_unlock($1)")
-           lock)
+      Pg.run conn (S.exec ~params:S.int "select pg_advisory_unlock($1)") lock
     in
-    db (Pg.exec_raw conn "reset statement_timeout")
+    Pg.exec_raw conn "reset statement_timeout"
   in
   let* () = outcome in
   released
 
 type status = {
-  applied : (int * string) list;
+  applied : (version * string) list;
   pending : migration list;
-  unknown : int list;
-  edited : int list;
-  late : int list;
-  behind : int option;
+  unknown : version list;
+  edited : version list;
+  late : version list;
+  behind : version option;
 }
 
 (* A read, so it creates nothing: a database never migrated has no table,
@@ -451,46 +492,40 @@ let reading ~table conn migrations =
   (* Found as the statements that write it find it, through the search
      path, whether or not its name says a schema. *)
   let* exists =
-    db
-      (Pg.run conn
-         (S.find_opt ~params:S.text ~row:S.bool
-            "select to_regclass($1) is not null")
-         table)
+    Pg.run conn
+      (S.find_opt ~params:S.text ~row:S.bool
+         "select to_regclass($1) is not null")
+      table
   in
   (* A table from before the checksum column has no sums to compare, and a
      read writes nothing, so it does not add one. *)
   let* summed =
     match exists with
     | Some true ->
-        db
-          (Pg.run conn
-             (S.find_opt ~params:S.text ~row:S.bool
-                "select exists (select 1 from pg_attribute where attrelid = \
-                 to_regclass($1) and attname = 'checksum' and not \
-                 attisdropped)")
-             table)
+        Pg.run conn
+          (S.find_opt ~params:S.text ~row:S.bool
+             "select exists (select 1 from pg_attribute where attrelid = \
+              to_regclass($1) and attname = 'checksum' and not attisdropped)")
+          table
     | Some false | None -> Ok (Some false)
   in
   let* applied =
     match (exists, summed) with
     | Some true, Some true ->
-        db
-          (Pg.run conn
-             (S.list ~params:S.unit
-                ~row:(S.t3 S.int S.text (S.opt S.text))
-                (Printf.sprintf
-                   "select version, name, checksum from %s order by version"
-                   table))
-             ())
+        Pg.run conn
+          (S.list ~params:S.unit
+             ~row:(S.t3 S.int S.text (S.opt S.text))
+             (Printf.sprintf
+                "select version, name, checksum from %s order by version" table))
+          ()
     | Some true, (Some false | None) ->
         Result.map
           (List.map (fun (v, n) -> (v, n, None)))
-          (db
-             (Pg.run conn
-                (S.list ~params:S.unit ~row:(S.t2 S.int S.text)
-                   (Printf.sprintf
-                      "select version, name from %s order by version" table))
-                ()))
+          (Pg.run conn
+             (S.list ~params:S.unit ~row:(S.t2 S.int S.text)
+                (Printf.sprintf "select version, name from %s order by version"
+                   table))
+             ())
     | (Some false | None), _ -> Ok []
   in
   Ok (applied, read migrations (List.map (fun (v, _, s) -> (v, s)) applied))
@@ -557,18 +592,20 @@ let pg_dump_argv ~template ~url ~database ~restrict_key =
    so its password. *)
 let capture argv =
   match argv with
-  | [] -> Error "no pg_dump command"
+  | [] -> Error (`Dump "no pg_dump command")
   | prog :: _ -> (
       match Unix.open_process_args_in prog (Array.of_list argv) with
       | exception Unix.Unix_error (e, _, _) ->
-          Error (Printf.sprintf "%s: %s" prog (Unix.error_message e))
+          Error (`Dump (Printf.sprintf "%s: %s" prog (Unix.error_message e)))
       | ic -> (
           let out = In_channel.input_all ic in
           match Unix.close_process_in ic with
           | Unix.WEXITED 0 -> Ok out
-          | Unix.WEXITED n -> Error (Printf.sprintf "%s exited with %d" prog n)
+          | Unix.WEXITED n ->
+              Error (`Dump (Printf.sprintf "%s exited with %d" prog n))
           | Unix.WSIGNALED n | Unix.WSTOPPED n ->
-              Error (Printf.sprintf "%s was stopped by signal %d" prog n)))
+              Error
+                (`Dump (Printf.sprintf "%s was stopped by signal %d" prog n))))
 
 (* A connect is bounded, since a server that never answers is otherwise a
    command that never ends; what runs on the connection is not, since an
@@ -579,7 +616,7 @@ let connect_timeout_s = 10.
 (* Quiet: [create table if not exists] is a NOTICE on every run, and a notice
    is a line in what a command prints. *)
 let connect ~sw ~net ~mono_clock url =
-  let* c = Result.map_error S.error_to_string (Pg.conninfo url) in
+  let* c = Pg.conninfo url in
   let c =
     {
       c with
@@ -587,10 +624,9 @@ let connect ~sw ~net ~mono_clock url =
         Some (Option.value c.connect_timeout_s ~default:connect_timeout_s);
     }
   in
-  Result.map_error S.error_to_string
-    (Pg.connect ~sw ~net ~mono_clock
-       ~parameters:[ ("client_min_messages", "warning") ]
-       c)
+  Pg.connect ~sw ~net ~mono_clock
+    ~parameters:[ ("client_min_messages", "warning") ]
+    c
 
 (* A finaliser runs in a fiber that may be cancelled, where any IO raises
    again: shielded, it does its work, and the cancellation goes on as itself
@@ -604,25 +640,19 @@ let closing conn f =
    step to name, and the server's own database says whether it is that. *)
 let missing ~sw ~net ~mono_clock url e =
   match
-    let* c = Result.map_error S.error_to_string (Pg.conninfo url) in
-    let* server = db (Pg.on_database ~server:url "postgres") in
+    let* c = Pg.conninfo url in
+    let* server = Pg.on_database ~server:url "postgres" in
     let* admin = connect ~sw ~net ~mono_clock server in
     closing admin (fun admin ->
         Result.map
           (fun there -> (c.database, there))
-          (db
-             (Pg.run admin
-                (S.find ~params:S.text ~row:S.bool
-                   "select exists (select 1 from pg_database where datname = \
-                    $1)")
-                c.database)))
+          (Pg.run admin
+             (S.find ~params:S.text ~row:S.bool
+                "select exists (select 1 from pg_database where datname = $1)")
+             c.database))
   with
-  | Ok (name, false) ->
-      Printf.sprintf
-        "there is no database %S on that server: make it with `rowtype-migrate \
-         create`"
-        name
-  | Ok (_, true) | Error _ -> e
+  | Ok (name, false) -> `No_database name
+  | Ok (_, true) | Error _ -> (e :> [> error ])
 
 let with_connection ~sw ~net ~mono_clock url f =
   match connect ~sw ~net ~mono_clock url with
@@ -637,19 +667,19 @@ let quoted name =
 (* Made and dropped from the server's own database, [postgres], since no
    statement makes or drops the database it is connected to. *)
 let on_server ~sw ~net ~mono_clock url f =
-  let* c = Result.map_error S.error_to_string (Pg.conninfo url) in
-  let* server = db (Pg.on_database ~server:url "postgres") in
+  let* c = Pg.conninfo url in
+  let* server = Pg.on_database ~server:url "postgres" in
   with_connection ~sw ~net ~mono_clock server (fun admin -> f admin c.database)
 
 let create ~sw ~net ~mono_clock url =
   on_server ~sw ~net ~mono_clock url (fun admin name ->
-      db (Pg.exec_raw admin ("create database " ^ quoted name)))
+      Pg.exec_raw admin ("create database " ^ quoted name))
 
 (* Not [with (force)]: Postgres refuses to drop a database somebody is
    connected to, the one guard there is against the wrong URL. *)
 let drop ~sw ~net ~mono_clock url =
   on_server ~sw ~net ~mono_clock url (fun admin name ->
-      db (Pg.exec_raw admin ("drop database if exists " ^ quoted name)))
+      Pg.exec_raw admin ("drop database if exists " ^ quoted name))
 
 (* A database of its own, made empty, migrated, dumped, and dropped however
    that went -- so a schema is what the migrations make from nothing, and
@@ -657,7 +687,7 @@ let drop ~sw ~net ~mono_clock url =
 let migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
   with_connection ~sw ~net ~mono_clock url (fun admin ->
-      let* () = db (Pg.exec_raw admin ("create database " ^ quoted scratch)) in
+      let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
       Fun.protect
         ~finally:(fun () ->
           Eio.Cancel.protect (fun () ->
@@ -667,7 +697,7 @@ let migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url dump =
                   ^ " with (force)")
                   : (unit, S.error) result)))
         (fun () ->
-          let* target = db (Pg.on_database ~server:url scratch) in
+          let* target = Pg.on_database ~server:url scratch in
           let* () =
             with_connection ~sw ~net ~mono_clock target (fun conn ->
                 run ?lock ~table conn migrations)
@@ -715,15 +745,17 @@ let squash ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
     match (List.exists (fun m -> m.version = through) migrations, replaced) with
     | false, _ ->
         Error
-          (Printf.sprintf
-             "there is no migration %d: a squash is through one of the files"
-             through)
+          (`Invalid
+             (Printf.sprintf
+                "there is no migration %d: a squash is through one of the files"
+                through))
     | true, [ m ] when is_baseline m ->
         Error
-          (Printf.sprintf
-             "migration %d is a baseline already: there is nothing before it \
-              to squash"
-             through)
+          (`Invalid
+             (Printf.sprintf
+                "migration %d is a baseline already: there is nothing before \
+                 it to squash"
+                through))
     | true, _ -> Ok ()
   in
   let dumped ms =
@@ -750,8 +782,4 @@ let squash ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
      row for row, the database the whole history makes. *)
   let* whole = dumped migrations in
   let* squashed = dumped (baseline :: kept) in
-  if String.equal whole squashed then Ok baseline
-  else
-    Error
-      "the baseline and the migrations after it do not make the database the \
-       whole history makes, so nothing was squashed"
+  if String.equal whole squashed then Ok baseline else Error `Unproved

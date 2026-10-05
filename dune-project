@@ -103,6 +103,8 @@
    (= :version))
   (rowtype-postgres
    (= :version))
+  (ptime
+   (>= 1.2.0))
   (cmdliner
    (>= 2.1.1))
   (eio

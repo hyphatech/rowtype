@@ -6,6 +6,10 @@ module M = Rowtype_migrate
 
 let ( let* ) = Result.bind
 
+(* The library's failures, in its words: the command's own are words
+   already. *)
+let told r = Result.map_error M.error_to_string r
+
 let exits = function
   | Ok () -> 0
   | Error m ->
@@ -119,8 +123,9 @@ let lock =
 
 let with_db url f =
   let* url = url in
-  in_eio (fun ~sw ~net ~mono_clock ->
-      M.with_connection ~sw ~net ~mono_clock url f)
+  told
+    (in_eio (fun ~sw ~net ~mono_clock ->
+         M.with_connection ~sw ~net ~mono_clock url f))
 
 let up =
   Cmd.v
@@ -128,7 +133,7 @@ let up =
        ~doc:"Apply every migration in $(b,--dir) the database has not recorded.")
     (Term.const (fun dir url lock table ->
          exits
-           (let* ms = M.of_directory dir in
+           (let* ms = told (M.of_directory dir) in
             with_db url (fun conn -> M.run ~lock ~table conn ms)))
     $ dir $ url $ lock $ table)
 
@@ -142,22 +147,28 @@ let status =
                it."))
   in
   let show ~check (st : M.status) =
-    List.iter (fun (v, n) -> Printf.printf "applied  %d_%s\n" v n) st.applied;
+    let number (v : M.version) = (v :> int) in
+    List.iter
+      (fun (v, n) -> Printf.printf "applied  %d_%s\n" (number v) n)
+      st.applied;
     List.iter
       (fun (m : M.migration) ->
-        Printf.printf "pending  %d_%s\n" m.version m.name)
+        Printf.printf "pending  %d_%s\n" (number m.version) m.name)
       st.pending;
     List.iter
-      (fun v -> Printf.printf "unknown  %d (from a newer checkout)\n" v)
+      (fun v ->
+        Printf.printf "unknown  %d (from a newer checkout)\n" (number v))
       st.unknown;
     List.iter
-      (fun v -> Printf.printf "edited   %d (changed since it ran)\n" v)
+      (fun v -> Printf.printf "edited   %d (changed since it ran)\n" (number v))
       st.edited;
     List.iter
-      (fun v -> Printf.printf "late     %d (older than one applied)\n" v)
+      (fun v ->
+        Printf.printf "late     %d (older than one applied)\n" (number v))
       st.late;
     Option.iter
-      (fun v -> Printf.printf "behind   %d (a baseline it has not reached)\n" v)
+      (fun v ->
+        Printf.printf "behind   %d (a baseline it has not reached)\n" (number v))
       st.behind;
     match (st.behind, st.unknown, st.edited, st.late) with
     | Some _, _, _, _ ->
@@ -179,7 +190,7 @@ let status =
     (Cmd.info "status" ~doc:"List the migrations applied, and those pending.")
     (Term.const (fun dir url table check ->
          exits
-           (let* ms = M.of_directory dir in
+           (let* ms = told (M.of_directory dir) in
             let* st = with_db url (fun conn -> M.status ~table conn ms) in
             show ~check st))
     $ dir $ url $ table $ check)
@@ -194,7 +205,7 @@ let new_ =
     (Term.const (fun dir n ->
          exits
            (Result.map print_endline
-              (M.new_migration ~dir ~now:(Unix.gettimeofday ()) n)))
+              (told (M.new_migration ~dir ~now:(Ptime_clock.now ()) n))))
     $ dir $ name)
 
 let pg_dump =
@@ -228,12 +239,13 @@ let dump =
                make."))
   in
   let run dir url lock table output check pg_dump restrict_key =
-    let* migrations = M.of_directory dir in
+    let* migrations = told (M.of_directory dir) in
     let* url = url in
     let* schema =
-      in_eio (fun ~sw ~net ~mono_clock ->
-          M.dump ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
-            ~migrations url)
+      told
+        (in_eio (fun ~sw ~net ~mono_clock ->
+             M.dump ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
+               ~migrations url))
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -273,21 +285,30 @@ let squash =
       (Arg.pos 0 (Arg.some Arg.int) None (Arg.info [] ~docv:"VERSION"))
   in
   let run dir url lock table pg_dump restrict_key through =
-    let* migrations = M.of_directory dir in
+    let* through =
+      Option.to_result
+        ~none:
+          (Printf.sprintf "%d is not a migration's version: fourteen digits"
+             through)
+        (M.version_of_int through)
+    in
+    let* migrations = told (M.of_directory dir) in
     let* url = url in
     let* baseline =
-      in_eio (fun ~sw ~net ~mono_clock ->
-          M.squash ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
-            ~through ~migrations url)
+      told
+        (in_eio (fun ~sw ~net ~mono_clock ->
+             M.squash ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
+               ~through ~migrations url))
     in
     let path (m : M.migration) =
-      Filename.concat dir (Printf.sprintf "%d_%s.sql" m.version m.name)
+      Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
     in
     let written = path baseline in
     let replaced =
       List.filter
         (fun (m : M.migration) ->
-          m.version <= through && not (String.equal (path m) written))
+          (m.version :> int) <= (through :> int)
+          && not (String.equal (path m) written))
         migrations
     in
     let* () =
@@ -327,7 +348,8 @@ let on_database name ~doc f =
     (Term.const (fun url ->
          exits
            (let* url = url in
-            in_eio (fun ~sw ~net ~mono_clock -> f ~sw ~net ~mono_clock url)))
+            told
+              (in_eio (fun ~sw ~net ~mono_clock -> f ~sw ~net ~mono_clock url))))
     $ url)
 
 let create =

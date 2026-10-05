@@ -2,4 +2,4 @@
  (name main)
  (public_name rowtype-migrate)
  (package rowtype-migrate)
- (libraries rowtype-migrate cmdliner eio eio_main unix))
+ (libraries rowtype-migrate cmdliner eio eio_main ptime ptime.clock.os))

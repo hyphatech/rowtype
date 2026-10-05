@@ -337,8 +337,8 @@ let close t = Pg.close t.pg
 let revive t =
   if Pg.closed t.pg then ignore (Pg.reset t.pg : (unit, Pg.error) result)
 
-let timeout t = Pg.timeout t.pg
-let set_timeout t = Pg.set_timeout t.pg
+let timeout_s t = Pg.timeout t.pg
+let set_timeout_s t = Pg.set_timeout t.pg
 
 module Pool = struct
   type t = { pool : Pg.Pool.t; observe : observer; now : unit -> Mtime.t }

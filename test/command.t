@@ -38,3 +38,10 @@ names; from --env-file where one is given, the last line that sets it:
   $ rowtype-migrate status --dir m --env-file .env --env OTHER
   .env does not set OTHER
   [1]
+
+A squash is through a migration's version, fourteen digits, refused before
+anything is read:
+
+  $ rowtype-migrate squash 7 --dir m --url "given=1"
+  7 is not a migration's version: fourteen digits
+  [1]

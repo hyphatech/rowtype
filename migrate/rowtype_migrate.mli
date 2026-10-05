@@ -57,19 +57,62 @@ type kind =
           file's first line is [-- rowtype-migrate: baseline], and a list holds
           one, the oldest *)
 
+type version = private int
+(** A UTC timestamp, [YYYYMMDDHHMMSS], as its number -- a timestamp rather than
+    a counter, because two branches that each add "migration 7" collide on merge
+    where two timestamps do not. One a program makes has fourteen digits; one a
+    database recorded is as it recorded it. *)
+
+val version_of_int : int -> version option
+(** [Some] for a number of fourteen digits. *)
+
 type migration = {
-  version : int;
-      (** a UTC timestamp, [YYYYMMDDHHMMSS] -- a timestamp rather than a
-          counter, because two branches that each add "migration 7" collide on
-          merge where two timestamps do not *)
+  version : version;
   name : string;
   kind : kind;  (** read from the file's first line *)
   sql : string;
 }
 
+type error =
+  [ Rowtype.error
+  | `Files of string
+    (** the migrations' files: one not named as a migration, one that cannot be
+        read or written, a directive not known, a version twice, a baseline out
+        of place -- in words naming it *)
+  | `Invalid of string
+    (** an argument outside its grammar -- a table's name, a migration's name --
+        or a squash through no migration it can squash: in words *)
+  | `Behind of migration
+    (** the database's record stops before the list's baseline: it is migrated
+        with a build from before the squash first *)
+  | `Unknown of version
+    (** the database records a version the list does not know: it was migrated
+        from a newer checkout *)
+  | `Edited of migration
+    (** its text is not what the database applied: edited after it ran *)
+  | `Late of migration
+    (** pending, and older than one the database applied: merged after a later
+        one ran *)
+  | `Failed of migration * Rowtype.error
+    (** it failed, and the database is at the version before it -- or, for one
+        run outside a transaction, at whatever the failure left *)
+  | `No_database of string
+    (** the server has no database of this name: it is made with
+        [rowtype-migrate create] *)
+  | `Dump of string
+    (** [pg_dump] could not run, or failed: in words naming the program and
+        never its arguments, which hold the URL *)
+  | `Unproved  (** a squash's baseline does not make what the history makes *)
+  ]
+(** Every way migrating fails: a polymorphic variant, as a statement's failures
+    are, so it joins a caller's own. *)
+
+val error_to_string : [< error ] -> string
+(** In words for a person, naming the migration and what to do next. *)
+
 (** {1 The files} *)
 
-val of_files : string list -> (migration list, string) result
+val of_files : string list -> (migration list, [> error ]) result
 (** The files read, in version order. Refused, naming it: a file not named
     [<14-digit UTC timestamp>_<name>.sql], one that cannot be read, one whose
     first line is a directive this does not know, a version used twice -- two
@@ -77,15 +120,15 @@ val of_files : string list -> (migration list, string) result
     has to look at -- and a baseline that is not the oldest, or not the only
     one. *)
 
-val of_directory : string -> (migration list, string) result
+val of_directory : string -> (migration list, [> error ]) result
 (** Every [.sql] file in the directory, as {!of_files} reads them. *)
 
-val new_migration : dir:string -> now:float -> string -> (string, string) result
-(** [new_migration ~dir ~now name] writes an empty migration named for [now], a
-    Unix time, as a UTC stamp to the second, and answers its path, making [dir]
-    if it is not there. A name is lower-case letters, digits and underscores; a
-    stamp already in [dir] is refused, since two migrations may not share a
-    version. *)
+val new_migration :
+  dir:string -> now:Ptime.t -> string -> (string, [> error ]) result
+(** [new_migration ~dir ~now name] writes an empty migration named for [now], as
+    a UTC stamp to the second, and answers its path, making [dir] if it is not
+    there. A name is lower-case letters, digits and underscores; a stamp already
+    in [dir] is refused, since two migrations may not share a version. *)
 
 (** {1 A database} *)
 
@@ -94,8 +137,8 @@ val with_connection :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   string ->
-  (Rowtype_postgres.conn -> ('a, string) result) ->
-  ('a, string) result
+  (Rowtype_postgres.conn -> ('a, ([> error ] as 'e)) result) ->
+  ('a, 'e) result
 (** A connection to the database the URL names, as the commands make one, for
     the length of the function: its connect bounded at ten seconds unless the
     URL says [connect_timeout], and nothing after that, since an administrator's
@@ -109,7 +152,7 @@ val create :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   string ->
-  (unit, string) result
+  (unit, [> error ]) result
 (** Make the database the URL names, from the server's own [postgres]; one that
     exists is refused, as Postgres refuses it. *)
 
@@ -118,7 +161,7 @@ val drop :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   string ->
-  (unit, string) result
+  (unit, [> error ]) result
 (** Drop the database the URL names, if it is there. Refused while anybody is
     connected to it, as Postgres refuses it: the one guard there is against the
     wrong URL. *)
@@ -141,24 +184,26 @@ val run :
   ?table:string ->
   Rowtype_postgres.conn ->
   migration list ->
-  (unit, string) result
+  (unit, [> error ]) result
 (** Apply every migration in the list that the database has not recorded, in
     version order, under a Postgres advisory lock -- so two processes migrating
     at once take turns, and the second finds nothing left to do. [lock] is any
     number fixed for the database. The connection's bounds are lifted for the
     run: a migration is bounded by nothing but itself.
 
-    Refused, with an error that says which migration and why, and nothing
-    applied:
-    - a database whose record stops before the list's baseline, which has to be
-      migrated with a build from before the squash first;
-    - a database that records a version the list does not know, which was
-      migrated from a newer checkout: applying an older one would run a history
-      that is not the database's;
-    - a migration whose text is not what the database applied -- edited after it
-      ran, where a schema that has run changes by the next migration;
-    - a pending migration older than one already applied, merged after a later
-      one ran, which would run out of the order it was written in.
+    Refused, naming the migration, and nothing applied:
+    - [`Behind], a database whose record stops before the list's baseline, which
+      has to be migrated with a build from before the squash first;
+    - [`Unknown], a database that records a version the list does not know,
+      which was migrated from a newer checkout: applying an older one would run
+      a history that is not the database's;
+    - [`Edited], a migration whose text is not what the database applied --
+      edited after it ran, where a schema that has run changes by the next
+      migration;
+    - [`Late], a pending migration older than one already applied, merged after
+      a later one ran, which would run out of the order it was written in.
+
+    A migration that fails is [`Failed], and the ones before it stay applied.
 
     Each applied migration is recorded with a digest of its text, and a database
     migrated before the digests were kept has them recorded on its next run.
@@ -169,12 +214,13 @@ val run :
     after one, as a connection's own would be ([reset all]). *)
 
 type status = {
-  applied : (int * string) list;  (** version and name, as recorded *)
+  applied : (version * string) list;  (** version and name, as recorded *)
   pending : migration list;  (** in the list and not recorded, in order *)
-  unknown : int list;  (** recorded and not in the list: a newer checkout's *)
-  edited : int list;  (** recorded, with a text that has changed since *)
-  late : int list;  (** pending, and older than one already applied *)
-  behind : int option;
+  unknown : version list;
+      (** recorded and not in the list: a newer checkout's *)
+  edited : version list;  (** recorded, with a text that has changed since *)
+  late : version list;  (** pending, and older than one already applied *)
+  behind : version option;
       (** the list's baseline, where the database's record stops before it *)
 }
 
@@ -182,7 +228,7 @@ val status :
   ?table:string ->
   Rowtype_postgres.conn ->
   migration list ->
-  (status, string) result
+  (status, [> error ]) result
 (** What {!run} would do, without doing it; it writes nothing, not even the
     table that records migrations. *)
 
@@ -198,7 +244,7 @@ val dump :
   restrict_key:string ->
   migrations:migration list ->
   string ->
-  (string, string) result
+  (string, [> error ]) result
 (** What the migrations add up to from nothing: a database of its own on the
     server the URL names, migrated, dumped, and dropped however that went --
     never what some database has drifted to.
@@ -218,10 +264,10 @@ val squash :
   ?table:string ->
   pg_dump:string ->
   restrict_key:string ->
-  through:int ->
+  through:version ->
   migrations:migration list ->
   string ->
-  (migration, string) result
+  (migration, [> error ]) result
 (** Every migration through the version [through] names, as one baseline: a
     database of its own on the server the URL names, migrated through it and
     dumped -- the schema and the rows the migrations wrote, as statements, and
@@ -230,6 +276,6 @@ val squash :
 
     It is proved before it is answered: the baseline and the migrations after it
     make a database that dumps the same, row for row, as the one the whole
-    history makes, or nothing is answered. Writing it and removing the files it
-    replaced is the caller's. Refused: a [through] that is no migration's
+    history makes, or it is [`Unproved]. Writing it and removing the files it
+    replaced is the caller's. [`Invalid]: a [through] that is no migration's
     version, and one that is the baseline's with nothing before it. *)

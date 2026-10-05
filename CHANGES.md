@@ -15,5 +15,6 @@ First release.
   against the database, and `copy_in`, a load of any size bound by a shape
   and streamed through one COPY.
 - `rowtype-migrate`: plain SQL migrations, forward only, applied under an
-  advisory lock and known by their digests; a schema dump, and squashing
+  advisory lock and known by their digests, every refusal and failure a
+  polymorphic variant naming its migration; a schema dump, and squashing
   into a baseline.

@@ -4,6 +4,8 @@
 module C = Rowtype_migrate
 
 let check_string = Alcotest.(check string)
+let words = C.error_to_string
+let number (v : C.version) = (v :> int)
 
 let temp_dir () =
   let d = Filename.temp_dir "rowtype_migrate_files" "" in
@@ -25,12 +27,12 @@ let test_files_are_read_in_version_order () =
   let b = file dir "20260102000000_second.sql" "select 2;"
   and a = file dir "20260101000000_first.sql" "select 1;" in
   (match C.of_files [ b; a ] with
-  | Error m -> Alcotest.fail m
+  | Error e -> Alcotest.fail (words e)
   | Ok ms ->
       Alcotest.(check (list (pair int string)))
         "in order"
         [ (20260101000000, "first"); (20260102000000, "second") ]
-        (List.map (fun (m : C.migration) -> (m.version, m.name)) ms));
+        (List.map (fun (m : C.migration) -> (number m.version, m.name)) ms));
   let refused paths =
     match C.of_files paths with Ok _ -> false | Error _ -> true
   in
@@ -45,8 +47,9 @@ let test_files_are_read_in_version_order () =
     (refused [ a; file dir "20260101000000_again.sql" "" ]);
   match C.of_directory dir with
   | Ok _ -> Alcotest.fail "a directory holding a stray file was read"
-  | Error m ->
+  | Error (`Files m) ->
       Alcotest.(check bool) ("names it: " ^ m) true (String.length m > 0)
+  | Error e -> Alcotest.failf "not the files': %s" (words e)
 
 (* A directive is the first line or nothing, and one not known is refused
    rather than read as a comment. *)
@@ -56,7 +59,7 @@ let test_a_directive_is_the_first_line () =
     match C.of_files [ file dir name text ] with
     | Ok [ m ] -> Ok m.kind
     | Ok _ -> Error "not one migration"
-    | Error m -> Error m
+    | Error e -> Error (words e)
   in
   let is kind read =
     match (kind, read) with
@@ -103,7 +106,7 @@ let test_a_baseline_is_the_oldest_and_the_only_one () =
                | C.Baseline -> "baseline"
                | C.Transaction | C.No_transaction -> "plain")
              ms)
-    | Error m -> Error m
+    | Error e -> Error (words e)
   in
   let first = baseline "20260101000000" and later = plain "20260102000000" in
   Alcotest.(check (result (list string) string))
@@ -117,13 +120,19 @@ let test_a_baseline_is_the_oldest_and_the_only_one () =
     "two of them" false
     (Result.is_ok (read [ first; baseline "20260103000000" ]))
 
-(* 2026-09-25 12:34:56 UTC. *)
-let noon = 1_790_339_696.
+(* 2026-09-25 12:34:56 UTC, and a second later. *)
+let at seconds =
+  match Ptime.of_float_s seconds with
+  | Some t -> t
+  | None -> Alcotest.failf "%f is no instant" seconds
+
+let noon = at 1_790_339_696.
+let a_second_later = at 1_790_339_697.
 
 let test_a_new_migration_is_stamped_in_utc () =
   let dir = temp_dir () in
   match C.new_migration ~dir ~now:noon "add_ratings" with
-  | Error m -> Alcotest.fail m
+  | Error e -> Alcotest.fail (words e)
   | Ok path ->
       check_string "named for the second, in UTC"
         (Filename.concat dir "20260925123456_add_ratings.sql")
@@ -140,7 +149,7 @@ let test_a_new_migration_makes_its_directory () =
       Sys.rmdir dir;
       Sys.rmdir (Filename.dirname dir));
   (match C.new_migration ~dir ~now:noon "create_users" with
-  | Error m -> Alcotest.fail m
+  | Error e -> Alcotest.fail (words e)
   | Ok path ->
       Alcotest.(check bool) "made, and there" true (Sys.file_exists path));
   Alcotest.(check bool)
@@ -160,7 +169,9 @@ let test_a_new_migration_refuses_what_would_collide () =
   Alcotest.(check bool)
     "a second in the same second: one version, two files" true
     (refused "two" ~now:noon);
-  Alcotest.(check bool) "a second later" false (refused "two" ~now:(noon +. 1.))
+  Alcotest.(check bool)
+    "a second later" false
+    (refused "two" ~now:a_second_later)
 
 let () =
   Alcotest.run "migrate files"
