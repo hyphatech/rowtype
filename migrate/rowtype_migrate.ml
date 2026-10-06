@@ -117,7 +117,7 @@ let parse path =
             "%s: a migration is <%d-digit UTC timestamp>_<name>.sql" base
             version_digits))
   in
-  let digit c = c >= '0' && c <= '9' in
+  let digit = function '0' .. '9' -> true | _ -> false in
   match Filename.chop_suffix_opt ~suffix:".sql" base with
   | None -> malformed
   | Some stem -> (

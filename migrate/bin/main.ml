@@ -54,8 +54,11 @@ let from_env_file path var =
           String.trim (String.sub line (i + 1) (String.length line - i - 1))
         in
         let n = String.length v in
-        if n >= 2 && (v.[0] = '"' || v.[0] = '\'') && v.[n - 1] = v.[0] then
-          Some (String.sub v 1 (n - 2))
+        if
+          n >= 2
+          && (Char.equal v.[0] '"' || Char.equal v.[0] '\'')
+          && Char.equal v.[n - 1] v.[0]
+        then Some (String.sub v 1 (n - 2))
         else Some v
     | Some _ | None -> None
   in

@@ -168,7 +168,7 @@ module Backend = struct
       Buffer.add_char b '"';
       String.iter
         (fun c ->
-          if c = '"' || c = '\\' then Buffer.add_char b '\\';
+          if Char.equal c '"' || Char.equal c '\\' then Buffer.add_char b '\\';
           Buffer.add_char b c)
         v;
       Buffer.add_char b '"';
@@ -203,11 +203,13 @@ module Backend = struct
                 quoted (i + 1) b
         in
         let rec plain i =
-          if i < n && raw.[i] <> ',' && raw.[i] <> '}' then plain (i + 1) else i
+          match if i < n then Some raw.[i] else None with
+          | Some (',' | '}') | None -> i
+          | Some _ -> plain (i + 1)
         in
         let rec go i acc =
           let* element, j =
-            if i < n && raw.[i] = '"' then
+            if i < n && Char.equal raw.[i] '"' then
               Result.map
                 (fun (v, j) -> (Some (cell v), j))
                 (quoted (i + 1) (Buffer.create 16))
@@ -220,15 +222,16 @@ module Backend = struct
                 Ok (None, j)
               else Ok (Some (cell text), j)
           in
-          if j < n && raw.[j] = ',' then go (j + 1) (element :: acc)
-          else if j = n - 1 && raw.[j] = '}' then Ok (List.rev (element :: acc))
+          if j < n && Char.equal raw.[j] ',' then go (j + 1) (element :: acc)
+          else if j = n - 1 && Char.equal raw.[j] '}' then
+            Ok (List.rev (element :: acc))
           else Error "not an array"
         in
         match column.format with
         | Pg.Column.Binary -> Error "an array in binary, which is read in text"
         | Pg.Column.Text ->
             if String.equal raw "{}" then Ok []
-            else if n >= 2 && raw.[0] = '{' then go 1 []
+            else if n >= 2 && Char.equal raw.[0] '{' then go 1 []
             else Error "not an array")
 
   (* A transaction a failed statement aborted is not an error to COMMIT:
