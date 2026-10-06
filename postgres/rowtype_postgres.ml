@@ -188,7 +188,9 @@ module Backend = struct
     match cell with
     | Element _ | Undescribed -> Error "not an array"
     | Described (column, raw) -> (
-        let cell v = Element ({ column with format = Pg.Column.Text }, v) in
+        let text_cell v =
+          Element ({ column with format = Pg.Column.Text }, v)
+        in
         let n = String.length raw in
         let rec quoted i b =
           if i >= n then Error "an unended quoted element"
@@ -211,7 +213,7 @@ module Backend = struct
           let* element, j =
             if i < n && Char.equal raw.[i] '"' then
               Result.map
-                (fun (v, j) -> (Some (cell v), j))
+                (fun (v, j) -> (Some (text_cell v), j))
                 (quoted (i + 1) (Buffer.create 16))
             else
               let j = plain i in
@@ -220,7 +222,7 @@ module Backend = struct
                 Error "an array of more than one dimension"
               else if String.equal (String.uppercase_ascii text) "NULL" then
                 Ok (None, j)
-              else Ok (Some (cell text), j)
+              else Ok (Some (text_cell text), j)
           in
           if j < n && Char.equal raw.[j] ',' then go (j + 1) (element :: acc)
           else if j = n - 1 && Char.equal raw.[j] '}' then

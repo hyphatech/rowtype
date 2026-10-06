@@ -261,10 +261,10 @@ module Make (B : Backend) = struct
               let rec each k acc = function
                 | [] -> Ok (List.rev acc, i + 1)
                 | e :: rest ->
-                    let element _ =
+                    let element_name _ =
                       Printf.sprintf "%s, element %d" (name i) k
                     in
-                    let* v, _ = decode ~name:element t [| e |] 0 in
+                    let* v, _ = decode ~name:element_name t [| e |] 0 in
                     each (k + 1) (v :: acc) rest
               in
               each 1 [] elements)
