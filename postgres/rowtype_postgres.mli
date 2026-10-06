@@ -123,8 +123,7 @@ module Pool : sig
       output styles {!connect} keeps; [observe] is {!connect}'s, for every
       connection it lends. *)
 
-  val use :
-    ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> `Busy of float ]) result
+  val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> `Busy ]) result
   (** As [Postgres_eio.Pool.use]. *)
 
   type stats = Postgres_eio.Pool.stats = {

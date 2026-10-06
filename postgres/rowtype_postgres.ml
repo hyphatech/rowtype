@@ -394,8 +394,8 @@ let revive t =
       if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
       else Ok ()
 
-let timeout_s t = Pg.timeout t.pg
-let set_timeout_s t = Pg.set_timeout t.pg
+let timeout_s t = Pg.timeout_s t.pg
+let set_timeout_s t timeout_s = Pg.set_timeout t.pg ~timeout_s
 
 module Pool = struct
   type t = { pool : Pg.Pool.t; observe : observer; now : unit -> Mtime.t }
