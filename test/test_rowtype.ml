@@ -675,6 +675,42 @@ let test_conv_record () =
 (* A connection the server dropped -- a restart, a failover, an idle kill --
    answers its next statement with an error like any other, and is usable
    again once revived. *)
+(* A caller's parameters reach the session, but for the two output styles
+   the driver reads text in: a connection that keeps no statements reads
+   every cell in text, and still reads a date and an interval. *)
+let test_parameters_reach_the_session_but_the_styles () =
+  Db_target.with_postgres (fun target ->
+      let db =
+        ok
+          (Pg.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+             ~mono_clock:(Db_target.mono ()) ~statement_cache:0
+             ~parameters:
+               [
+                 ("application_name", "rowtype-test");
+                 ("datestyle", "SQL, DMY");
+                 ("IntervalStyle", "sql_standard");
+               ]
+             (ok (Pg.conninfo target)))
+      in
+      Fun.protect
+        ~finally:(fun () -> Pg.close db)
+        (fun () ->
+          let read =
+            S.find ~params:S.unit
+              ~row:S.(t4 text text date interval)
+              "select current_setting('application_name'), \
+               current_setting('DateStyle'), date '2026-10-06', interval '1 \
+               month 2 days 3 seconds'"
+          in
+          let name, style, date, interval = ok (Pg.run db read ()) in
+          Alcotest.(check string) "passed through" "rowtype-test" name;
+          Alcotest.(check string) "DateStyle is ISO" "ISO, MDY" style;
+          Alcotest.(check (triple int int int))
+            "a date reads" (2026, 10, 6) date;
+          Alcotest.(check (triple int int int))
+            "an interval reads" (1, 2, 3_000_000)
+            (interval.months, interval.days, interval.microseconds)))
+
 let test_a_lost_connection_is_an_error () =
   on_db [] (fun db ->
       let pid =
@@ -1297,6 +1333,11 @@ let () =
             test_a_kept_refusal_not_serializable_is_retried;
           Alcotest.test_case "another database keeps its server" `Quick
             test_another_database_keeps_its_server;
+        ] );
+      ( "connections",
+        [
+          Alcotest.test_case "parameters reach the session, but the styles"
+            `Quick test_parameters_reach_the_session_but_the_styles;
         ] );
       ( "errors",
         [

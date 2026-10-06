@@ -75,8 +75,10 @@ val connect :
   Conninfo.t ->
   (conn, [> Rowtype.error ]) result
 (** One connection, as [Postgres_eio.connect] makes it, every option passed
-    through; [observe] around each statement it runs, a transaction's [begin]
-    and [commit] among them, and nothing unless given. *)
+    through but two of [parameters]: [DateStyle] is always [ISO] and
+    [IntervalStyle] [postgres], whatever is given, since they are how a date and
+    an interval read in text. [observe] is around each statement it runs, a
+    transaction's [begin] and [commit] among them, and nothing unless given. *)
 
 val close : conn -> unit
 (** Close it for good, telling the server; its next statement says so. A no-op
@@ -114,8 +116,9 @@ module Pool : sig
     ?observe:observer ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
-  (** As [Postgres_eio.Pool.create], every option passed through; [observe] is
-      {!connect}'s, for every connection it lends. *)
+  (** As [Postgres_eio.Pool.create], every option passed through but the two
+      output styles {!connect} keeps; [observe] is {!connect}'s, for every
+      connection it lends. *)
 
   val use :
     ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> `Busy of float ]) result
