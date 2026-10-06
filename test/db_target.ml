@@ -35,6 +35,7 @@ let io () =
 let sw () = snd (io ())
 let net () = Eio.Stdenv.net (fst (io ()))
 let mono () = Eio.Stdenv.mono_clock (fst (io ()))
+let process_mgr () = Eio.Stdenv.process_mgr (fst (io ()))
 
 let server () =
   match base with

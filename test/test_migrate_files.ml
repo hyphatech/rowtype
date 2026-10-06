@@ -210,6 +210,7 @@ let test_a_squash_refuses_what_it_cannot_squash () =
     match
       C.squash ~sw ~net:(Eio.Stdenv.net env)
         ~mono_clock:(Eio.Stdenv.mono_clock env)
+        ~process_mgr:(Eio.Stdenv.process_mgr env)
         ~pg_dump:"pg_dump" ~restrict_key:"rowtype" ~through:(version through)
         ~migrations "postgres://nowhere.invalid/x"
     with

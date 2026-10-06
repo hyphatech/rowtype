@@ -20,7 +20,9 @@ let exits = function
 let in_eio f =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  f ~sw ~net:(Eio.Stdenv.net env) ~mono_clock:(Eio.Stdenv.mono_clock env)
+  f ~sw ~net:(Eio.Stdenv.net env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~process_mgr:(Eio.Stdenv.process_mgr env)
 
 module Arg = Cmdliner.Arg
 module Cmd = Cmdliner.Cmd
@@ -127,7 +129,7 @@ let lock =
 let with_db url f =
   let* url = url in
   told
-    (in_eio (fun ~sw ~net ~mono_clock ->
+    (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
          M.with_connection ~sw ~net ~mono_clock url f))
 
 let up =
@@ -248,9 +250,9 @@ let dump =
     let* url = url in
     let* schema =
       told
-        (in_eio (fun ~sw ~net ~mono_clock ->
-             M.dump ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
-               ~migrations url))
+        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
+             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~pg_dump
+               ~restrict_key ~migrations url))
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -301,9 +303,9 @@ let squash =
     let* url = url in
     let* baseline =
       told
-        (in_eio (fun ~sw ~net ~mono_clock ->
-             M.squash ~sw ~net ~mono_clock ~lock ~table ~pg_dump ~restrict_key
-               ~through ~migrations url))
+        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
+             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~pg_dump
+               ~restrict_key ~through ~migrations url))
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -354,7 +356,8 @@ let on_database name ~doc f =
          exits
            (let* url = url in
             told
-              (in_eio (fun ~sw ~net ~mono_clock -> f ~sw ~net ~mono_clock url))))
+              (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
+                   f ~sw ~net ~mono_clock url))))
     $ url)
 
 let create =

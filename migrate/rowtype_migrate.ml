@@ -594,25 +594,48 @@ let pg_dump_argv ~template ~url ~database ~restrict_key =
       "--restrict-key=" ^ restrict_key;
     ]
 
-(* Not through a shell: nothing in the template is interpreted twice. A
-   failure names the program and never its arguments, which hold the URL and
-   so its password. *)
-let capture argv =
+(* Not through a shell: nothing in the template is interpreted twice. Run as
+   an Eio process, so a cancelled dump kills it with its switch and nothing
+   else on the loop waits for it. What it writes as errors is the failure's
+   words, not lines on the caller's terminal, with every secret masked: the
+   URL is one of its arguments, and a program may say its arguments back. A
+   failure names the program and never the arguments themselves. *)
+let capture ~process_mgr ~secrets argv =
+  let masked s =
+    List.fold_left
+      (fun s secret ->
+        if String.equal secret "" then s
+        else replace ~sub:secret ~by:"<secret>" s)
+      (String.trim s) secrets
+  in
+  let said err =
+    match masked (Buffer.contents err) with "" -> "" | m -> ": " ^ m
+  in
   match argv with
   | [] -> Error (`Dump "no pg_dump command")
   | prog :: _ -> (
-      match Unix.open_process_args_in prog (Array.of_list argv) with
-      | exception Unix.Unix_error (e, _, _) ->
-          Error (`Dump (Printf.sprintf "%s: %s" prog (Unix.error_message e)))
-      | ic -> (
-          let out = In_channel.input_all ic in
-          match Unix.close_process_in ic with
-          | Unix.WEXITED 0 -> Ok out
-          | Unix.WEXITED n ->
-              Error (`Dump (Printf.sprintf "%s exited with %d" prog n))
-          | Unix.WSIGNALED n | Unix.WSTOPPED n ->
-              Error
-                (`Dump (Printf.sprintf "%s was stopped by signal %d" prog n))))
+      let out = Buffer.create 65536 and err = Buffer.create 1024 in
+      match
+        Eio.Switch.run (fun sw ->
+            Eio.Process.await
+              (Eio.Process.spawn ~sw process_mgr
+                 ~stdout:(Eio.Flow.buffer_sink out)
+                 ~stderr:(Eio.Flow.buffer_sink err) argv))
+      with
+      | `Exited 0 -> Ok (Buffer.contents out)
+      | `Exited n ->
+          Error (`Dump (Printf.sprintf "%s exited with %d%s" prog n (said err)))
+      | `Signaled n ->
+          Error
+            (`Dump
+               (Printf.sprintf "%s was stopped by signal %d%s" prog n (said err)))
+      | exception Eio.Io (Eio.Process.E (Eio.Process.Executable_not_found _), _)
+        ->
+          Error (`Dump (prog ^ ": no such program"))
+      | exception Eio.Io (Eio.Process.E (Eio.Process.Permission_denied _), _) ->
+          Error (`Dump (prog ^ ": not allowed to run it"))
+      | exception Eio.Io (Eio.Process.E _, _) ->
+          Error (`Dump (prog ^ ": it could not be run")))
 
 (* A connect is bounded, since a server that never answers is otherwise a
    command that never ends; what runs on the connection is not, since an
@@ -691,7 +714,8 @@ let drop ~sw ~net ~mono_clock url =
 (* A database of its own, made empty, migrated, dumped, and dropped however
    that went -- so a schema is what the migrations make from nothing, and
    never what some database has drifted to. *)
-let migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url dump =
+let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~migrations
+    url dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
   with_connection ~sw ~net ~mono_clock url (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
@@ -709,12 +733,16 @@ let migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url dump =
             with_connection ~sw ~net ~mono_clock target (fun conn ->
                 run ?lock ~table conn migrations)
           in
-          capture (dump ~url:target ~database:scratch)))
+          let* c = Pg.conninfo target in
+          capture ~process_mgr
+            ~secrets:(target :: Option.to_list c.password)
+            (dump ~url:target ~database:scratch)))
 
-let dump ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
-    ~restrict_key ~migrations url =
+let dump ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
+    ~pg_dump ~restrict_key ~migrations url =
   Result.map normalise_dump
-    (migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url
+    (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~migrations
+       url
        (pg_dump_argv ~template:pg_dump ~restrict_key))
 
 (* ------------------------------------------------------------------ *)
@@ -741,8 +769,8 @@ let statements dump =
   |> List.filter (fun l -> not (String.starts_with ~prefix:"\\" l))
   |> String.concat "\n"
 
-let squash ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
-    ~restrict_key ~through ~migrations url =
+let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
+    ~pg_dump ~restrict_key ~through ~migrations url =
   let* table = table_name table in
   let* () = listed migrations in
   let replaced, kept =
@@ -767,7 +795,8 @@ let squash ~sw ~net ~mono_clock ?lock ?(table = default_table) ~pg_dump
   in
   let dumped migrations =
     Result.map statements
-      (migrated_scratch ~sw ~net ~mono_clock ?lock ~table ~migrations url
+      (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
+         ~migrations url
          (baseline_argv ~template:pg_dump ~restrict_key ~table))
   in
   let* made = dumped replaced in

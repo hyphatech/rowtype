@@ -500,7 +500,8 @@ let test_a_dump_is_what_the_migrations_make () =
             ok_s
               (Rowtype_migrate.dump ~sw:(Db_target.sw ())
                  ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                 ~pg_dump ~restrict_key:"rowtype" ~migrations target)
+                 ~process_mgr:(Db_target.process_mgr ()) ~pg_dump
+                 ~restrict_key:"rowtype" ~migrations target)
           in
           let first = dump () in
           Alcotest.(check string) "the same on every run" first (dump ());
@@ -515,8 +516,26 @@ let test_a_dump_is_what_the_migrations_make () =
                  "-- Dumped";
                ]))
 
-(* A pg_dump that fails is named, and never with its arguments: the URL in
-   them holds the password. *)
+(* An executable shell script of the given body, standing in for pg_dump. *)
+let script body =
+  let dir = Filename.temp_dir "stand_in" "" in
+  let path = Filename.concat dir "pg_dump" in
+  Out_channel.with_open_bin path (fun oc ->
+      Out_channel.output_string oc ("#!/bin/sh\n" ^ body ^ "\n"));
+  Unix.chmod path 0o755;
+  at_exit (fun () ->
+      Sys.remove path;
+      Sys.rmdir dir);
+  path
+
+let dump_with target ~pg_dump ~migrations =
+  Rowtype_migrate.dump ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+    ~mono_clock:(Db_target.mono ()) ~process_mgr:(Db_target.process_mgr ())
+    ~pg_dump ~restrict_key:"rowtype" ~migrations target
+
+(* A pg_dump that fails is named with what it said, and never with its
+   arguments: the URL in them holds the password, which is masked even
+   where the program says its arguments back. *)
 let test_a_failed_dump_names_no_password () =
   Db_target.with_postgres (fun target ->
       let password =
@@ -524,18 +543,68 @@ let test_a_failed_dump_names_no_password () =
         | Some p -> p
         | None -> Alcotest.fail "ROWTYPE_TEST_PG names no password to keep out"
       in
-      match
-        Rowtype_migrate.dump ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-          ~mono_clock:(Db_target.mono ()) ~pg_dump:"false --dbname={url}"
-          ~restrict_key:"rowtype" ~migrations:[] target
-      with
+      let echoes = script "echo \"pg_dump: error: refused $*\" >&2\nexit 2" in
+      (match
+         dump_with target ~pg_dump:(echoes ^ " --dbname={url}") ~migrations:[]
+       with
       | Ok _ -> Alcotest.fail "a pg_dump that failed made a dump"
       | Error (`Dump m) ->
-          Alcotest.(check bool)
-            ("the program, and no password: " ^ m)
-            true
-            (contains m "false" && not (contains m password))
+          List.iter
+            (fun (what, says) ->
+              Alcotest.(check bool) (what ^ ": " ^ m) true says)
+            [
+              ("the program", contains m echoes);
+              ("how it exited", contains m "exited with 2");
+              ("what it said", contains m "pg_dump: error: refused");
+              ("the URL masked", contains m "<secret>");
+              ("no password", not (contains m password));
+            ]
+      | Error e -> Alcotest.failf "not the dump's: %s" (words e));
+      match
+        dump_with target ~pg_dump:"rowtype_no_such_pg_dump --dbname={url}"
+          ~migrations:[]
+      with
+      | Error (`Dump m) ->
+          Alcotest.(check bool) m true (contains m "no such program")
+      | Ok _ -> Alcotest.fail "a program that is not there made a dump"
       | Error e -> Alcotest.failf "not the dump's: %s" (words e))
+
+(* A dump cancelled while pg_dump runs ends at once: the program is killed,
+   the loop never waited on it, and the scratch database is dropped. *)
+let test_a_dump_cancelled_in_pg_dump_ends () =
+  Db_target.with_postgres (fun target ->
+      let sleeps = script "sleep 30" in
+      let mono = Db_target.mono () in
+      let started = Eio.Time.Mono.now mono in
+      let answer =
+        Eio.Fiber.first
+          (fun () ->
+            ignore
+              (dump_with target ~pg_dump:sleeps ~migrations:[]
+                : (string, Rowtype_migrate.error) result);
+            "finished")
+          (fun () ->
+            Eio.Time.Mono.sleep mono 1.;
+            "cancelled")
+      in
+      let took =
+        Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now mono))
+        /. 1e9
+      in
+      Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
+      Alcotest.(check bool)
+        (Printf.sprintf "at once: %.1fs" took)
+        true (took < 5.);
+      let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
+      Db_target.admin (fun db ->
+          Alcotest.(check bool)
+            "its scratch database is gone" false
+            (ok
+               (Pg.run db
+                  (S.find ~params:S.text ~row:S.bool
+                     "select exists (select 1 from pg_database where datname = \
+                      $1)")
+                  scratch))))
 
 (* A dump cancelled while it migrates drops its scratch database, and its
    fiber ends cancelled, as itself. *)
@@ -557,7 +626,8 @@ let test_a_cancelled_dump_leaves_nothing () =
             ignore
               (Rowtype_migrate.dump ~sw:(Db_target.sw ())
                  ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                 ~pg_dump:"true" ~restrict_key:"rowtype" ~migrations target
+                 ~process_mgr:(Db_target.process_mgr ()) ~pg_dump:"true"
+                 ~restrict_key:"rowtype" ~migrations target
                 : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
@@ -601,7 +671,8 @@ let test_a_squash_stands_for_its_history () =
           let baseline =
             match
               Rowtype_migrate.squash ~sw:(Db_target.sw ())
-                ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ()) ~pg_dump
+                ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                ~process_mgr:(Db_target.process_mgr ()) ~pg_dump
                 ~restrict_key:"rowtype" ~through:(version 20260102000000)
                 ~migrations:history target
             with
@@ -653,8 +724,9 @@ let test_a_squash_stands_for_its_history () =
                 match
                   Rowtype_migrate.squash ~sw:(Db_target.sw ())
                     ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                    ~pg_dump ~restrict_key:"rowtype"
-                    ~through:(version 20260102000000) ~migrations:history target
+                    ~process_mgr:(Db_target.process_mgr ()) ~pg_dump
+                    ~restrict_key:"rowtype" ~through:(version 20260102000000)
+                    ~migrations:history target
                 with
                 | Ok b -> b
                 | Error m ->
@@ -677,8 +749,9 @@ let test_a_squash_stands_for_its_history () =
       Db_target.with_postgres (fun target ->
           match
             Rowtype_migrate.squash ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-              ~mono_clock:(Db_target.mono ()) ~pg_dump ~restrict_key:"rowtype"
-              ~through:(version 20260101000000)
+              ~mono_clock:(Db_target.mono ())
+              ~process_mgr:(Db_target.process_mgr ()) ~pg_dump
+              ~restrict_key:"rowtype" ~through:(version 20260101000000)
               ~migrations:
                 [
                   m 20260101000000 "a" "create table a (n float8)";
@@ -726,6 +799,8 @@ let () =
             test_a_failed_dump_names_no_password;
           Alcotest.test_case "a cancelled dump leaves nothing" `Quick
             test_a_cancelled_dump_leaves_nothing;
+          Alcotest.test_case "a dump cancelled in pg_dump ends" `Quick
+            test_a_dump_cancelled_in_pg_dump_ends;
         ] );
       ( "the database",
         [

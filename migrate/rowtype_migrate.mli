@@ -100,8 +100,9 @@ type error =
     (** the server has no database of this name: it is made with
         [rowtype-migrate create] *)
   | `Dump of string
-    (** [pg_dump] could not run, or failed: in words naming the program and
-        never its arguments, which hold the URL *)
+    (** [pg_dump] could not run, or failed: in words naming the program, and
+        what it wrote as errors, never its arguments, which hold the URL, and
+        with the URL and its password masked wherever it said them back *)
   | `Unproved  (** a squash's baseline does not make what the history makes *)
   ]
 (** Every way migrating fails: a polymorphic variant, as a statement's failures
@@ -237,6 +238,7 @@ val dump :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
+  process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
   pg_dump:string ->
@@ -250,7 +252,9 @@ val dump :
 
     [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
     replaced in each word by the scratch database's; it is not given to a shell,
-    so a word cannot hold a space. It dumps the schema alone, with
+    so a word cannot hold a space. It runs through [process_mgr], so a cancelled
+    dump kills it, and what it writes as errors is [`Dump]'s words rather than
+    lines on the caller's terminal. It dumps the schema alone, with
     [restrict_key] as the key a dump otherwise makes up afresh each time, and
     the lines naming the versions of the server and of [pg_dump] are removed, so
     the file changes only when the schema does. *)
@@ -259,6 +263,7 @@ val squash :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
+  process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
   pg_dump:string ->
