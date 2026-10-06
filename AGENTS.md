@@ -192,10 +192,19 @@ A change is done when every box holds:
   optional arguments with defaults, followed by `()`.
 - [ ] **Stdlib naming**: `t`, `create`/`make`, `of_x`/`to_x`, `*_opt`,
   stdlib argument order.
-- [ ] **A name says what a thing is or does.** No metaphors, moods or
-  puns, and no abbreviations beyond the stdlib's (`b` a buffer, `n` a
-  count, `f` a function).
-- [ ] **A number with a reason is a named constant**, the reason beside it.
+- [ ] **A name says what a thing is or does, in the words a person would
+  use where it is read.** No metaphors, moods or puns, and no
+  abbreviations beyond the stdlib's (`b` a buffer, `n` a count, `f` a
+  function). A rename earns itself at a use site: it is made only where a
+  caller's reader misreads the current name or has to look it up, never
+  because a rule can be cited for it, and never to tell apart two names
+  the types already keep apart. A name assembled from parts to satisfy a
+  rule (`renewals_per_idle`, `Call_failed`) is worse than none: where no
+  natural name comes, the plainer one stays -- the one already there, or
+  none.
+- [ ] **A number with a reason is named where nothing beside it already
+  says it**, the reason beside it: a field, a label or a comment that
+  names its unit and purpose (`send_timeout_s = 10.`) needs nothing more.
 - [ ] **No needless cost.** No quadratic walk where a linear one is as
   clear, and no whole result held where streaming is as simple. A claim
   about speed comes with a measurement.
