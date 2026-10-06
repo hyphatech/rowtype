@@ -869,6 +869,27 @@ let test_a_dropped_connection_is_revived_before_begin () =
       | Error (`Not_committed m) -> Alcotest.failf "not committed: %s" m);
       Alcotest.(check int) "the write landed" 1 (committed db))
 
+(* A connection its owner closed is closed for good: a transaction on it is
+   not committed, and runs nothing, rather than opening it again. *)
+let test_a_closed_connection_stays_closed () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target in
+      ok (Pg.exec_raw db "create table t (n int)");
+      Pg.close db;
+      Pg.revive db;
+      (match T.within db (fun db -> insert db 1) with
+      | Error (`Not_committed _) -> ()
+      | Ok () -> Alcotest.fail "a closed connection committed"
+      | Error (#S.error as e) ->
+          Alcotest.failf "the work ran: %s" (S.error_to_string e));
+      (match Pg.exec_raw db "select 1" with
+      | Error _ -> ()
+      | Ok () -> Alcotest.fail "a closed connection was opened again");
+      let other = Db_target.connect target in
+      Fun.protect
+        ~finally:(fun () -> Pg.close other)
+        (fun () -> Alcotest.(check int) "nothing written" 0 (committed other)))
+
 (* A connection lost inside a transaction last heard it was in one; the
    next transaction revives it rather than refusing it as nested. *)
 let test_a_connection_lost_inside_a_transaction_is_revived () =
@@ -1319,6 +1340,8 @@ let () =
             test_a_transaction_inside_another_is_refused;
           Alcotest.test_case "a dropped connection is revived before begin"
             `Quick test_a_dropped_connection_is_revived_before_begin;
+          Alcotest.test_case "a closed connection stays closed" `Quick
+            test_a_closed_connection_stays_closed;
           Alcotest.test_case "a connection lost in a transaction is revived"
             `Quick test_a_connection_lost_inside_a_transaction_is_revived;
           Alcotest.test_case "an observer sees every statement" `Quick

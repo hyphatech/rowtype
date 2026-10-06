@@ -14,10 +14,20 @@ type observer = { around : 'a. string -> (unit -> 'a) -> 'a }
 
 let unobserved = { around = (fun _ f -> f ()) }
 
+(* Whether its owner closed it. The driver says only that a connection is
+   closed, by [close] or by a failure alike; one a failure closed is made
+   again before a transaction, and one its owner closed is not. *)
+type ownership = Kept | Closed_by_owner
+
 (* A connection, what watches the statements it runs, which a pool hands
    to every connection it lends, and the monotonic clock a statement is
    timed on, which a wall clock that jumps cannot move. *)
-type conn = { pg : Pg.t; observe : observer; now : unit -> Mtime.t }
+type conn = {
+  pg : Pg.t;
+  observe : observer;
+  now : unit -> Mtime.t;
+  mutable ownership : ownership;
+}
 
 let src =
   Logs.Src.create "rowtype-postgres" ~doc:"Each statement, and how long it took"
@@ -357,20 +367,31 @@ let on_database ~server name =
 let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?statement_cache
     ?(observe = unobserved) c =
   Result.map
-    (fun pg -> { pg; observe; now = (fun () -> Eio.Time.Mono.now clock) })
+    (fun pg ->
+      {
+        pg;
+        observe;
+        now = (fun () -> Eio.Time.Mono.now clock);
+        ownership = Kept;
+      })
     (Result.map_error db_error
        (Pg.connect ~sw ~net ~clock
           ~parameters:(with_output_styles parameters)
           ?timeout_s ?statement_cache c))
 
-let close t = Pg.close t.pg
+let close t =
+  t.ownership <- Closed_by_owner;
+  Pg.close t.pg
 
 (* A connection a failure closed -- the server restarted, a failover -- is
    made again in place, rather than left to fail every statement after it.
    Asked before a transaction, which is the only point where starting again
    loses nothing. *)
 let revive t =
-  if Pg.closed t.pg then ignore (Pg.reset t.pg : (unit, Pg.error) result)
+  match t.ownership with
+  | Closed_by_owner -> ()
+  | Kept ->
+      if Pg.closed t.pg then ignore (Pg.reset t.pg : (unit, Pg.error) result)
 
 let timeout_s t = Pg.timeout t.pg
 let set_timeout_s t = Pg.set_timeout t.pg
@@ -391,7 +412,7 @@ module Pool = struct
 
   let use ?wait_s t f =
     Pg.Pool.use ?wait_s t.pool (fun pg ->
-        f { pg; observe = t.observe; now = t.now })
+        f { pg; observe = t.observe; now = t.now; ownership = Kept })
 
   type stats = Pg.Pool.stats = {
     size : int;

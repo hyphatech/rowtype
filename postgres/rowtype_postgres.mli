@@ -81,13 +81,15 @@ val connect :
     transaction's [begin] and [commit] among them, and nothing unless given. *)
 
 val close : conn -> unit
-(** Close it for good, telling the server; its next statement says so. A no-op
-    on one already closed. *)
+(** Close it for good, telling the server; its next statement says so, and
+    neither {!revive} nor a {!Transaction.within} opens it again. A no-op on one
+    already closed. *)
 
 val revive : conn -> unit
 (** Make again a connection a failure closed -- the server restarted, say -- in
-    place, with its parameters. A no-op on an open one; one that cannot be made
-    again stays closed, and its next statement says so. *)
+    place, with its parameters. A no-op on an open one and on one {!close}
+    closed; one that cannot be made again stays closed, and its next statement
+    says so. *)
 
 val timeout_s : conn -> float option
 (** The bound on every read and write, in seconds, [None] for none. *)
