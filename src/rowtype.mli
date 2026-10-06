@@ -41,6 +41,17 @@ type error =
         with a concurrent one -- a serialization failure, or a deadlock -- in
         its words: running the transaction again may succeed, which is the one
         thing no other failure here says *)
+  | `Closed
+    (** the connection was closed before the statement was sent -- by its owner,
+        or by a failure before it -- so nothing was sent and nothing it would
+        have done was done *)
+  | `Lost of string
+    (** the connection failed with the statement sent and no answer back -- a
+        timeout, a socket that broke, a server that ended the session -- in
+        words for a log: what the statement did is unknown, and a write may have
+        been applied. Inside a transaction, a statement lost before its [COMMIT]
+        did nothing, since an open transaction ends with its connection; only a
+        lost [COMMIT] may have committed. *)
   | `Db of string  (** anything else, in words for a log *) ]
 (** A polymorphic variant, so a statement's failures join the ones a caller adds
     around it -- a pool's, a transaction's, the work's own -- in one result:
@@ -305,6 +316,10 @@ module type Backend = sig
       [None] for a NULL, answering the fold and how many rows the statement
       changed, or sent where it changes none, as the database counts them. *)
 
+  val batch : conn -> string -> param list list -> (unit, failure) result
+  (** Run one statement once for each list of parameters, in one round trip and
+      as one: if any run fails, none applies. Rows are discarded. *)
+
   val script : conn -> string -> (unit, failure) result
   (** Run statements with no parameters, several if the text has several, and
       discard their rows. *)
@@ -322,8 +337,9 @@ module type Backend = sig
   val error : failure -> error
   (** The failure told as {!type-error}: a constraint refusing the write because
       of other rows is [`Conflict], naming the constraint where the database
-      does, and anything else is [`Db] in words for a log -- never a parameter's
-      value. *)
+      does; a connection closed before the statement was sent is [`Closed], and
+      one that failed with it in flight [`Lost]; and anything else is [`Db] in
+      words for a log -- never a parameter's value. *)
 end
 
 (** What {!Make} gives: statements run on a backend's connection. *)
@@ -346,6 +362,14 @@ module type S = sig
       a {!Rowtype.list} statement is decoded and handed to [f] as it arrives, so
       a result of any size is read in the memory of one row. A row that does not
       decode is the answer, and [f] sees none after it. *)
+
+  val run_many :
+    conn -> ('p, unit) statement -> 'p list -> (unit, [> error ]) result
+  (** [run_many db statement values]: an {!exec} statement run once for each
+      value, in one round trip and all or nothing -- if any run fails, none
+      applies, and the answer is that failure. No values sends nothing. A
+      statement that answers a row, a {!find} of [unit], is [`Db] before
+      anything is sent, since a batch reads no rows. *)
 
   val exec_raw : conn -> string -> (unit, [> error ]) result
   (** For DDL and for control statements ([begin], [commit]): no parameters, and

@@ -50,7 +50,7 @@ let reads db ty sql = Pg.run db (S.find ~params:S.unit ~row:ty sql) ()
 let refused what = function
   | Ok _ -> Alcotest.failf "%s was read" what
   | Error (`Db _) -> ()
-  | Error (`Conflict _ | `Not_serializable _) ->
+  | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _) ->
       Alcotest.failf "%s: not a decoding failure" what
 
 let test_integers () =
@@ -319,7 +319,8 @@ let test_an_element_is_named () =
       let said ty sql =
         match reads db ty sql with
         | Error (`Db m) -> m
-        | Ok _ | Error (`Conflict _ | `Not_serializable _) ->
+        | Ok _ | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _)
+          ->
             Alcotest.failf "%s: %s was read" format sql
       in
       Alcotest.(check string)
@@ -328,8 +329,68 @@ let test_an_element_is_named () =
         (said S.(t2 int (array int)) "select 0, array[1, null]");
       Alcotest.(check string)
         (format ^ ": not its type")
-        "column 1, element 3: expected INT, got text that is not one"
-        (said (S.array S.int) "select array['1', '2', 'x']"))
+        "column 1, element 3: expected INT, got an element of an array of type \
+         1016"
+        (said (S.array S.int) "select array[1, 2, 9223372036854775807]::int8[]"))
+
+(* An element is read as its type alone is: a [real] rounded to single
+   precision as a [real] column is, and a [text] refused as an [int] as a
+   [text] column is, whatever its text says. *)
+let test_an_element_is_its_type () =
+  on_each_format [] (fun format db ->
+      Alcotest.(check (list (float 0.)))
+        (format ^ ": 0.1 in a real[], as in a real")
+        [ ok (reads db S.float "select 0.1::real") ]
+        (ok (reads db (S.array S.float) "select array[0.1::real]"));
+      refused
+        (format ^ ": a text[] as an array of int")
+        (reads db (S.array S.int) "select array['42'::text]");
+      refused
+        (format ^ ": a text[] as an array of bool")
+        (reads db (S.array S.bool) "select array['t'::text]");
+      refused
+        (format ^ ": an int4[] as an array of JSON")
+        (reads db (S.array S.json) "select array[1::int4]"))
+
+(* A type the database made has no oid that says what it is, so it is read
+   through a cast, and a read without one says so. *)
+let test_an_enum_is_read_through_a_cast () =
+  on_each_format
+    [ "drop type if exists mood"; "create type mood as enum ('calm', 'cross')" ]
+    (fun format db ->
+      Alcotest.(check string)
+        (format ^ ": cast") "calm"
+        (ok (reads db S.text "select 'calm'::mood::text"));
+      Alcotest.(check (list string))
+        (format ^ ": an array, cast")
+        [ "calm"; "cross" ]
+        (ok (reads db (S.array S.text) "select '{calm,cross}'::mood[]::text[]"));
+      List.iter
+        (fun (what, cast, said) ->
+          match said with
+          | Error (`Db m) ->
+              Alcotest.(check bool)
+                (format ^ ": " ^ what ^ " says to cast: " ^ m)
+                true
+                (String.ends_with ~suffix:("cast it, as " ^ cast) m)
+          | Ok _ | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _)
+            ->
+              Alcotest.failf "%s: %s was read" format what)
+        [
+          ( "an enum",
+            "::text",
+            Result.map ignore (reads db S.text "select 'calm'::mood") );
+          ( "an array of one",
+            "::text[]",
+            Result.map ignore
+              (reads db (S.array S.text) "select '{calm}'::mood[]") );
+        ];
+      refused
+        (format ^ ": an enum as JSON")
+        (reads db S.json "select 'calm'::mood");
+      refused
+        (format ^ ": a numeric as an int")
+        (reads db S.int "select 1::numeric"))
 
 let () =
   Db_target.required ~suite:"types";
@@ -364,5 +425,9 @@ let () =
             test_any_lower_bound_is_read;
           Alcotest.test_case "an element is named" `Quick
             test_an_element_is_named;
+          Alcotest.test_case "an element is its type" `Quick
+            test_an_element_is_its_type;
+          Alcotest.test_case "an enum is read through a cast" `Quick
+            test_an_enum_is_read_through_a_cast;
         ] );
     ]

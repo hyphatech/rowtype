@@ -84,12 +84,15 @@ A statement says how many rows it answers:
 `Pg.fold db statement args ~init f` reads a `list` statement's rows as they
 arrive, so a result of any size is read in the memory of one row.
 
+`Pg.run_many db statement values` runs an `exec` statement once for each
+value in one round trip, all or nothing: if any run fails, none applies.
+
 | Column | Postgres | OCaml |
 |---|---|---|
 | `S.int` | `int2`, `int4`, `int8`, `oid` | `int`; an `int8` past 63 bits is refused |
 | `S.int64` | `int2`, `int4`, `int8`, `oid` | `int64`, the whole of an `int8` |
 | `S.float` | `float4`, `float8` | `float` |
-| `S.text` | `text`, `varchar`, `char`, `name`, an enum's label | `string` |
+| `S.text` | `text`, `varchar`, `char`, `name`, `uuid`, `json`, `jsonb` | `string` |
 | `S.bytes` | `bytea` | `string` |
 | `S.bool` | `bool` | `bool` |
 | `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond |
@@ -99,8 +102,10 @@ arrive, so a result of any size is read in the memory of one row.
 | `S.uuid` | `uuid` | `Uuidm.t` |
 | `S.json` | `json`, `jsonb` | `string`, the document |
 
-Any other type -- `numeric`, `time`, a range, `inet` -- is read as its text:
-cast it in the SQL (`price::text`) and read it with `S.text`.
+Any other type -- `numeric`, `time`, a range, `inet`, an enum -- is read
+through a cast in the SQL (`price::text`, `mood::text`, `moods::text[]`) and
+`S.text`, and a read without one is refused, saying so. An enum is written
+from `S.text` as it is.
 
 `S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map
 a column onto your own type. A list bound as an array writes many rows in one
@@ -127,8 +132,12 @@ Every failure is a value. `` `Conflict (Some "users_email_key") `` is a
 unique, exclusion or foreign-key constraint that refused the write, named.
 A NOT NULL or CHECK violation is the program's mistake, so it is `` `Db ``.
 `` `Not_serializable `` is a
-transaction a concurrent one won. `` `Db `` is anything else. They are
-polymorphic variants, so they join your own errors in one result.
+transaction a concurrent one won. `` `Closed `` is a connection closed
+before the statement was sent, so nothing it would have done was done, and
+`` `Lost `` one that failed with the statement in flight -- a timeout, a
+broken socket, a server that ended the session -- so a write may have been
+applied. `` `Db `` is anything else. They are polymorphic variants, so they
+join your own errors in one result.
 
 ```ocaml
 Pg.Transaction.within db ~isolation:Serializable ~retries:3 (fun db ->
@@ -138,7 +147,8 @@ Pg.Transaction.within db ~isolation:Serializable ~retries:3 (fun db ->
 ```
 
 `Ok` commits and `Error` rolls back. A transaction that could not commit is
-`` `Not_committed ``, never a silent success. The transaction's own failures
+`` `Not_committed ``, never a silent success, and one whose `COMMIT` was
+sent with no answer back is `` `Lost ``: it may have committed. The transaction's own failures
 are `Pg.Transaction.failure`, so a caller whose errors are an ordinary
 variant tells them from its own in one arm:
 

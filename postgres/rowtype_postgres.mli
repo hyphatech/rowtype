@@ -17,7 +17,12 @@
     Each statement is a [debug] line on [rowtype-postgres] with how long it
     took: its first line of text, never its parameters. A statement runs on the
     calling fiber, as an Eio effect, and a connection is one fiber's at a time.
-*)
+    A raise from {!fold}'s function passes, and closes the connection, whose
+    answer was read only in part: its next statement is [`Closed] until
+    {!revive}. A fiber cancelled with a statement in flight closes its
+    connection and asks the server to cancel the statement, waiting a few
+    seconds at most for the server to take the request, so nothing runs on for
+    nobody. *)
 
 module Conninfo = Postgres_eio.Conninfo
 (** Connection strings, both forms. *)
@@ -53,8 +58,9 @@ val copy_in :
     the row's arity is refused before anything is sent. A row that cannot be
     bound, a constraint and a raise from the sequence each fail the whole COPY,
     with nothing written and the connection usable; the raise propagates.
-    Cancellation closes the connection. For a few rows, an [insert] of
-    [unnest]ed arrays is one statement too. *)
+    Cancellation closes the connection and cancels the COPY, as for any
+    statement. For a few rows, an [insert] of [unnest]ed arrays is one statement
+    too. *)
 
 val conninfo : string -> (Conninfo.t, [> Rowtype.error ]) result
 (** A connection string read, or what in it could not be. *)
@@ -156,16 +162,22 @@ module Listener : sig
     sw:Eio.Switch.t ->
     net:_ Eio.Net.t ->
     mono_clock:_ Eio.Time.Mono.t ->
+    ?parameters:(string * string) list ->
     ?timeout_s:float ->
     ?heartbeat_s:float ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
-  (** A connection that only listens, as {!connect} makes one; [heartbeat_s] is
+  (** A connection that only listens, made as [Postgres_eio.Listener.connect]
+      makes one, [parameters] and [timeout_s] passed through; [heartbeat_s] is
       how long {!next} waits in silence before it pings the server, 10 unless
       given. *)
 
   val listen : t -> string -> (unit, [> Rowtype.error ]) result
   (** [LISTEN] on a channel named exactly as given. *)
+
+  val unlisten : t -> string -> (unit, [> Rowtype.error ]) result
+  (** [UNLISTEN] a channel, named as {!listen} named it: nothing more is heard
+      on it, and a reconnection does not listen to it again. *)
 
   val next : t -> (event, [> Rowtype.error ]) result
   (** The next notification, or a wait for one; a lost connection is made again
@@ -197,7 +209,11 @@ module Transaction : sig
     | `Not_serializable of string
       (** its [COMMIT] found it could not be ordered with a concurrent
           transaction, as a statement's {!Rowtype.error} says when one does, and
-          its retries did not get past it *) ]
+          its retries did not get past it *)
+    | `Lost of string
+      (** its [COMMIT] was sent and the connection failed before the answer
+          came: it may have committed, as a statement's {!Rowtype.error} says of
+          a write lost in flight *) ]
   (** The transaction's own failures, which {!within} adds to the work's: a
       caller tells them from its own as [#Transaction.failure], and names them
       in an error type of its own as [[ my_error | Transaction.failure ]]. *)
@@ -229,15 +245,19 @@ module Transaction : sig
 
       [`Not_committed] replaces the work's answer when the transaction could not
       begin -- on a connection {!revive} could not make again, with its reason
-      --, when [COMMIT] failed, or when the work answered [Ok] in a transaction
-      a failed statement had already aborted -- an error the work swallowed. A
-      refusal from an aborted transaction is the work's own answer and is kept,
-      and a kept refusal there keeps nothing it wrote, which a [warn] line says.
-      A transaction already open on the connection -- a [within] inside another
-      -- is [`Not_committed] before anything begins, since its [COMMIT] would
-      end the outer one, and the outer one goes on. Each [`Not_committed] is an
-      [error] line on [rowtype-postgres]. A raise inside [work] rolls back and
-      passes. *)
+      --, when the server refused its [COMMIT], or when the work answered [Ok]
+      in a transaction a failed statement had already aborted -- an error the
+      work swallowed. [`Lost] replaces it when the connection failed with
+      [COMMIT] in flight, since what the server did is not known; a statement of
+      the work lost before it is the work's own answer, and did nothing, as the
+      transaction ended with its connection. A refusal from an aborted
+      transaction is the work's own answer and is kept, and a kept refusal there
+      keeps nothing it wrote, which a [warn] line says. A transaction already
+      open on the connection -- a [within] inside another -- is [`Not_committed]
+      before anything begins, since its [COMMIT] would end the outer one, and
+      the outer one goes on. Each [`Not_committed] and [`Lost] is an [error]
+      line on [rowtype-postgres]. A raise inside [work] rolls back and passes.
+  *)
 end
 
 (** {1 Statements against the database} *)
@@ -250,12 +270,14 @@ val verify :
     says of each compared with what the statement declares: how many parameters
     and, for a statement that reads rows, how many columns, and each one's type
     -- an [int] an integer or an [oid], a [float] a float, a [text] text, a
-    name, a uuid, JSON or an enum's label, and the rest their own, a domain as
-    the type it is made from. A parameter the database could not type is left to
-    it. [`Disagreements] is every problem, in words for a person, each naming
-    its statement's first line and where in it. Where the check could not ask --
-    a connection lost -- the answer is that failure, as a statement's is, and no
-    statement is said to disagree.
+    name, a uuid or JSON, and the rest their own, a domain as the type it is
+    made from. An enum is written from a [text] and read only through a cast,
+    [::text], as {!run} reads it: a statement this check accepts is one {!run}
+    reads, in binary and in text alike. A parameter the database could not type
+    is left to it. [`Disagreements] is every problem, in words for a person,
+    each naming its statement's first line and where in it. Where the check
+    could not ask -- a connection lost -- the answer is that failure, as a
+    statement's is, and no statement is said to disagree.
 
     Whether a column may be NULL is not checked: the database says so only of a
     column read as it is stored, and a query may promise more, so a check would

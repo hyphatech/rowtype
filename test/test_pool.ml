@@ -162,13 +162,57 @@ let test_a_listener_survives_a_lost_connection () =
               Alcotest.check notification "heard after it" ("jobs", "after")
                 (heard l))))
 
+(* A channel unlistened is heard no more, and the others still are. *)
+let test_a_channel_unlistened_is_not_heard () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target in
+      Fun.protect
+        ~finally:(fun () -> Pg.close db)
+        (fun () ->
+          with_listener target (fun l ->
+              ok (Pg.Listener.listen l "jobs");
+              ok (Pg.Listener.listen l "Mail");
+              ok (Pg.Listener.unlisten l "jobs");
+              notify db "jobs" "lost";
+              notify db "Mail" "kept";
+              Alcotest.check notification "only the one still listened to"
+                ("Mail", "kept") (heard l))))
+
+(* Startup parameters reach the listener's session. *)
+let test_a_listener_takes_parameters () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target in
+      Fun.protect
+        ~finally:(fun () -> Pg.close db)
+        (fun () ->
+          let l =
+            ok
+              (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+                 ~mono_clock:(Db_target.mono ())
+                 ~parameters:[ ("application_name", "a listener") ]
+                 (conninfo target))
+          in
+          Fun.protect
+            ~finally:(fun () -> Pg.Listener.close l)
+            (fun () ->
+              ok (Pg.Listener.listen l "jobs");
+              Alcotest.(check int)
+                "its session, named" 1
+                (ok
+                   (Pg.run db
+                      (S.find ~params:S.unit ~row:S.int
+                         "select count(*)::int from pg_stat_activity where \
+                          application_name = 'a listener' and datname = \
+                          current_database()")
+                      ())))))
+
 let test_a_closed_listener_hears_nothing () =
   Db_target.with_postgres (fun target ->
       with_listener target (fun l ->
           Pg.Listener.close l;
           match Pg.Listener.next l with
-          | Error (`Db _) -> ()
-          | Error (`Conflict _ | `Not_serializable _) ->
+          | Error `Closed -> ()
+          | Error (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) ->
               Alcotest.fail "not the closed connection's failure"
           | Ok _ -> Alcotest.fail "a closed listener heard something"))
 
@@ -196,5 +240,9 @@ let () =
             test_a_listener_survives_a_lost_connection;
           Alcotest.test_case "a closed one hears nothing" `Quick
             test_a_closed_listener_hears_nothing;
+          Alcotest.test_case "a channel unlistened is not heard" `Quick
+            test_a_channel_unlistened_is_not_heard;
+          Alcotest.test_case "it takes parameters" `Quick
+            test_a_listener_takes_parameters;
         ] );
     ]

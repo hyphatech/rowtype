@@ -72,6 +72,7 @@ module Echo = struct
         | S.Bool -> some "a bool" (bool_of_string_opt v))
 
   let fold () _ params ~init ~row = Ok (row init (Array.of_list params), 1)
+  let batch () _ _ = Ok ()
   let script () _ = Ok ()
   let array elements = Some (Elements elements)
 
@@ -273,7 +274,7 @@ let test_an_array_of_arrays_is_refused () =
     | Error (`Db m) ->
         Alcotest.(check string)
           what "an array's element is one column and no array of its own" m
-    | Error (`Conflict _ | `Not_serializable _) ->
+    | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _) ->
         Alcotest.failf "%s: not the shape's error" what
     | Ok _ -> Alcotest.failf "%s: passed" what
   in

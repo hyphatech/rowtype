@@ -72,7 +72,7 @@ let error_to_string : [< error ] -> string = function
   | `Unproved ->
       "the baseline and the migrations after it do not make the database the \
        whole history makes, so nothing was squashed"
-  | (`Conflict _ | `Not_serializable _ | `Db _) as e -> S.error_to_string e
+  | #S.error as e -> S.error_to_string e
 
 let is_baseline m =
   match m.kind with Baseline -> true | Transaction | No_transaction -> false

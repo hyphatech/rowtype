@@ -21,25 +21,30 @@ let exec db sql = Pg.run db (S.exec ~params:S.unit sql) ()
 
 (* A failure as the test reads it: which variant, and for a conflict the
    constraint. *)
-type told = Conflict of string option | Not_serializable | Db
+type told = Conflict of string option | Not_serializable | Closed | Lost | Db
 
 let told = function
   | Ok () -> Alcotest.fail "the statement succeeded"
   | Error (`Conflict name) -> Conflict name
   | Error (`Not_serializable _) -> Not_serializable
+  | Error `Closed -> Closed
+  | Error (`Lost _) -> Lost
   | Error (`Db _) -> Db
 
 let print_told = function
   | Conflict (Some n) -> "Conflict " ^ n
   | Conflict None -> "Conflict"
   | Not_serializable -> "Not_serializable"
+  | Closed -> "Closed"
+  | Lost -> "Lost"
   | Db -> "Db"
 
 let equal_told a b =
   match (a, b) with
   | Conflict x, Conflict y -> Option.equal String.equal x y
-  | Not_serializable, Not_serializable | Db, Db -> true
-  | (Conflict _ | Not_serializable | Db), _ -> false
+  | Not_serializable, Not_serializable | Closed, Closed | Lost, Lost | Db, Db ->
+      true
+  | (Conflict _ | Not_serializable | Closed | Lost | Db), _ -> false
 
 let told_t =
   Alcotest.testable

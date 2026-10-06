@@ -1,12 +1,18 @@
 let ( let* ) = Result.bind
 
 type error =
-  [ `Conflict of string option | `Not_serializable of string | `Db of string ]
+  [ `Conflict of string option
+  | `Not_serializable of string
+  | `Closed
+  | `Lost of string
+  | `Db of string ]
 
 let error_to_string : [< error ] -> string = function
   | `Conflict (Some name) -> Printf.sprintf "the constraint %s refused it" name
   | `Conflict None -> "a constraint refused it"
   | `Not_serializable m -> m
+  | `Closed -> "the connection is closed"
+  | `Lost m -> m
   | `Db m -> m
 
 (* ------------------------------------------------------------------ *)
@@ -105,6 +111,7 @@ module type Backend = sig
     row:('acc -> cell option array -> 'acc) ->
     ('acc * int, failure) result
 
+  val batch : conn -> string -> param list list -> (unit, failure) result
   val script : conn -> string -> (unit, failure) result
   val array : param list -> param
   val elements : cell -> (cell option list, string) result
@@ -124,6 +131,9 @@ module type S = sig
     init:'acc ->
     ('acc -> 'r -> 'acc) ->
     ('acc, [> error ]) result
+
+  val run_many :
+    conn -> ('p, unit) statement -> 'p list -> (unit, [> error ]) result
 
   val exec_raw : conn -> string -> (unit, [> error ]) result
   val commit : conn -> ([ `Committed | `Rolled_back ], [> error ]) result
@@ -348,6 +358,31 @@ module Make (B : Backend) = struct
   let fold db statement args ~init f =
     widen (fold_list db statement args ~init f)
 
+  (* A batch reads no rows, so a statement that answers one cannot be in
+     it: [find] of [unit] has the type of [exec], and is told apart here. *)
+  let many : type p.
+      conn -> (p, unit) statement -> p list -> (unit, error) result =
+   fun db statement values ->
+    match statement.rows with
+    | One _ ->
+        Error
+          (`Db
+             "a statement that answers a row is run alone, not in a batch, \
+              which reads no rows")
+    | Nothing ->
+        let* params =
+          List.fold_left
+            (fun acc v ->
+              let* acc = acc in
+              let* p = encode statement.params v in
+              Ok (p :: acc))
+            (Ok []) values
+        in
+        if List.is_empty params then Ok ()
+        else
+          Result.map_error B.error (B.batch db statement.sql (List.rev params))
+
+  let run_many db statement values = widen (many db statement values)
   let exec_raw db sql = widen (Result.map_error B.error (B.script db sql))
   let commit db = widen (Result.map_error B.error (B.commit db))
 end
