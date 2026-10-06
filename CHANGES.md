@@ -1,16 +1,5 @@
 # Changes
 
-## Unreleased
-
-- `rowtype`: `S.enum label values` reads and writes an enum through the
-  labels of the program's own type, with no cast in the SQL, alone or in
-  an array; a row holding a label none of `values` has is refused, naming
-  its column. `rowtype-postgres`: `verify` holds such a column to an enum
-  that has every one of the labels, and refuses a list of none or one that
-  repeats a label; a label only the database has is no disagreement, so a
-  migration may add one ahead of the code. Breaking for a backend:
-  `Enum` joins `Rowtype.scalar`.
-
 ## 0.2.0 (2026-10-06)
 
 - `rowtype-postgres`: an array's element is read as its own type is, so
@@ -21,9 +10,18 @@
   binary and in text alike, where the driver alone read any type with no
   binary form as its text -- a `numeric` as an `int`, an enum as JSON --
   and `S.text` read a `bool`, an integer, or with no statement cache a
-  `date`. A type the database made, an enum among them, is read through a
-  cast, `::text`, which its refusal names. Breaking: such reads are
-  refused, and an enum read as `S.text` needs the cast.
+  `date`. An enum is read by `S.enum`, below, and any other type the
+  database made through a cast, `::text`, which its refusal names.
+  Breaking: such reads are refused, and an enum read as `S.text` needs
+  `S.enum` or the cast.
+- `rowtype`: `S.enum label values` reads and writes an enum through the
+  labels of the program's own type, with no cast in the SQL, alone or in
+  an array; a row holding a label none of `values` has is refused, naming
+  its column. `rowtype-postgres`: `verify` holds such a column to an enum
+  that has every one of the labels, and refuses a list of none or one that
+  repeats a label; a label only the database has is no disagreement, so a
+  migration may add one ahead of the code. Breaking for a backend:
+  `Enum` joins `Rowtype.scalar`.
 - `rowtype`: `` `Closed `` and `` `Lost `` join `Rowtype.error`. A
   statement on a closed connection is `` `Closed ``, sent nothing and did
   nothing; one whose connection failed in flight -- a timeout, a broken
