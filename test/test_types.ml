@@ -292,7 +292,25 @@ let test_a_second_dimension_is_refused () =
   on_each_format [] (fun format db ->
       refused
         (format ^ ": a two-dimensional array")
-        (reads db (S.array S.int) "select array[[1, 2], [3, 4]]"))
+        (reads db (S.array S.int) "select array[[1, 2], [3, 4]]");
+      refused
+        (format ^ ": a two-dimensional array with bounds")
+        (reads db (S.array S.int) "select '[0:1][1:2]={{1,2},{3,4}}'::int[]"))
+
+(* A list has no lower bound: an array that starts anywhere but 1 is read
+   in order, as one that starts at 1 is. *)
+let test_any_lower_bound_is_read () =
+  on_each_format [] (fun format db ->
+      Alcotest.(check (list int))
+        (format ^ ": from 0") [ 1; 2 ]
+        (ok (reads db (S.array S.int) "select '[0:1]={1,2}'::int[]"));
+      Alcotest.(check (list (option string)))
+        (format ^ ": from -3, holding what a bound is written with")
+        [ Some "[1:2]="; None; Some "}" ]
+        (ok
+           (reads db
+              (S.array (S.opt S.text))
+              "select '[-3:-1]={\"[1:2]=\",NULL,\"}\"}'::text[]")))
 
 (* An element that does not read is named by its column and its place,
    counted from 1 as Postgres counts them. *)
@@ -342,6 +360,8 @@ let () =
           Alcotest.test_case "bytes" `Quick test_arrays_of_bytes;
           Alcotest.test_case "a second dimension is refused" `Quick
             test_a_second_dimension_is_refused;
+          Alcotest.test_case "any lower bound is read" `Quick
+            test_any_lower_bound_is_read;
           Alcotest.test_case "an element is named" `Quick
             test_an_element_is_named;
         ] );

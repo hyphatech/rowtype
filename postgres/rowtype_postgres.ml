@@ -180,8 +180,8 @@ module Backend = struct
           (List.map (function None -> "NULL" | Some v -> quoted v) elements)
       ^ "}")
 
-  (* An array's text form, one dimension and its lower bound 1, which is
-     what Postgres writes: [{1,"a b",NULL}], a quoted element's escapes
+  (* An array's text form, one dimension, as Postgres writes it:
+     [{1,"a b",NULL}], a quoted element's escapes
      undone and an unquoted NULL none. Each element is a cell in text, read
      as the element's scalar reads one. *)
   let elements cell =
@@ -229,11 +229,31 @@ module Backend = struct
             Ok (List.rev (element :: acc))
           else Error "not an array"
         in
+        (* Where the lower bound is not 1 Postgres writes the bounds first,
+           [[0:1]={1,2}]; a list has no bounds to keep, so its elements are
+           read in order, and one pair of bounds per dimension says how many
+           there are. *)
+        let braces =
+          if n > 0 && Char.equal raw.[0] '[' then
+            match String.index_opt raw '=' with
+            | None -> Error "not an array"
+            | Some e ->
+                let dimensions =
+                  String.fold_left
+                    (fun k c -> if Char.equal c '[' then k + 1 else k)
+                    0 (String.sub raw 0 e)
+                in
+                if dimensions = 1 then Ok (e + 1)
+                else Error "an array of more than one dimension"
+          else Ok 0
+        in
         match column.format with
         | Pg.Column.Binary -> Error "an array in binary, which is read in text"
         | Pg.Column.Text ->
+            let* start = braces in
             if String.equal raw "{}" then Ok []
-            else if n >= 2 && Char.equal raw.[0] '{' then go 1 []
+            else if n - start >= 2 && Char.equal raw.[start] '{' then
+              go (start + 1) []
             else Error "not an array")
 
   (* A transaction a failed statement aborted is not an error to COMMIT:

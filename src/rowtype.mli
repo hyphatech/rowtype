@@ -114,7 +114,9 @@ val array : 'a ty -> 'a list ty
     [array key] for keys read through their own parse. An element is one column
     and no array of its own -- one dimension, as a list has -- and any other is
     the statement's [`Db] error, which a backend's check of statements names
-    before any runs. *)
+    before any runs. A list has no first index: an array is read in order from
+    wherever the database starts it, and one written starts where the database
+    starts a new one. *)
 
 val t2 : 'a ty -> 'b ty -> ('a * 'b) ty
 val t3 : 'a ty -> 'b ty -> 'c ty -> ('a * 'b * 'c) ty
