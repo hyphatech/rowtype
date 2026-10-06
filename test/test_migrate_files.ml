@@ -45,6 +45,12 @@ let test_files_are_read_in_version_order () =
   Alcotest.(check bool)
     "one version twice" true
     (refused [ a; file dir "20260101000000_again.sql" "" ]);
+  Alcotest.(check bool)
+    "a stamp with no name" true
+    (refused [ file dir "20260103000000_.sql" "" ]);
+  Alcotest.(check bool)
+    "a stamp of fifteen digits" true
+    (refused [ file dir "202601030000000_long.sql" "" ]);
   match C.of_directory dir with
   | Ok _ -> Alcotest.fail "a directory holding a stray file was read"
   | Error (`Files m) ->
@@ -178,6 +184,22 @@ let version n =
   | Some v -> v
   | None -> Alcotest.failf "%d is not a version" n
 
+(* A version is a number of fourteen digits, and nothing either side. *)
+let test_a_version_is_fourteen_digits () =
+  let is_version n = Option.is_some (C.version_of_int n) in
+  Alcotest.(check (list bool))
+    "13 digits, the first and last of 14, and 15"
+    [ false; true; true; false; false; false ]
+    (List.map is_version
+       [
+         9_999_999_999_999;
+         10_000_000_000_000;
+         99_999_999_999_999;
+         100_000_000_000_000;
+         0;
+         -20_260_101_000_000;
+       ])
+
 (* A squash is through one of the files, and has something before it to
    replace; both are refused before the server is asked anything, which is
    why the URL names no server. *)
@@ -218,6 +240,8 @@ let () =
         [
           Alcotest.test_case "read in version order" `Quick
             test_files_are_read_in_version_order;
+          Alcotest.test_case "a version is fourteen digits" `Quick
+            test_a_version_is_fourteen_digits;
           Alcotest.test_case "a directive is the first line" `Quick
             test_a_directive_is_the_first_line;
           Alcotest.test_case "a baseline is the oldest and the only one" `Quick
