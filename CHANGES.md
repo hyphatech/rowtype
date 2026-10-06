@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.2.0 (2026-10-06)
 
 - `rowtype-postgres`: an array's element is read as its own type is, so
   a `real[]` holds the same floats a `real` does, and a `text[]` is
