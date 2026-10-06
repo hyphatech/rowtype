@@ -584,7 +584,7 @@ let rec resolve db oid =
   | Ok (Some (name, _, _, "A", element)) -> Ok (Some (Array (element, name)))
   | Ok (Some (name, _, _, _, _)) -> Ok (Some (Base (oid, name)))
   | Ok None -> Ok None
-  | Error e -> Error (S.error_to_string e)
+  | Error e -> Error e
 
 let scalar_name : type a. a S.scalar -> string = function
   | S.Int -> "int"
@@ -724,7 +724,7 @@ let problems db (declared : S.declared) =
   match Pg.describe db.pg declared.sql with
   | Error (Pg.Server _ as e) ->
       Ok [ "the database refuses it: " ^ Pg.error_to_string e ]
-  | Error e -> Error (Pg.error_to_string e)
+  | Error e -> Error (db_error e)
   | Ok d ->
       let* parameters =
         mismatches db ~what:"parameter" ~counted:"parameters"
@@ -745,11 +745,13 @@ let problems db (declared : S.declared) =
 
 let verify db statements =
   let rec each found = function
-    | [] -> if List.is_empty found then Ok () else Error (List.rev found)
+    | [] ->
+        if List.is_empty found then Ok ()
+        else Error (`Disagreements (List.rev found))
     | statement :: rest -> (
         let declared = S.declared statement in
         match problems db declared with
-        | Error m -> Error [ "the check could not run: " ^ m ]
+        | Error e -> Error e
         | Ok statement_problems ->
             each
               (List.rev_append

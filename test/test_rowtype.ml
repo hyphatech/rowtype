@@ -416,6 +416,15 @@ let test_bytes_round_trip () =
                  "select $1 = decode('005c27ff', 'hex')")
               "\x00\\'\xff")))
 
+(* What [verify] says of statements: [Ok], or every disagreement; a check
+   that could not run fails the case. *)
+let verified db statements =
+  match Pg.verify db statements with
+  | Ok () -> Ok ()
+  | Error (`Disagreements problems) -> Error problems
+  | Error (#S.error as e) ->
+      Alcotest.failf "the check could not run: %s" (S.error_to_string e)
+
 (* A statement's declared shapes against what the database says of it,
    without running it: what agrees passes -- an enum read as text, a domain
    as what it is made from -- and each disagreement is named. *)
@@ -442,7 +451,7 @@ let test_statements_are_checked_against_the_database () =
         ]
       in
       Alcotest.(check (result unit (list string)))
-        "agreeing, passes" (Ok ()) (Pg.verify db right);
+        "agreeing, passes" (Ok ()) (verified db right);
       let wrong =
         [
           S.Any (S.list ~params:S.unit ~row:S.int "select c from v");
@@ -451,9 +460,9 @@ let test_statements_are_checked_against_the_database () =
           S.Any (S.list ~params:S.unit ~row:S.int "selec n from v");
         ]
       in
-      match Pg.verify db wrong with
+      match verified db wrong with
       | Ok () -> Alcotest.fail "every disagreement passed"
-      | Error ps ->
+      | Error ps -> (
           Alcotest.(check int) "one problem each" 4 (List.length ps);
           List.iter2
             (fun p says -> Alcotest.(check bool) p true (contains p says))
@@ -464,12 +473,16 @@ let test_statements_are_checked_against_the_database () =
               "1 columns declared, and the database has 2";
               "the database refuses it";
             ];
-          (* A check that cannot ask is one failure, not one per column. *)
+          (* A check that cannot ask is its failure, and no statement is
+             said to disagree. *)
           Pg.close db;
-          Alcotest.(check (result unit (list string)))
-            "a closed connection, said once"
-            (Error [ "the check could not run: the connection is closed" ])
-            (Pg.verify db (right @ wrong)))
+          match Pg.verify db (right @ wrong) with
+          | Error (`Db m) -> Alcotest.(check bool) m true (contains m "closed")
+          | Error (`Disagreements ps) ->
+              Alcotest.failf "a closed connection disagreed: %s"
+                (String.concat "; " ps)
+          | Error (`Conflict _ | `Not_serializable _) | Ok () ->
+              Alcotest.fail "a closed connection was checked"))
 
 (* An array goes out as one parameter and comes back as a list, every
    element whatever it holds -- a comma, a quote, a backslash, a space, the
@@ -564,7 +577,7 @@ let test_arrays_are_checked_by_their_elements () =
   on_db [ "create table c (n smallint[], t text[])" ] (fun db ->
       Alcotest.(check (result unit (list string)))
         "agreeing" (Ok ())
-        (Pg.verify db
+        (verified db
            [
              S.Any
                (S.list ~params:(S.array S.text)
@@ -572,7 +585,7 @@ let test_arrays_are_checked_by_their_elements () =
                   "select n, t from c where t = $1");
            ]);
       let one_problem what row sql says =
-        match Pg.verify db [ S.Any (S.list ~params:S.unit ~row sql) ] with
+        match verified db [ S.Any (S.list ~params:S.unit ~row sql) ] with
         | Error [ p ] -> Alcotest.(check bool) p true (contains p says)
         | Error ps -> Alcotest.failf "%s: %d problems" what (List.length ps)
         | Ok () -> Alcotest.failf "%s passed" what
@@ -640,7 +653,7 @@ let test_uuid_and_json_round_trip () =
       Alcotest.(check string) "json, as it was written" doc read_doc;
       Alcotest.(check string)
         "jsonb, as Postgres keeps it" {|{"a": "x", "b": [1, 2]}|} read_data;
-      match Pg.verify db [ S.Any insert; S.Any select ] with
+      match verified db [ S.Any insert; S.Any select ] with
       | Ok () -> ()
       | Error ps -> Alcotest.failf "refused: %s" (String.concat "; " ps))
 

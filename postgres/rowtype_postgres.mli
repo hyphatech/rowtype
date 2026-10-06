@@ -243,16 +243,20 @@ end
 
 (** {1 Statements against the database} *)
 
-val verify : conn -> Rowtype.any list -> (unit, string list) result
+val verify :
+  conn ->
+  Rowtype.any list ->
+  (unit, [> `Disagreements of string list | Rowtype.error ]) result
 (** Every statement described by the database without being run, and what it
     says of each compared with what the statement declares: how many parameters
     and, for a statement that reads rows, how many columns, and each one's type
     -- an [int] an integer or an [oid], a [float] a float, a [text] text, a
     name, a uuid, JSON or an enum's label, and the rest their own, a domain as
     the type it is made from. A parameter the database could not type is left to
-    it. [Error] is every problem, each naming its statement's first line and
-    where in it; or, where the check could not ask -- a connection lost -- that
-    alone.
+    it. [`Disagreements] is every problem, in words for a person, each naming
+    its statement's first line and where in it. Where the check could not ask --
+    a connection lost -- the answer is that failure, as a statement's is, and no
+    statement is said to disagree.
 
     Whether a column may be NULL is not checked: the database says so only of a
     column read as it is stored, and a query may promise more, so a check would

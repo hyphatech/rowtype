@@ -155,7 +155,9 @@ with
 ## Checking statements
 
 `Pg.verify db statements` has Postgres describe every statement without
-running it, and compares the parameters and columns with what you declared.
+running it, and compares the parameters and columns with what you declared:
+`` `Disagreements `` names every problem, and a check that could not ask --
+a lost connection -- is that failure, as a statement's is.
 Run it in a test against a migrated database, and a renamed column fails the
 test instead of a request.
 

@@ -102,7 +102,12 @@ let test_every_scalar_against_every_type () =
                            (if expected then "reads" else "does not read")
                            t side)
                         expected
-                        (Result.is_ok (Pg.verify db [ statement ])))
+                        (match Pg.verify db [ statement ] with
+                        | Ok () -> true
+                        | Error (`Disagreements _) -> false
+                        | Error (#S.error as e) ->
+                            Alcotest.failf "the check could not run: %s"
+                              (S.error_to_string e)))
                     [ ("column", S.Any column); ("parameter", S.Any parameter) ])
                 types)
             scalars))
