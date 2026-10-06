@@ -143,13 +143,17 @@ A change is done when every box holds:
   `Hashtbl`'s keys: accepted over plain data -- an `int`, a `char`, a
   `string` -- where nothing can hold a closure or an abstract type, and this
   rule broken over anything else.
-- [ ] **No `open`**, local ones (`M.( ... )`) included. Alias modules at
-  the top of the file instead (`module P = Protocol`), and annotate a
+- [ ] **No `open` of an ordinary module**, file-wide or local: its every
+  name comes into scope, a reader cannot tell where one came from, and a
+  name the module gains later silently shadows one of ours. Alias modules
+  at the top of the file instead (`module P = Protocol`), and annotate a
   value's type once rather than qualify its fields (`(g : Store.game)`,
-  then `g.size`, never `g.Store.size`). The exceptions are a module made to
-  be opened -- binding operators and nothing else, or combinators whose
-  `.mli` says they are written inside `M.( ... )` -- and an `open` the
-  repository's rules name.
+  then `g.size`, never `g.Store.size`). **A module made to be opened is
+  opened**: one of binding operators and nothing else, file-wide (`open
+  Spindle.Syntax`), and a library of combinators or operators locally,
+  around the expression that uses them (`Angstrom.( ... )`,
+  `Float.( ... )`). Any other `open` is one the repository's rules name,
+  with its reason.
 - [ ] **No silenced warnings.** The warning set in `dune` is the linter --
   warning 9 makes adding a record field a compile error at every pattern
   that should handle it -- and a warning that looks wrong is a code shape
