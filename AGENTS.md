@@ -166,8 +166,15 @@ A change is done when every box holds:
   get wrong is redone, however clean its inside.
 - [ ] **An `.mli` per library module.** Abstract types, hidden
   constructors; the contract in odoc in the `.mli`, the reasons in the
-  `.ml`. It exports what a user needs, and nothing more: an export used
-  nowhere outside its module, or only by its tests, is not exported.
+  `.ml`. It exports what a user needs, and nothing more. **A library's
+  user is whoever builds on it, not this repository**: an abstraction an
+  application would reach for -- reading one query parameter, writing
+  what a parser reads -- stays exported though nothing here calls it and
+  its tests are its only caller, since a general-purpose library is
+  judged by the applications it has not met yet. What no user would
+  want -- a helper, a step of the implementation, a representation -- is
+  not exported however convenient. An application's module has no user
+  but its own code, and exports only what that code uses.
 - [ ] **A library never prints or reads the environment, and exits only
   where its `.mli` says.** An executable reads its environment where it
   starts. A library logs on its own `Logs` sources.
