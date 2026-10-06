@@ -389,9 +389,10 @@ let close t =
    loses nothing. *)
 let revive t =
   match t.ownership with
-  | Closed_by_owner -> ()
+  | Closed_by_owner -> Error (`Db "the connection was closed by its owner")
   | Kept ->
-      if Pg.closed t.pg then ignore (Pg.reset t.pg : (unit, Pg.error) result)
+      if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
+      else Ok ()
 
 let timeout_s t = Pg.timeout t.pg
 let set_timeout_s t = Pg.set_timeout t.pg
@@ -478,7 +479,7 @@ module Transaction = struct
     match exec_raw db statement with
     | Ok () -> Ok ()
     | Error _ ->
-        revive db;
+        let* () = revive db in
         exec_raw db statement
 
   let rollback db = ignore (exec_raw db "rollback" : (unit, S.error) result)
@@ -489,8 +490,10 @@ module Transaction = struct
      conflict is; an [Ok] means somebody swallowed the failure and would have
      answered success for work that is not there. *)
   let once ~keep ~isolation db work =
-    revive db;
-    match begin_ db (begin_statement isolation) with
+    match
+      let* () = revive db in
+      begin_ db (begin_statement isolation)
+    with
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match work db with
@@ -548,11 +551,14 @@ module Transaction = struct
           attempt (left - 1)
       | answer -> answer
     in
-    revive db;
-    match Pg.status db.pg with
-    | Pg.Protocol.Idle -> attempt retries
-    | Pg.Protocol.In_transaction | Pg.Protocol.Failed ->
-        not_committed "begin" "a transaction is already open on this connection"
+    match revive db with
+    | Error e -> not_committed "begin" (S.error_to_string e)
+    | Ok () -> (
+        match Pg.status db.pg with
+        | Pg.Protocol.Idle -> attempt retries
+        | Pg.Protocol.In_transaction | Pg.Protocol.Failed ->
+            not_committed "begin"
+              "a transaction is already open on this connection")
 end
 
 (* ------------------------------------------------------------------ *)

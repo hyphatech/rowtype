@@ -735,7 +735,7 @@ let test_a_lost_connection_is_an_error () =
       | Error (`Conflict _) ->
           Alcotest.fail "a lost connection is not a conflict"
       | Ok () -> Alcotest.fail "a statement on a dropped connection succeeded");
-      Pg.revive db;
+      ok (Pg.revive db);
       ok (Pg.exec_raw db "select 1"))
 
 (* ------------------------------------------------------------------ *)
@@ -876,9 +876,14 @@ let test_a_closed_connection_stays_closed () =
       let db = Db_target.connect target in
       ok (Pg.exec_raw db "create table t (n int)");
       Pg.close db;
-      Pg.revive db;
+      (match Pg.revive db with
+      | Error (`Db m) ->
+          Alcotest.(check bool) ("says so: " ^ m) true (contains m "closed")
+      | Error (`Conflict _ | `Not_serializable _) | Ok () ->
+          Alcotest.fail "a closed connection revived");
       (match T.within db (fun db -> insert db 1) with
-      | Error (`Not_committed _) -> ()
+      | Error (`Not_committed m) ->
+          Alcotest.(check bool) ("says why: " ^ m) true (contains m "owner")
       | Ok () -> Alcotest.fail "a closed connection committed"
       | Error (#S.error as e) ->
           Alcotest.failf "the work ran: %s" (S.error_to_string e));
@@ -889,6 +894,34 @@ let test_a_closed_connection_stays_closed () =
       Fun.protect
         ~finally:(fun () -> Pg.close other)
         (fun () -> Alcotest.(check int) "nothing written" 0 (committed other)))
+
+(* A connection that cannot be made again says why: here its database is
+   gone, and the transaction that asked is not committed for that reason. *)
+let test_a_revival_that_fails_says_why () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target in
+      let name = (ok (Pg.conninfo target) : Pg.Conninfo.t).database in
+      Db_target.admin (fun admin ->
+          Db_target.exec admin
+            (Printf.sprintf "drop database %s with (force)" name));
+      ignore (Pg.exec_raw db "select 1" : (unit, S.error) result);
+      (match Pg.revive db with
+      | Error (`Db m) ->
+          Alcotest.(check bool)
+            ("the server's reason: " ^ m)
+            true
+            (contains m "does not exist")
+      | Error (`Conflict _ | `Not_serializable _) | Ok () ->
+          Alcotest.fail "a connection to no database revived");
+      match T.within db (fun db -> insert db 1) with
+      | Error (`Not_committed m) ->
+          Alcotest.(check bool)
+            ("the transaction's: " ^ m)
+            true
+            (contains m "does not exist")
+      | Ok () -> Alcotest.fail "committed to no database"
+      | Error (#S.error as e) ->
+          Alcotest.failf "the work ran: %s" (S.error_to_string e))
 
 (* A connection lost inside a transaction last heard it was in one; the
    next transaction revives it rather than refusing it as nested. *)
@@ -1342,6 +1375,8 @@ let () =
             `Quick test_a_dropped_connection_is_revived_before_begin;
           Alcotest.test_case "a closed connection stays closed" `Quick
             test_a_closed_connection_stays_closed;
+          Alcotest.test_case "a revival that fails says why" `Quick
+            test_a_revival_that_fails_says_why;
           Alcotest.test_case "a connection lost in a transaction is revived"
             `Quick test_a_connection_lost_inside_a_transaction_is_revived;
           Alcotest.test_case "an observer sees every statement" `Quick

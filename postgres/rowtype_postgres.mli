@@ -85,11 +85,12 @@ val close : conn -> unit
     neither {!revive} nor a {!Transaction.within} opens it again. A no-op on one
     already closed. *)
 
-val revive : conn -> unit
+val revive : conn -> (unit, [> Rowtype.error ]) result
 (** Make again a connection a failure closed -- the server restarted, say -- in
-    place, with its parameters. A no-op on an open one and on one {!close}
-    closed; one that cannot be made again stays closed, and its next statement
-    says so. *)
+    place, with its parameters; [Ok] at once for an open one. One {!close}
+    closed is an [Error] and stays closed, and so is one that cannot be made
+    again, saying why -- an address that does not answer, a password the server
+    now refuses. *)
 
 val timeout_s : conn -> float option
 (** The bound on every read and write, in seconds, [None] for none. *)
@@ -228,15 +229,16 @@ module Transaction : sig
       it happens once for every attempt.
 
       [`Not_committed] replaces the work's answer when the transaction could not
-      begin, when [COMMIT] failed, or when the work answered [Ok] in a
-      transaction a failed statement had already aborted -- an error the work
-      swallowed. A refusal from an aborted transaction is the work's own answer
-      and is kept, and a kept refusal there keeps nothing it wrote, which a
-      [warn] line says. A transaction already open on the connection -- a
-      [within] inside another -- is [`Not_committed] before anything begins,
-      since its [COMMIT] would end the outer one, and the outer one goes on.
-      Each [`Not_committed] is an [error] line on [rowtype-postgres]. A raise
-      inside [work] rolls back and passes. *)
+      begin -- on a connection {!revive} could not make again, with its reason
+      --, when [COMMIT] failed, or when the work answered [Ok] in a transaction
+      a failed statement had already aborted -- an error the work swallowed. A
+      refusal from an aborted transaction is the work's own answer and is kept,
+      and a kept refusal there keeps nothing it wrote, which a [warn] line says.
+      A transaction already open on the connection -- a [within] inside another
+      -- is [`Not_committed] before anything begins, since its [COMMIT] would
+      end the outer one, and the outer one goes on. Each [`Not_committed] is an
+      [error] line on [rowtype-postgres]. A raise inside [work] rolls back and
+      passes. *)
 end
 
 (** {1 Statements against the database} *)
