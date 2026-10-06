@@ -204,7 +204,8 @@ A change is done when every box holds:
   output is ugly, the code's shape is what is wrong.
 - [ ] **What a change touches is found by the compiler's knowledge**, not
   by a text search: every caller of a changed signature and every user of
-  an export is Merlin's `occurrences`, below.
+  an export is the language server's references, or Merlin's
+  `occurrences`, below.
 
 ## OCaml tools
 
@@ -213,29 +214,37 @@ switch, `opam exec --switch=<root> --` from the repository's root, or
 through the Makefile; no `eval`. `make setup` installs Merlin and
 `ocaml-lsp-server` with the rest.
 
-**Merlin answers from what the compiler knows**, where `rg` matches text
-and a shadowed, re-exported or aliased name defeats it. Each query is
-`ocamlmerlin single <query> -filename FILE < FILE`, answered in JSON;
-lines count from 1 and columns from 0:
+**The compiler's knowledge reaches an agent through `ocamllsp`**, where
+`rg` matches text and a shadowed, re-exported or aliased name defeats it.
+Run as the agent's language server, from the repository's own switch,
+it answers every edit to OCaml source with its type errors, and its `LSP`
+tool gives a name's definition, its references, tests included, its type
+and a module's symbols. References read the index as the last build left
+it, so after an edit rebuild it -- `dune build @check @ocaml-index` --
+before asking.
 
-- `occurrences -identifier-at LINE:COL -scope project`: every use of the
-  name at that point, tests included. It reads the index, so build that
-  first and again after an edit -- `dune build @ocaml-index` -- since it
-  answers for the last build.
-- `locate -position LINE:COL`: where the name at that point is defined.
-- `type-enclosing -position LINE:COL`: the type there.
-- `outline`: a module's values and types, without reading it.
-- `errors`: the file's type errors, read from standard input, so an edit is
-  checked before anything is built.
+**A worktree inside the checkout is its own dune root only with an
+untracked `dune-workspace`**, holding the `dune-project`'s own `(lang dune
+...)` line and kept out of version control. Without one dune takes the
+checkout around it as the root and skips the hidden directory the worktree
+is in, so the server and Merlin answer from no configuration: every module
+unbound, one use of every name. For a single command, `DUNE_ROOT` set to
+the worktree does the same.
 
-**In a worktree inside the checkout, set `DUNE_ROOT` to the worktree** for
-the build and every query. Without it dune takes the checkout around it as
-the root and skips the hidden directory the worktree is in, so Merlin
-answers from no configuration and finds one use of every name.
+**Without the language server, Merlin's command line answers the same**:
+`ocamlmerlin single <query> -filename FILE < FILE`, in JSON, lines from 1
+and columns from 0 -- `occurrences -identifier-at LINE:COL -scope
+project`, `locate -position LINE:COL`, `type-enclosing -position LINE:COL`,
+`outline`, and `errors`, which reads the file from standard input. Its
+`occurrences` reads the index as the last `dune build @ocaml-index` left
+it.
 
-`ocamllsp` serves the same knowledge to an editor; an agent asks Merlin
-directly. `dune describe` lists every library, executable and module, so
-nothing is missed when the whole project is read.
+**Ask for a record field's uses from its definition in the `.ml` or from
+a use**, never from its declaration in the `.mli`, which answers with that
+declaration alone; a value asked from its `.mli` finds every use.
+
+`dune describe` lists every library, executable and module, so nothing is
+missed when the whole project is read.
 
 **Search with `rg`, never `grep -r` or `find`.** `_build/` and `_opam/` are
 gitignored, so `rg` skips them, where `find . -name '*.ml'` also returns
