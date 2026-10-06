@@ -246,6 +246,10 @@ declaration alone; a value asked from its `.mli` finds every use.
 `dune describe` lists every library, executable and module, so nothing is
 missed when the whole project is read.
 
+**Ask the language server who uses a name and what it is; ask `rg`
+everything else, always with a path** -- with none it reads standard
+input, which an agent's shell never closes.
+
 **Search with `rg`, never `grep -r` or `find`.** `_build/` and `_opam/` are
 gitignored, so `rg` skips them, where `find . -name '*.ml'` also returns
 every copy of the source under `_build/` and every package under `_opam/`.
