@@ -13,18 +13,9 @@ make lint    # formatting, odoc, and the release build
 make fmt     # format in place
 ```
 
-Nothing is on PATH: run OCaml tools through the Makefile, or prefix them
-with `opam exec --switch=. --`. `make test` needs `docker compose`. Without
+`make test` needs `docker compose`. Without
 `ROWTYPE_TEST_PG` the suites that need a server are skipped, and the test
 output says so. CI runs `make lint` and `make test` on OCaml 5.4 and 5.5.
-
-**Finding a name's uses.** `make setup` installs Merlin. Build the index
-once, `dune build @ocaml-index` through the switch, and then
-`ocamlmerlin single occurrences -identifier-at LINE:COL -scope project
--filename FILE < FILE` lists every use of the name at that point, tests
-included; `outline` lists a module's values and types without reading it,
-and `type-enclosing -position LINE:COL` gives the type there. Each answers
-in JSON, where `rg` would need every hit read for a shadowed name.
 
 ## Layout
 
@@ -93,67 +84,105 @@ Each rule comes with why it exists and the test that catches a break.
   commit, or whose work answered `Ok` after a failed statement aborted it,
   is `` `Not_committed ``, never a success. Why: Postgres rolls such a
   transaction back in silence. Tests: `transactions` in `test_rowtype`.
+- **The one `open` is `open Shape` in `src/rowtype.ml`.** Why: its walk
+  exists to pattern-match that GADT, and every constructor qualified would
+  bury the match. Test: `test_style` names it and refuses any other.
 
+<!-- hypha-ocaml: begin. Every Hypha OCaml repository carries this text word for word; a change to it is made to every copy together. -->
 ## House style
+
+The goal is code that is beautiful from the inside: idiomatic, clean and
+simple. An OCaml expert who has never seen the repository recognises every
+pattern in it on sight and is surprised by nothing.
 
 The rules are ranked, because they conflict:
 
 1. **Simple and obvious beats clever.** If a reviewer has to reconstruct
    why something works, it is wrong even when it is correct.
 2. **Locality of behaviour beats DRY.** Code that changes together lives
-   together, and a function reads top to bottom. Code that only looks alike
-   is not duplication.
+   together, and a function reads top to bottom without chasing helpers
+   around the file. Code that only looks alike is not duplication when it
+   changes for different reasons. Extract only for a rule that must hold
+   in exactly one place, a boundary the code cannot cross -- two
+   executables that must not link each other -- or a third copy that has
+   already drifted.
 3. **No layer without a job.** No abstraction with one implementation
-   unless the signature is the point (`Backend` is), no functor for a
-   choice made once.
-4. **Comments say why, never what**, in a sentence or two: the protocol
-   section, a constraint that is not visible, the reason for a number.
-   Never history; that is the commits'. A comment the names already say is
-   deleted.
+   unless the signature is the point, no functor for a choice made once,
+   no indirection added for symmetry. A 40-line function doing one thing
+   beats four 10-line ones only ever called in sequence.
+4. **Comments say why, never what**, in a sentence or two: the RFC or
+   protocol section, a rule the code must keep, a constraint that is not
+   visible, the measured reason for a number. Never history; that is the
+   commits'. A comment that explains what the code does means the code is
+   rewritten, and one the names already say is deleted.
 
 ### OCaml checklist
 
 A change is done when every box holds:
 
-- [ ] `make lint` and `make test` pass.
+- [ ] The checks under *Commands* pass.
 - [ ] **A change brings its tests**: the typical corner cases (empty, one,
   the boundaries, invalid input, a failure partway through), a property
   test wherever a round trip exists, and the real server wherever a test
   can run one, never a mock of it; a stub stands in only for a third
   party's service.
 - [ ] **No partial functions**: nothing raises on an input the code has not
-  ruled out. No `failwith`, `invalid_arg`, `Option.get`, `Result.get_ok`,
-  `List.hd`, `List.tl`, `List.nth`, `Obj.magic`; and a stdlib call that
-  raises -- `String.sub`, an index, `Hashtbl.find`, `List.assoc`,
+  ruled out. No `failwith`, `Option.get`, `Result.get_ok`, `List.hd`,
+  `List.tl`, `List.nth`, `Obj.magic`, and `invalid_arg` only where the
+  `.mli` says it raises and the repository's rules name it; a stdlib call
+  that raises -- `String.sub`, an index, `Hashtbl.find`, `List.assoc`,
   `int_of_string`, `Char.chr`, `List.combine` -- only on an input already
-  known to be in range, else its `_opt`. Errors are values: a `result` with
-  a variant error, and `let*` over it.
+  known to be in range, else its `_opt`.
+- [ ] **Errors are values**: a `result` with a variant error, and `let*`
+  over it rather than nested matches. Eio is direct-style, so `let*` always
+  means `result`. An exception is a programmer's error and never crosses a
+  library boundary.
 - [ ] **No polymorphic `compare`**, and no `=` on a type that has a module:
   `Int.compare`, `String.equal`, `Char.equal`. `=` on `int` is fine. It also
   hides in `List.mem`, `List.assoc`, `List.sort compare`, `max`, `min` and a
   `Hashtbl`'s keys: accepted over plain data -- an `int`, a `char`, a
   `string` -- where nothing can hold a closure or an abstract type, and this
   rule broken over anything else.
-- [ ] **No `open`**, local ones (`M.( ... )`) included. Alias modules
-  instead: `module S = Rowtype`. The one exception is `open Shape` in
-  `src/rowtype.ml`, whose walk exists to pattern-match that GADT;
-  `test_style` names it.
-- [ ] **No silenced warnings.** The warning set in `dune` is the linter, and
-  a warning that looks wrong is a code shape that is wrong.
+- [ ] **No `open`**, local ones (`M.( ... )`) included. Alias modules at
+  the top of the file instead (`module P = Protocol`), and annotate a
+  value's type once rather than qualify its fields (`(g : Store.game)`,
+  then `g.size`, never `g.Store.size`). The exceptions are a module made to
+  be opened -- binding operators and nothing else, or combinators whose
+  `.mli` says they are written inside `M.( ... )` -- and an `open` the
+  repository's rules name.
+- [ ] **No silenced warnings.** The warning set in `dune` is the linter --
+  warning 9 makes adding a record field a compile error at every pattern
+  that should handle it -- and a warning that looks wrong is a code shape
+  that is wrong.
+- [ ] **Ergonomics is a requirement, never a polish**, and a refactoring or
+  a new feature that ignores it is not done. It is judged where it is
+  used -- the tests, the examples, the README, every caller -- as much as
+  in its own module: the common case reads in one obvious line, a caller
+  writes nothing the code could have known, a mistake is a compile error
+  or a refusal that says what to do, every name, label and argument order
+  is the one a caller would guess, and there is one way to do a thing: a
+  new name never repeats what the caller can already say with the names it
+  has. A change that leaves a caller's code longer, noisier or easier to
+  get wrong is redone, however clean its inside.
 - [ ] **An `.mli` per library module.** Abstract types, hidden
   constructors; the contract in odoc in the `.mli`, the reasons in the
-  `.ml`. It exports what a user needs, and nothing more.
-- [ ] **The library never prints, exits or reads the environment.** It logs
-  on its own `Logs` source. The command in `migrate/bin/` is where the
-  environment is read.
-- [ ] **A meaning is a type.** A state is a variant, never a string or a
-  boolean; a unit or an identifier that travels unnamed -- a column, an
-  element, a returned value -- is a type of its own, never a bare `int` or
-  `string` whose meaning the caller has to remember. A labelled argument
-  that names its unit at every call (`~timeout_s`) is enough.
+  `.ml`. It exports what a user needs, and nothing more: an export used
+  nowhere outside its module, or only by its tests, is not exported.
+- [ ] **A library never prints or reads the environment, and exits only
+  where its `.mli` says.** An executable reads its environment where it
+  starts. A library logs on its own `Logs` sources.
+- [ ] **A meaning is a type.** A state is a variant, never a string, a
+  boolean or a pair of booleans one combination of which is impossible; a
+  unit or an identifier that travels unnamed -- a column, an element, a
+  returned value -- is a type of its own, never a bare `int` or `string`
+  whose meaning the caller has to remember. A labelled argument that names
+  its unit at every call (`~timeout_s`) is enough.
 - [ ] **Advanced types only where they delete real duplication.** A GADT
   earns its place by describing a thing once that would otherwise be
   described twice; otherwise, records and variants.
+- [ ] **Effects at the edge.** What can be computed without IO is, in code
+  that does none, and a value is converted to and from a wire format at a
+  boundary, never in the middle.
 - [ ] **Cancellation leaves nothing held.** A fiber cancelled at any effect
   releases what it held: a connection goes back to its pool or is closed,
   and a lock is let go. A catch-all handler (`with _ ->`,
@@ -163,15 +192,59 @@ A change is done when every box holds:
   optional arguments with defaults, followed by `()`.
 - [ ] **Stdlib naming**: `t`, `create`/`make`, `of_x`/`to_x`, `*_opt`,
   stdlib argument order.
-- [ ] **A name says what a thing is or does.** No metaphors or
-  abbreviations beyond the stdlib's (`b` a buffer, `n` a count, `f` a
-  function).
+- [ ] **A name says what a thing is or does.** No metaphors, moods or
+  puns, and no abbreviations beyond the stdlib's (`b` a buffer, `n` a
+  count, `f` a function).
 - [ ] **A number with a reason is a named constant**, the reason beside it.
 - [ ] **No needless cost.** No quadratic walk where a linear one is as
   clear, and no whole result held where streaming is as simple. A claim
   about speed comes with a measurement.
 - [ ] **Plain stdlib.** No Base, Core or Lwt.
-- [ ] **`ocamlformat` decides layout.** Never format by hand.
+- [ ] **`ocamlformat` decides layout.** Never format by hand; when its
+  output is ugly, the code's shape is what is wrong.
+- [ ] **What a change touches is found by the compiler's knowledge**, not
+  by a text search: every caller of a changed signature and every user of
+  an export is Merlin's `occurrences`, below.
+
+## OCaml tools
+
+Nothing is on PATH. Every OCaml tool runs through the repository's local
+switch, `opam exec --switch=<root> --` from the repository's root, or
+through the Makefile; no `eval`. `make setup` installs Merlin and
+`ocaml-lsp-server` with the rest.
+
+**Merlin answers from what the compiler knows**, where `rg` matches text
+and a shadowed, re-exported or aliased name defeats it. Each query is
+`ocamlmerlin single <query> -filename FILE < FILE`, answered in JSON;
+lines count from 1 and columns from 0:
+
+- `occurrences -identifier-at LINE:COL -scope project`: every use of the
+  name at that point, tests included. It reads the index, so build that
+  first and again after an edit -- `dune build @ocaml-index` -- since it
+  answers for the last build.
+- `locate -position LINE:COL`: where the name at that point is defined.
+- `type-enclosing -position LINE:COL`: the type there.
+- `outline`: a module's values and types, without reading it.
+- `errors`: the file's type errors, read from standard input, so an edit is
+  checked before anything is built.
+
+**In a worktree inside the checkout, set `DUNE_ROOT` to the worktree** for
+the build and every query. Without it dune takes the checkout around it as
+the root and skips the hidden directory the worktree is in, so Merlin
+answers from no configuration and finds one use of every name.
+
+`ocamllsp` serves the same knowledge to an editor; an agent asks Merlin
+directly. `dune describe` lists every library, executable and module, so
+nothing is missed when the whole project is read.
+
+**Search with `rg`, never `grep -r` or `find`.** `_build/` and `_opam/` are
+gitignored, so `rg` skips them, where `find . -name '*.ml'` also returns
+every copy of the source under `_build/` and every package under `_opam/`.
+
+`opam list --installed` says what the switch holds; `opam list
+--required-by --recursive` resolves against what is available, not what is
+installed.
+<!-- hypha-ocaml: end -->
 
 ## Changes
 
