@@ -138,7 +138,19 @@ Pg.Transaction.within db ~isolation:Serializable ~retries:3 (fun db ->
 ```
 
 `Ok` commits and `Error` rolls back. A transaction that could not commit is
-`` `Not_committed ``, never a silent success.
+`` `Not_committed ``, never a silent success. The transaction's own failures
+are `Pg.Transaction.failure`, so a caller whose errors are an ordinary
+variant tells them from its own in one arm:
+
+```ocaml
+match
+  Pg.Transaction.within db (fun db ->
+      Result.map_error (fun e -> `Work e) (work db))
+with
+| Ok v -> Ok v
+| Error (`Work e) -> Error e
+| Error (#Pg.Transaction.failure as f) -> Error (Unavailable f)
+```
 
 ## Checking statements
 

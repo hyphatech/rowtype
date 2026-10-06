@@ -184,15 +184,25 @@ module Transaction : sig
       standard names the levels: Postgres's [begin isolation level]. *)
   type isolation = Read_committed | Repeatable_read | Serializable
 
+  type failure =
+    [ `Not_committed of string
+      (** the transaction could not begin, its [COMMIT] failed, or the work
+          answered [Ok] from a transaction a failed statement had aborted: in
+          words for the log *)
+    | `Not_serializable of string
+      (** its [COMMIT] found it could not be ordered with a concurrent
+          transaction, as a statement's {!Rowtype.error} says when one does, and
+          its retries did not get past it *) ]
+  (** The transaction's own failures, which {!within} adds to the work's: a
+      caller tells them from its own as [#Transaction.failure], and names them
+      in an error type of its own as [[ my_error | Transaction.failure ]]. *)
+
   val within :
     ?keep:('e -> bool) ->
     ?isolation:isolation ->
     ?retries:int ->
     conn ->
-    (conn ->
-    ( 'a,
-      ([> `Not_committed of string | `Not_serializable of string ] as 'e) )
-    result) ->
+    (conn -> ('a, ([> failure ] as 'e)) result) ->
     ('a, 'e) result
   (** [within db work]: revive a connection the server dropped, begin -- once
       more if the first [begin] fails, the one point where starting again loses

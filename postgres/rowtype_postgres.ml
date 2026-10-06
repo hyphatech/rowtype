@@ -413,6 +413,7 @@ end
 
 module Transaction = struct
   type isolation = Read_committed | Repeatable_read | Serializable
+  type failure = [ `Not_committed of string | `Not_serializable of string ]
 
   (* No level named is the database's own default, so a plain [begin]. *)
   let begin_statement = function

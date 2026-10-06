@@ -730,6 +730,38 @@ let test_a_raise_rolls_back_and_passes () =
       ok (insert db 2);
       Alcotest.(check int) "and the connection writes on" 1 (committed db))
 
+(* A caller whose own errors are an ordinary variant maps them once and tells
+   the transaction's apart by its type, so a failure [within] gains later
+   reaches every such match. *)
+type outcome = Committed | Refused | Failed_transaction
+
+let test_a_caller_names_the_transactions_failures () =
+  let outcome = function
+    | Ok () -> Committed
+    | Error `Refused -> Refused
+    | Error #T.failure -> Failed_transaction
+  in
+  let show = function
+    | Committed -> "committed"
+    | Refused -> "refused"
+    | Failed_transaction -> "the transaction failed"
+  in
+  let check what expected answer =
+    Alcotest.(check string) what (show expected) (show (outcome answer))
+  in
+  on_db
+    [
+      "create table t (n int, constraint u unique (n) deferrable initially \
+       deferred)";
+      "insert into t values (1)";
+    ] (fun db ->
+      let insert_or_refuse n db =
+        Result.map_error (fun (_ : S.error) -> `Refused) (insert db n)
+      in
+      check "the work's own" Refused (T.within db (fun _ -> Error `Refused));
+      check "the commit's" Failed_transaction (T.within db (insert_or_refuse 1));
+      check "and a commit" Committed (T.within db (insert_or_refuse 2)))
+
 (* A transaction cancelled inside its work keeps nothing and holds nothing:
    the cancellation passes as itself, and the connection takes the next
    transaction. *)
@@ -1233,6 +1265,8 @@ let () =
         [
           Alcotest.test_case "a failed commit is not committed" `Quick
             test_a_failed_commit_is_not_committed;
+          Alcotest.test_case "a caller names the transaction's failures" `Quick
+            test_a_caller_names_the_transactions_failures;
           Alcotest.test_case "Ok from an aborted transaction is not committed"
             `Quick test_ok_from_an_aborted_transaction_is_not_committed;
           Alcotest.test_case "a returned failure is the work's answer" `Quick
