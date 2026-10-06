@@ -211,8 +211,18 @@ val conv : 'a ty -> of_:('a -> 'b) -> to_:('b -> 'a) -> 'b ty
 
 val parse : 'a ty -> of_:('a -> 'b option) -> to_:('b -> 'a) -> 'b ty
 (** As {!conv}, for a value the database may hold and this program may not be
-    able to read -- an enum label, a key. A row whose value [of_] refuses is a
-    decode error naming the column, exactly as a type mismatch is. *)
+    able to read -- a key, a code. A row whose value [of_] refuses is a decode
+    error naming the column, exactly as a type mismatch is. *)
+
+val enum : ('a -> string) -> 'a list -> 'a ty
+(** [enum label values]: a column of a type with a closed set of labels -- an
+    enum, as Postgres's [create type ... as enum] -- each value written as its
+    [label] and read back from it, as in [enum Colour.to_string Colour.all].
+    [values] is every value a row may hold: a row holding a label none of them
+    has is refused, naming its column, and a value whose label the database
+    lacks is the database's refusal. A backend's check of statements holds the
+    column to these labels, and refuses a list that is empty or gives two values
+    one label. *)
 
 val arity : 'a ty -> int
 (** How many SQL columns or placeholders a shape occupies. An option is
@@ -279,6 +289,9 @@ type _ scalar =
   | Interval : interval scalar
   | Uuid : Uuidm.t scalar  (** a uuid *)
   | Json : string scalar  (** a JSON document, as its text *)
+  | Enum : string list -> string scalar
+      (** a label of a type with a closed set of them, these, as {!enum} reads
+          one *)
 
 (** A database, as {!Make} needs it. *)
 module type Backend = sig

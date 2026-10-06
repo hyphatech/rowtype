@@ -503,9 +503,9 @@ let verified db statements =
       Alcotest.failf "the check could not run: %s" (S.error_to_string e)
 
 (* A statement's declared shapes against what the database says of it,
-   without running it: what agrees passes -- an enum read through a cast
-   and written as text, a domain as what it is made from -- and each
-   disagreement is named. *)
+   without running it: what agrees passes -- an enum read by labels it has,
+   or through a cast and written as text, a domain as what it is made
+   from -- and each disagreement is named. *)
 let test_statements_are_checked_against_the_database () =
   on_db
     [
@@ -513,6 +513,11 @@ let test_statements_are_checked_against_the_database () =
       "create domain points as int4";
       "create table v (n int4, c colour, p points, at timestamptz, d bytea)";
     ] (fun db ->
+      let colour =
+        S.enum
+          (function `Black -> "black" | `White -> "white")
+          [ `Black; `White ]
+      in
       let right =
         [
           S.Any
@@ -526,6 +531,15 @@ let test_statements_are_checked_against_the_database () =
             (S.exec ~params:(S.t2 S.text S.bytes)
                "insert into v (c, d) values ($1::colour, $2)");
           S.Any (S.exec_count ~params:S.int "delete from v where n = $1");
+          S.Any
+            (S.list ~params:colour ~row:(S.array colour)
+               "select array_agg(c) from v where c <> $1");
+          (* A label only the database has is refused where a row holds
+             it, and no disagreement. *)
+          S.Any
+            (S.list ~params:S.unit
+               ~row:(S.enum Fun.id [ "black" ])
+               "select c from v");
         ]
       in
       Alcotest.(check (result unit (list string)))
@@ -537,22 +551,47 @@ let test_statements_are_checked_against_the_database () =
           S.Any (S.exec ~params:S.bool "delete from v where n = $1");
           S.Any (S.find_opt ~params:S.unit ~row:S.int "select n, p from v");
           S.Any (S.list ~params:S.unit ~row:S.int "selec n from v");
+          S.Any
+            (S.list ~params:S.unit
+               ~row:(S.enum Fun.id [ "black"; "grey"; "red" ])
+               "select c from v");
+          S.Any
+            (S.exec
+               ~params:(S.enum Fun.id [ "white"; "white" ])
+               "delete from v where c = $1");
+          S.Any
+            (S.list ~params:S.unit ~row:(S.enum Fun.id []) "select c from v");
+          S.Any (S.list ~params:S.unit ~row:colour "select n from v");
+          S.Any
+            (S.list ~params:S.unit ~row:(S.array colour)
+               "select array[n] from v");
+          S.Any
+            (S.list ~params:S.unit
+               ~row:(S.array (S.enum Fun.id [ "grey" ]))
+               "select array[c] from v");
         ]
       in
       match verified db wrong with
       | Ok () -> Alcotest.fail "every disagreement passed"
       | Error ps -> (
-          Alcotest.(check int) "one problem each" 5 (List.length ps);
+          Alcotest.(check int) "one problem each" 11 (List.length ps);
           List.iter2
             (fun p says -> Alcotest.(check bool) p true (contains p says))
             ps
             [
               "column 1 is colour, which int does not read";
               "column 1 is colour, which text does not read: a type the \
-               database made, cast it, as ::text";
+               database made: read an enum with Rowtype.enum, and cast any \
+               other, as ::text";
               "parameter 1 is int4, which bool does not read";
               "1 columns declared, and the database has 2";
               "the database refuses it";
+              "column 1 is colour, which has no label \"grey\", \"red\"";
+              "parameter 1 gives two values the label \"white\"";
+              "column 1 declares no labels";
+              "column 1 is int4, which enum does not read";
+              "column 1 is _int4, which an array of enum does not read";
+              "column 1 is colour, which has no label \"grey\"";
             ];
           (* A check that cannot ask is its failure, and no statement is
              said to disagree. *)

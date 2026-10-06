@@ -38,6 +38,7 @@ type 'a scalar = 'a Shape.scalar =
   | Interval : interval scalar
   | Uuid : Uuidm.t scalar
   | Json : string scalar
+  | Enum : string list -> string scalar
 
 type 'a ty = 'a Shape.ty
 
@@ -68,6 +69,7 @@ let t10 = Shape.t10
 let t11 = Shape.t11
 let conv = Shape.conv
 let parse = Shape.parse
+let enum = Shape.enum
 let arity = Shape.arity
 
 (* ------------------------------------------------------------------ *)

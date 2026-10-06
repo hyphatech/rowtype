@@ -27,13 +27,28 @@ let on_each_format setup f =
         formats)
 
 (* A value written to a column of [column]'s type and read back, on a
-   table of its own so the formats do not see each other's rows. *)
+   table of its own so the formats do not see each other's rows, named for
+   the type: a connection keeps a statement with its parameter's type, so
+   one insert's text over two types would bind the second as the first. *)
 let back db ~column ty v =
+  let table =
+    "v_"
+    ^ String.map
+        (function ('a' .. 'z' | '0' .. '9') as c -> c | _ -> '_')
+        column
+  in
   ok
     (Pg.exec_raw db
-       (Printf.sprintf "drop table if exists v; create table v (x %s)" column));
-  ok (Pg.run db (S.exec ~params:ty "insert into v values ($1)") v);
-  ok (Pg.run db (S.find ~params:S.unit ~row:ty "select x from v") ())
+       (Printf.sprintf "drop table if exists %s; create table %s (x %s)" table
+          table column));
+  ok
+    (Pg.run db
+       (S.exec ~params:ty (Printf.sprintf "insert into %s values ($1)" table))
+       v);
+  ok
+    (Pg.run db
+       (S.find ~params:S.unit ~row:ty (Printf.sprintf "select x from %s" table))
+       ())
 
 let round_trips ~column ty testable values =
   on_each_format [] (fun format db ->
@@ -372,7 +387,7 @@ let test_an_enum_is_read_through_a_cast () =
               Alcotest.(check bool)
                 (format ^ ": " ^ what ^ " says to cast: " ^ m)
                 true
-                (String.ends_with ~suffix:("cast it, as " ^ cast) m)
+                (String.ends_with ~suffix:("cast any other, as " ^ cast) m)
           | Ok _ | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _)
             ->
               Alcotest.failf "%s: %s was read" format what)
@@ -391,6 +406,65 @@ let test_an_enum_is_read_through_a_cast () =
       refused
         (format ^ ": a numeric as an int")
         (reads db S.int "select 1::numeric"))
+
+type mood = Calm | Cross
+
+let mood_label = function Calm -> "calm" | Cross -> "cross"
+let mood = S.enum mood_label [ Calm; Cross ]
+
+let moods =
+  Alcotest.testable
+    (fun f m -> Format.pp_print_string f (mood_label m))
+    (fun a b -> String.equal (mood_label a) (mood_label b))
+
+(* Labels an array's text quotes, and one it would read as NULL unquoted. *)
+let odd_labels = [ "a b"; "x,y"; "q\"q"; "back\\slash"; "{"; "NULL"; "it's" ]
+
+(* An enum is read by its labels with no cast, alone and in an array, as
+   the label it is in binary and in text; and a label no value has, a
+   composite's text, and text that is no enum are refused. *)
+let test_an_enum_is_read_by_its_labels () =
+  on_each_format
+    [
+      "drop type if exists mood, odd, pair cascade";
+      "create type mood as enum ('calm', 'cross')";
+      "create type odd as enum ("
+      ^ String.concat ", "
+          (List.map
+             (fun l ->
+               "'" ^ String.concat "''" (String.split_on_char '\'' l) ^ "'")
+             odd_labels)
+      ^ ")";
+      "create type pair as (a int, b int)";
+    ]
+    (fun format db ->
+      List.iter
+        (fun m ->
+          Alcotest.check moods (format ^ ": a mood") m
+            (back db ~column:"mood" mood m))
+        [ Calm; Cross ];
+      Alcotest.(check (list moods))
+        (format ^ ": an array of moods")
+        [ Cross; Calm; Cross ]
+        (back db ~column:"mood[]" (S.array mood) [ Cross; Calm; Cross ]);
+      let odd = S.enum Fun.id odd_labels in
+      List.iter
+        (fun l ->
+          Alcotest.(check string)
+            (format ^ ": " ^ l)
+            l
+            (back db ~column:"odd" odd l))
+        odd_labels;
+      Alcotest.(check (list string))
+        (format ^ ": an array of odd labels")
+        odd_labels
+        (back db ~column:"odd[]" (S.array odd) odd_labels);
+      refused
+        (format ^ ": a label no value has")
+        (reads db (S.enum mood_label [ Calm ]) "select 'cross'::mood");
+      refused (format ^ ": a composite")
+        (reads db mood "select row(1, 2)::pair");
+      refused (format ^ ": text") (reads db mood "select 'calm'::text"))
 
 let () =
   Db_target.required ~suite:"types";
@@ -429,5 +503,7 @@ let () =
             test_an_element_is_its_type;
           Alcotest.test_case "an enum is read through a cast" `Quick
             test_an_enum_is_read_through_a_cast;
+          Alcotest.test_case "an enum is read by its labels" `Quick
+            test_an_enum_is_read_by_its_labels;
         ] );
     ]

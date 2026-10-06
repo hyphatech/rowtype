@@ -271,8 +271,12 @@ val verify :
     and, for a statement that reads rows, how many columns, and each one's type
     -- an [int] an integer or an [oid], a [float] a float, a [text] text, a
     name, a uuid or JSON, and the rest their own, a domain as the type it is
-    made from. An enum is written from a [text] and read only through a cast,
-    [::text], as {!run} reads it: a statement this check accepts is one {!run}
+    made from. An enum is read and written by a {!Rowtype.enum} each of whose
+    labels is one of the enum's, and refused where its labels are none or repeat
+    one; a label only the database has is no disagreement, since a migration
+    adds one ahead of the code that reads it, and a row holding it is refused
+    where it is read. An enum is also written from a [text], and read as one
+    through a cast, [::text]. A statement this check accepts is one {!run}
     reads, in binary and in text alike. A parameter the database could not type
     is left to it. [`Disagreements] is every problem, in words for a person,
     each naming its statement's first line and where in it. Where the check

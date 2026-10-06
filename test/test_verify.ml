@@ -39,7 +39,7 @@ let types =
   ]
 
 (* Each scalar, the types it reads, and the ones it only writes: an enum
-   takes a label bound as text, and is read through a cast. *)
+   is read and written by its labels, and takes a label bound as text. *)
 type scalar = Scalar : string * 'a S.ty * string list * string list -> scalar
 
 (* Everything else a scalar must refuse. *)
@@ -62,6 +62,7 @@ let scalars =
     Scalar ("uuid", S.uuid, [ "uuid" ], []);
     Scalar ("json", S.json, [ "json"; "jsonb" ], []);
     Scalar ("an array of int", S.array S.int, [ "int4[]" ], []);
+    Scalar ("enum", S.enum Fun.id [ "calm"; "cross" ], [ "mood" ], []);
   ]
 
 let column_name t =

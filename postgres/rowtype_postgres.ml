@@ -100,8 +100,9 @@ let first_user_oid = 16384
 
 (* Which of Postgres's own types each scalar reads: the integers and oid,
    the two floats, text of every kind and what is read as text -- a name, a
-   uuid, JSON -- and one each for the rest. A statement's check and a read
-   both ask this, so what one accepts the other reads. *)
+   uuid, JSON -- one each for the rest, and none an enum, which only a
+   database makes. A statement's check and a read both ask this, so what
+   one accepts the other reads. *)
 let reads_builtin : type a. a S.scalar -> int -> bool =
  fun scalar oid ->
   match scalar with
@@ -126,6 +127,7 @@ let reads_builtin : type a. a S.scalar -> int -> bool =
   | S.Interval -> oid = oid_interval
   | S.Uuid -> oid = oid_uuid
   | S.Json -> List.mem oid [ oid_json; oid_jsonb ]
+  | S.Enum _ -> false
 
 (* What a [text] declared over a type the database made is told to do, both
    where a read refuses one and where a statement's check does. *)
@@ -133,7 +135,8 @@ let cast_hint : type a. a S.scalar -> int -> string -> string =
  fun scalar oid cast ->
   match scalar with
   | S.Text when oid >= first_user_oid ->
-      ": a type the database made, cast it, as " ^ cast
+      ": a type the database made: read an enum with Rowtype.enum, and cast \
+       any other, as " ^ cast
   | _ -> ""
 
 (* A statement on a connection already closed is never sent, which is what
@@ -209,7 +212,8 @@ module Backend = struct
           Pg.Text.interval
             { months = v.months; days = v.days; microseconds = v.microseconds }
       | S.Uuid -> Uuidm.to_string v
-      | S.Json -> v)
+      | S.Json -> v
+      | S.Enum _ -> v)
 
   (* A refusal names the column's type and never its value, which may be a
      token or an address and would reach a log; [got] says what came instead
@@ -217,7 +221,9 @@ module Backend = struct
      one {!reads_builtin} gives the scalar, as a statement's check reads it:
      the driver alone reads any type it has no binary form for as its text
      says, a [numeric] as an [int], an enum as JSON. A type the database
-     made is read through a cast, since no oid of one says what it is. *)
+     made is read through a cast, since no oid of one says what it is, or
+     as an enum's label: a composite's or a range's text is no label, so
+     the shape refuses it, and a statement's check finds which type it is. *)
   let read_as : type a.
       a S.scalar ->
       Pg.Column.t ->
@@ -256,6 +262,11 @@ module Backend = struct
              (Pg.Value.interval column raw))
     | S.Uuid -> as_ "UUID" (Pg.Value.uuid column raw)
     | S.Json -> as_ "JSON" (Pg.Value.json column raw)
+    | S.Enum _ -> (
+        match Pg.Value.text column raw with
+        | Some v when oid >= first_user_oid -> Ok v
+        | Some _ | None ->
+            Error (Printf.sprintf "expected an enum label, got %s" got))
 
   let read : type a. a S.scalar -> cell -> (a, string) result =
    fun s cell ->
@@ -753,10 +764,13 @@ end
 (* ------------------------------------------------------------------ *)
 (* Statements against the database *)
 
-(* A type as the check compares it: an enum by name, since a label is read
-   as text, and anything else by the oid of what it is -- a domain by the
-   type it is made from. *)
-type resolved = Enum of string | Base of int * string | Array of int * string
+(* A type as the check compares it: an enum by its oid, which its labels
+   are found by, and anything else by the oid of what it is -- a domain by
+   the type it is made from. Each with its name, for a person. *)
+type resolved =
+  | Enum of int * string
+  | Base of int * string
+  | Array of int * string
 
 let pg_type =
   S.find_opt ~params:S.int
@@ -768,12 +782,16 @@ let pg_type =
    asked, which is the check's failure and not the statement's. *)
 let rec resolve db oid =
   match run db pg_type oid with
-  | Ok (Some (name, "e", _, _, _)) -> Ok (Some (Enum name))
+  | Ok (Some (name, "e", _, _, _)) -> Ok (Some (Enum (oid, name)))
   | Ok (Some (_, "d", base, _, _)) -> resolve db base
   | Ok (Some (name, _, _, "A", element)) -> Ok (Some (Array (element, name)))
   | Ok (Some (name, _, _, _, _)) -> Ok (Some (Base (oid, name)))
   | Ok None -> Ok None
   | Error e -> Error e
+
+let pg_enum =
+  S.list ~params:S.int ~row:S.text
+    "select enumlabel from pg_enum where enumtypid = $1"
 
 let scalar_name : type a. a S.scalar -> string = function
   | S.Int -> "int"
@@ -788,9 +806,11 @@ let scalar_name : type a. a S.scalar -> string = function
   | S.Interval -> "interval"
   | S.Uuid -> "uuid"
   | S.Json -> "json"
+  | S.Enum _ -> "enum"
 
 (* A parameter is written and a column read: an enum takes a label bound
-   as text, and is read only through a cast, as {!Backend.read_as} says. *)
+   as text, and is read as text only through a cast, as
+   {!Backend.read_as} says. *)
 type use = Written | Read
 
 (* What each scalar reads and writes: Postgres's own types as a read
@@ -799,6 +819,8 @@ let fits : type a. use -> a S.scalar -> resolved -> bool =
  fun use scalar t ->
   match (scalar, t) with
   | S.Text, Enum _ -> ( match use with Written -> true | Read -> false)
+  | S.Enum _, Enum _ -> true
+  | S.Enum _, (Base _ | Array _) -> false
   | ( ( S.Int | S.Int64 | S.Float | S.Bytes | S.Bool | S.Instant | S.Date
       | S.Timestamp | S.Interval | S.Uuid | S.Json ),
       Enum _ ) ->
@@ -812,6 +834,42 @@ let fits : type a. use -> a S.scalar -> resolved -> bool =
       Base (oid, _) ) ->
       reads_builtin scalar oid
 
+(* An enum's labels against the ones a shape declares, which must each be
+   one of the enum's. A label only the enum has is refused where a row
+   holds it, so a migration may add one ahead of the code that reads it,
+   as migrations run. A shape of no labels, or of one label twice, is the
+   program's own mistake, and no row could say so. *)
+let labels : type a.
+    conn -> string -> int -> a S.scalar -> resolved -> (string option, _) result
+    =
+ fun db what i scalar t ->
+  match (scalar, t) with
+  | S.Enum labels, Enum (oid, name) -> (
+      let rec repeated = function
+        | a :: (b :: _ as rest) ->
+            if String.equal a b then Some a else repeated rest
+        | [] | [ _ ] -> None
+      in
+      match (labels, repeated (List.sort String.compare labels)) with
+      | [], _ -> Ok (Some (Printf.sprintf "%s %d declares no labels" what i))
+      | _, Some label ->
+          Ok
+            (Some
+               (Printf.sprintf "%s %d gives two values the label %S" what i
+                  label))
+      | _, None -> (
+          let* held = run db pg_enum oid in
+          match List.filter (fun label -> not (List.mem label held)) labels with
+          | [] -> Ok None
+          | missing ->
+              Ok
+                (Some
+                   (Printf.sprintf "%s %d is %s, which has no label %s" what i
+                      name
+                      (String.concat ", "
+                         (List.map (Printf.sprintf "%S") missing))))))
+  | _ -> Ok None
+
 (* What is wrong with one declared column, [None] where nothing is. *)
 let mismatch db use i column oid =
   let what = match use with Written -> "parameter" | Read -> "column" in
@@ -819,11 +877,11 @@ let mismatch db use i column oid =
   else
     let* t = resolve db oid in
     match (column, t) with
-    | S.Column s, Some t when fits use s t -> Ok None
+    | S.Column s, Some t when fits use s t -> labels db what i s t
     | S.Array_of [ S.Column s ], Some (Array (element, name)) -> (
         let* t = resolve db element in
         match t with
-        | Some t when fits use s t -> Ok None
+        | Some t when fits use s t -> labels db what i s t
         | Some _ | None ->
             Ok
               (Some
@@ -838,12 +896,12 @@ let mismatch db use i column oid =
                 "%s %d: an array's element is one column and no array of its \
                  own"
                 what i))
-    | S.Column s, Some (Enum name | Base (_, name) | Array (_, name)) ->
+    | S.Column s, Some (Enum (_, name) | Base (_, name) | Array (_, name)) ->
         Ok
           (Some
              (Printf.sprintf "%s %d is %s, which %s does not read%s" what i name
                 (scalar_name s) (cast_hint s oid "::text")))
-    | S.Array_of _, Some (Enum name | Base (_, name)) ->
+    | S.Array_of _, Some (Enum (_, name) | Base (_, name)) ->
         Ok
           (Some
              (Printf.sprintf "%s %d is %s, which an array does not read" what i

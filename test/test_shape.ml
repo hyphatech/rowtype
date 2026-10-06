@@ -36,6 +36,7 @@ module Echo = struct
          | S.Bytes -> v
          | S.Uuid -> Uuidm.to_string v
          | S.Json -> v
+         | S.Enum _ -> v
          | S.Bool -> string_of_bool v))
 
   let instant_of v =
@@ -69,6 +70,7 @@ module Echo = struct
             | Some u -> Ok u
             | None -> Error "a uuid")
         | S.Json -> Ok v
+        | S.Enum _ -> Ok v
         | S.Bool -> some "a bool" (bool_of_string_opt v))
 
   let fold () _ params ~init ~row = Ok (row init (Array.of_list params), 1)
@@ -134,6 +136,19 @@ let interval =
 let equal_interval (a : S.interval) (b : S.interval) =
   a.months = b.months && a.days = b.days && a.microseconds = b.microseconds
 
+(* An enum's values, each holding a function, which no equality compares:
+   one read back is found by its label. *)
+type mood = Calm of (unit -> int) | Cross of (unit -> int)
+
+let mood_label = function Calm _ -> "calm" | Cross _ -> "cross"
+let moods = [ Calm (fun () -> 1); Cross (fun () -> 2) ]
+let mood = S.enum mood_label moods
+
+let equal_mood a b =
+  match (a, b) with
+  | Calm f, Calm g | Cross f, Cross g -> f () = g ()
+  | Calm _, Cross _ | Cross _, Calm _ -> false
+
 let scalars =
   let open QCheck.Gen in
   [
@@ -157,6 +172,7 @@ let scalars =
     scalar S.instant instant Ptime.equal (Ptime.to_rfc3339 ~frac_s:12) "instant";
     scalar S.uuid uuid Uuidm.equal Uuidm.to_string "uuid";
     scalar S.json string String.equal (Printf.sprintf "%S") "json";
+    scalar mood (QCheck.Gen.oneof_list moods) equal_mood mood_label "enum";
   ]
 
 let pair_of (Shape a) (Shape b) =
@@ -283,6 +299,23 @@ let test_an_array_of_arrays_is_refused () =
   refused "read"
     (Run.run () (S.find ~params:(S.array S.int) ~row:ty "echo") [ 1; 2 ])
 
+(* A label none of an enum's values has is refused as the column's, and an
+   enum of no values reads nothing. *)
+let test_an_unknown_label_is_refused () =
+  let refused what = function
+    | Error (`Db m) ->
+        Alcotest.(check string) what "column 1: unreadable value" m
+    | Error (`Conflict _ | `Not_serializable _ | `Closed | `Lost _) ->
+        Alcotest.failf "%s: not the shape's error" what
+    | Ok _ -> Alcotest.failf "%s: read" what
+  in
+  refused "a label of no value"
+    (Run.run () (S.find ~params:S.text ~row:mood "echo") "grey");
+  refused "an enum of no values"
+    (Run.run ()
+       (S.find ~params:S.text ~row:(S.enum mood_label []) "echo")
+       "calm")
+
 let () =
   Alcotest.run "shape"
     [
@@ -295,5 +328,7 @@ let () =
             test_an_option_over_no_column_is_none;
           Alcotest.test_case "an array of arrays is refused" `Quick
             test_an_array_of_arrays_is_refused;
+          Alcotest.test_case "an unknown label is refused" `Quick
+            test_an_unknown_label_is_refused;
         ] );
     ]

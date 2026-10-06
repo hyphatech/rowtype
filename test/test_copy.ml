@@ -122,6 +122,38 @@ let test_every_value_comes_back () =
         (List.mapi (fun k _ -> if k mod 2 = 0 then None else Some (-k)) texts)
         (read (S.opt S.int) "n"))
 
+(* An enum's labels, those COPY's format and an array's give a meaning to
+   among them, alone and in an array. A label is never empty. *)
+let test_every_label_comes_back () =
+  let labels = List.filter (fun t -> not (String.equal t "")) texts in
+  on_db
+    [
+      "create type label as enum ("
+      ^ String.concat ", "
+          (List.map
+             (fun l ->
+               "'" ^ String.concat "''" (String.split_on_char '\'' l) ^ "'")
+             labels)
+      ^ ")";
+      "create table e (k int8, l label, ls label[])";
+    ]
+    (fun db ->
+      let label = S.enum Fun.id labels in
+      let rows = List.mapi (fun k l -> (k, l, [ l; l ])) labels in
+      Alcotest.(check int)
+        "every row written" (List.length labels)
+        (ok
+           (Pg.copy_in db ~table:"e" ~columns:[]
+              (S.t3 S.int label (S.array label))
+              (List.to_seq rows)));
+      Alcotest.(check (list string))
+        "label" labels
+        (column db label "select l from e order by k");
+      Alcotest.(check (list (list string)))
+        "label[]"
+        (List.map (fun l -> [ l; l ]) labels)
+        (column db (S.array label) "select ls from e order by k"))
+
 (* Columns named in the row's order, and names quoted as given. *)
 let test_columns_and_names_are_as_given () =
   on_db
@@ -265,6 +297,8 @@ let () =
         [
           Alcotest.test_case "every value comes back as itself" `Quick
             test_every_value_comes_back;
+          Alcotest.test_case "every label comes back as itself" `Quick
+            test_every_label_comes_back;
           Alcotest.test_case "columns and names are as given" `Quick
             test_columns_and_names_are_as_given;
           Alcotest.test_case "a load is held a row at a time" `Quick

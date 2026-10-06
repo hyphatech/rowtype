@@ -1,5 +1,16 @@
 # Changes
 
+## Unreleased
+
+- `rowtype`: `S.enum label values` reads and writes an enum through the
+  labels of the program's own type, with no cast in the SQL, alone or in
+  an array; a row holding a label none of `values` has is refused, naming
+  its column. `rowtype-postgres`: `verify` holds such a column to an enum
+  that has every one of the labels, and refuses a list of none or one that
+  repeats a label; a label only the database has is no disagreement, so a
+  migration may add one ahead of the code. Breaking for a backend:
+  `Enum` joins `Rowtype.scalar`.
+
 ## 0.2.0 (2026-10-06)
 
 - `rowtype-postgres`: an array's element is read as its own type is, so

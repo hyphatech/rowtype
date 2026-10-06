@@ -101,11 +101,21 @@ value in one round trip, all or nothing: if any run fails, none applies.
 | `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart |
 | `S.uuid` | `uuid` | `Uuidm.t` |
 | `S.json` | `json`, `jsonb` | `string`, the document |
+| `S.enum label values` | an enum | each of `values`, written as its `label` |
 
-Any other type -- `numeric`, `time`, a range, `inet`, an enum -- is read
-through a cast in the SQL (`price::text`, `mood::text`, `moods::text[]`) and
-`S.text`, and a read without one is refused, saying so. An enum is written
-from `S.text` as it is.
+An enum is read and written through the labels of your own type:
+
+```ocaml
+let colour = S.enum Colour.to_string Colour.all
+```
+
+A row holding a label none of `values` has is refused, naming its column.
+`Pg.verify` holds the column to an enum that has every one of the labels, so
+a migration may add a label before the code that reads it ships.
+
+Any other type -- `numeric`, `time`, a range, `inet` -- is read through a
+cast in the SQL (`price::text`, `spans::text[]`) and `S.text`, and a read
+without one is refused, saying so.
 
 `S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map
 a column onto your own type. A list bound as an array writes many rows in one

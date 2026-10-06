@@ -25,6 +25,9 @@ type _ scalar =
      own so a backend reads each exactly and checks a column is one. *)
   | Uuid : Uuidm.t scalar
   | Json : string scalar
+  (* A label of a type with a closed set of them, the labels carried so a
+     backend's check holds the column to them. *)
+  | Enum : string list -> string scalar
 
 type _ ty =
   | Unit : unit ty
@@ -35,7 +38,7 @@ type _ ty =
      of nested pairs without the call site ever seeing the nesting. *)
   | Conv : 'a ty * ('a -> 'b) * ('b -> 'a) -> 'b ty
   (* The same, for a value the database may hold and this program may not
-     be able to read -- an enum label, a key -- so a row that does not
+     be able to read -- a key, a code -- so a row that does not
      decode is an error that says which column, never a raise. *)
   | Parse : 'a ty * ('a -> 'b option) * ('b -> 'a) -> 'b ty
   (* One column holding many values, each of the element's shape -- which
@@ -141,6 +144,15 @@ let t11 a b c d e f g h i j k =
 
 let conv shape ~of_ ~to_ = Conv (shape, of_, to_)
 let parse shape ~of_ ~to_ = Parse (shape, of_, to_)
+
+(* Read back by its label, a string, so no two values are ever compared:
+   a value may hold a function, and [=] on one raises. *)
+let enum label values =
+  let labelled = List.map (fun v -> (label v, v)) values in
+  Parse
+    ( Scalar (Enum (List.map fst labelled)),
+      (fun l -> List.assoc_opt l labelled),
+      label )
 
 let rec arity : type a. a ty -> int = function
   | Unit -> 0

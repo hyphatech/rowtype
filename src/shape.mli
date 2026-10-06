@@ -25,6 +25,7 @@ type _ scalar =
   | Interval : interval scalar
   | Uuid : Uuidm.t scalar
   | Json : string scalar
+  | Enum : string list -> string scalar
 
 type _ ty =
   | Unit : unit ty
@@ -132,6 +133,9 @@ val conv : 'a ty -> of_:('a -> 'b) -> to_:('b -> 'a) -> 'b ty
 
 val parse : 'a ty -> of_:('a -> 'b option) -> to_:('b -> 'a) -> 'b ty
 (** As {!conv}, for a value a row may hold that this program cannot read. *)
+
+val enum : ('a -> string) -> 'a list -> 'a ty
+(** A {!parse} over a column of the labels [values] have. *)
 
 val arity : 'a ty -> int
 (** How many SQL columns or placeholders a shape occupies. An option is
