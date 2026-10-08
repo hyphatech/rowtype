@@ -18,8 +18,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: ${{ matrix.ocaml }}
-      # postgres-eio is pinned to its release until opam-repository has it.
-      - run: opam pin add -n -y postgres-eio "git+https://github.com/hyphatech/postgres-eio.git#0.1.0"
       - run: opam install . --deps-only --with-test --with-dev-setup -y
       # Use setup-ocaml's switch instead of the Makefile's local one.
       - run: make lint OPAM="opam exec --"
@@ -36,8 +34,6 @@ jobs:
       - uses: ocaml/setup-ocaml@v3
         with:
           ocaml-compiler: "5.4"
-      # postgres-eio is pinned to its release until opam-repository has it.
-      - run: opam pin add -n -y postgres-eio "git+https://github.com/hyphatech/postgres-eio.git#0.1.0"
       - run: opam install . --deps-only --with-test -y
       - run: opam list --installed --columns=name,version
       - run: make build OPAM="opam exec --"

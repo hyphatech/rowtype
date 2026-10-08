@@ -1,5 +1,10 @@
 # Changes
 
+## Unreleased
+
+- `rowtype-postgres` pins postgres-eio to its 0.1.0 tag from its own opam
+  file, so pinning rowtype is the whole install.
+
 ## 0.2.0 (2026-10-06)
 
 - `rowtype-postgres`: an array's element is read as its own type is, so

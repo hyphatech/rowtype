@@ -25,7 +25,6 @@ rowtype does less, Postgres on Eio only, and in return gives you:
 ## Install
 
 ```sh
-opam pin add postgres-eio https://github.com/hyphatech/postgres-eio.git
 opam pin add https://github.com/hyphatech/rowtype.git
 ```
 
