@@ -176,7 +176,7 @@ with
 
 `Pg.Transaction.error_to_string` tells what `within` answers, the
 transaction's own failures and its statements', in one call, and
-`Pg.Pool.error_to_string` a pool's `` `Busy ``.
+`Pg.Pool.error_to_string` a pool's `` `Busy `` or `` `Closed ``.
 
 ## Checking statements
 

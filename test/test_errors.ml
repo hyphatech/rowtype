@@ -254,6 +254,7 @@ let test_every_failure_has_its_words () =
        (`Not_committed "commit: the server refused it"));
   told "busy" "no connection came free within the pool's wait"
     (Pg.Pool.error_to_string `Busy);
+  told "closed" "the pool is closed" (Pg.Pool.error_to_string `Closed);
   told "disagreements"
     "the database disagrees: select a from t: 1 columns declared, and the \
      database has 2; insert into t values ($1): parameter 1 is declared int, \

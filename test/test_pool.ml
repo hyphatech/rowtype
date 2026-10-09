@@ -22,7 +22,7 @@ let with_pool ?(size = 4) ?wait_s target f =
 let lent pool f =
   match Pg.Pool.use pool f with
   | Ok v -> v
-  | Error `Busy -> Alcotest.fail "busy"
+  | Error ((`Busy | `Closed) as e) -> Alcotest.fail (Pg.Pool.error_to_string e)
 
 let echo = S.find ~params:S.int ~row:S.int "select $1::int"
 
@@ -82,6 +82,7 @@ let test_a_borrow_past_its_wait_is_busy () =
             (fun () ->
               (match Pg.Pool.use ~wait_s:0.05 pool (fun _ -> ()) with
               | Error `Busy -> ()
+              | Error `Closed -> Alcotest.fail "the open pool was closed"
               | Ok () -> Alcotest.fail "lent a connection already lent");
               Eio.Promise.resolve released ());
           Alcotest.(check int)

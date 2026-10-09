@@ -2,11 +2,16 @@
 
 ## Unreleased
 
+- `rowtype-postgres`: `Pool.use` answers `` `Closed `` beside `` `Busy ``,
+  both a `Pool.error`, and `Pool.error_to_string` words each as
+  postgres-eio does. postgres-eio answers `` `Closed `` for a closed pool
+  after its 0.1.0, which answers `` `Busy `` there. Breaking: a match on
+  what `Pool.use` answers handles `` `Closed ``.
 - `rowtype-postgres`: every failure it answers has a printer beside it:
   `Transaction.error_to_string` for what `Transaction.within` answers, its
-  own failures and a statement's, `Pool.error_to_string` for `` `Busy ``,
-  and `error_to_string` for what `verify` answers, `` `Disagreements ``
-  included. A statement's failure is told as `Rowtype.error_to_string`
+  own failures and a statement's, `Pool.error_to_string` for a
+  `Pool.error`, and `error_to_string` for what `verify` answers,
+  `` `Disagreements `` included. A statement's failure is told as `Rowtype.error_to_string`
   tells it.
 - Breaking: OCaml 5.5 or later is required. The opam files asked for 5.4,
   which CI tested and nothing else did; every switch the code is written

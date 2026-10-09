@@ -131,12 +131,18 @@ module Pool : sig
       output styles {!connect} keeps; [observe] is {!connect}'s, for every
       connection it lends. *)
 
-  val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> `Busy ]) result
-  (** As [Postgres_eio.Pool.use]: [`Busy] if no connection came free within the
-      wait. *)
+  type error =
+    [ `Busy  (** no connection came free within the wait *)
+    | `Closed  (** the pool is closed *) ]
 
-  val error_to_string : [< `Busy ] -> string
-  (** [`Busy] in words for a log. *)
+  val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> error ]) result
+  (** As [Postgres_eio.Pool.use]: [`Busy] if no connection came free within the
+      wait, and [`Closed] at once if the pool is closed, or closes while the
+      borrow waits. postgres-eio answers [`Closed] after its 0.1.0, which
+      answers [`Busy] there. *)
+
+  val error_to_string : [< error ] -> string
+  (** An {!error} in words for a log. *)
 
   type stats = Postgres_eio.Pool.stats = {
     size : int;
