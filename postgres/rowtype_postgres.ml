@@ -627,6 +627,9 @@ module Pool = struct
     Pg.Pool.use ?wait_s t.pool (fun pg ->
         f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
 
+  let error_to_string : [< `Busy ] -> string = function
+    | `Busy -> "no connection came free within the wait"
+
   type stats = Pg.Pool.stats = {
     size : int;
     idle : int;
@@ -679,6 +682,10 @@ module Transaction = struct
 
   type failure =
     [ `Not_committed of string | `Not_serializable of string | `Lost of string ]
+
+  let error_to_string : [< failure | S.error ] -> string = function
+    | `Not_committed m -> "the transaction was not committed: " ^ m
+    | #S.error as e -> S.error_to_string e
 
   (* No level named is the database's own default, so a plain [begin]. *)
   let begin_statement = function
@@ -1005,3 +1012,9 @@ let verify db statements =
               rest)
   in
   each [] statements
+
+let error_to_string : [< `Disagreements of string list | S.error ] -> string =
+  function
+  | `Disagreements problems ->
+      "the database disagrees: " ^ String.concat "; " problems
+  | #S.error as e -> S.error_to_string e

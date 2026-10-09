@@ -171,12 +171,17 @@ with
 | Error (#Pg.Transaction.failure as f) -> Error (Unavailable f)
 ```
 
+`Pg.Transaction.error_to_string` tells what `within` answers, the
+transaction's own failures and its statements', in one call, and
+`Pg.Pool.error_to_string` a pool's `` `Busy ``.
+
 ## Checking statements
 
 `Pg.verify db statements` has Postgres describe every statement without
 running it, and compares the parameters and columns with what you declared:
 `` `Disagreements `` names every problem, and a check that could not ask --
-a lost connection -- is that failure, as a statement's is.
+a lost connection -- is that failure, as a statement's is;
+`Pg.error_to_string` tells either.
 Run it in a test against a migrated database, and a renamed column fails the
 test instead of a request.
 

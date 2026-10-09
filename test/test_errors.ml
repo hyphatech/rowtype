@@ -227,6 +227,45 @@ let test_no_value_in_a_failure_or_a_log () =
         "there were failures to look at" true
         (List.length !failures >= 5))
 
+(* Every failure rowtype-postgres answers has its printer beside its type,
+   and a statement's failure is told by each as Rowtype tells it. *)
+let test_every_failure_has_its_words () =
+  let told what expected words = Alcotest.(check string) what expected words in
+  let statements : S.error list =
+    [
+      `Conflict (Some "users_email_key");
+      `Conflict None;
+      `Not_serializable "could not serialize access";
+      `Closed;
+      `Lost "the connection timed out";
+      `Db "relation \"users\" does not exist";
+    ]
+  in
+  List.iter
+    (fun e ->
+      let words = S.error_to_string e in
+      told "a statement's failure, in a transaction" words
+        (Pg.Transaction.error_to_string e);
+      told "a statement's failure, from verify" words (Pg.error_to_string e))
+    statements;
+  told "not committed"
+    "the transaction was not committed: commit: the server refused it"
+    (Pg.Transaction.error_to_string
+       (`Not_committed "commit: the server refused it"));
+  told "busy" "no connection came free within the wait"
+    (Pg.Pool.error_to_string `Busy);
+  told "disagreements"
+    "the database disagrees: select a from t: 1 columns declared, and the \
+     database has 2; insert into t values ($1): parameter 1 is declared int, \
+     and the database has text"
+    (Pg.error_to_string
+       (`Disagreements
+          [
+            "select a from t: 1 columns declared, and the database has 2";
+            "insert into t values ($1): parameter 1 is declared int, and the \
+             database has text";
+          ]))
+
 let () =
   Db_target.required ~suite:"errors";
   Eio_main.run @@ fun env ->
@@ -242,6 +281,8 @@ let () =
             test_timeouts_leave_the_connection_whole;
           Alcotest.test_case "a deadlock is not serializable" `Quick
             test_a_deadlock_is_not_serializable;
+          Alcotest.test_case "every failure has its words" `Quick
+            test_every_failure_has_its_words;
         ] );
       ( "secrets",
         [

@@ -132,7 +132,11 @@ module Pool : sig
       connection it lends. *)
 
   val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> `Busy ]) result
-  (** As [Postgres_eio.Pool.use]. *)
+  (** As [Postgres_eio.Pool.use]: [`Busy] if no connection came free within the
+      wait. *)
+
+  val error_to_string : [< `Busy ] -> string
+  (** [`Busy] in words for a log. *)
 
   type stats = Postgres_eio.Pool.stats = {
     size : int;
@@ -220,6 +224,11 @@ module Transaction : sig
       caller tells them from its own as [#Transaction.failure], and names them
       in an error type of its own as [[ my_error | Transaction.failure ]]. *)
 
+  val error_to_string : [< failure | Rowtype.error ] -> string
+  (** In words for a log, which never hold a parameter's value: a statement's
+      failure as {!Rowtype.error_to_string} tells it, so what {!within} answers
+      of the work's statements and of its own is told in one call. *)
+
   val within :
     ?keep:('e -> bool) ->
     ?isolation:isolation ->
@@ -294,3 +303,8 @@ val verify :
     column read as it is stored, and a query may promise more, so a check would
     refuse what is right. A NULL a shape does not allow fails where it is read,
     naming its column. *)
+
+val error_to_string :
+  [< `Disagreements of string list | Rowtype.error ] -> string
+(** What {!verify} answers, in words for a person: every disagreement, and a
+    statement's failure as {!Rowtype.error_to_string} tells it. *)
