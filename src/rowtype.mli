@@ -381,10 +381,10 @@ module type S = sig
 
   val run_many :
     conn -> ('p, unit) statement -> 'p list -> (unit, [> error ]) result
-  (** [run_many db statement values]: an {!exec} statement run once for each
-      value, in one round trip and all or nothing -- if any run fails, none
+  (** [run_many db statement values]: an {!Rowtype.exec} statement run once for
+      each value, in one round trip and all or nothing -- if any run fails, none
       applies, and the answer is that failure. No values sends nothing. A
-      statement that answers a row, a {!find} of [unit], is [`Db] before
+      statement that answers a row, a {!Rowtype.find} of [unit], is [`Db] before
       anything is sent, since a batch reads no rows. *)
 
   val exec_raw : conn -> string -> (unit, [> error ]) result
