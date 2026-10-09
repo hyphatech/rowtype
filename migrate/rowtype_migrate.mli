@@ -37,6 +37,11 @@
     after it succeeds: a run cut off between the two runs it again, so it is
     written to run twice ([create index concurrently if not exists]).
 
+    A file in a transaction that ends it itself -- its own [commit] or
+    [rollback] -- is refused, whether or not what follows succeeds, and its
+    record removed, since what ran after that end ran outside the transaction: a
+    migration is applied as one, or says on its first line that it is not.
+
     A history grows, and a database made from nothing replays all of it; a
     {!squash} replaces every file through a version with one baseline, whose
     first line is [-- rowtype-migrate: baseline] and whose version is the last
@@ -95,7 +100,9 @@ type error =
         one ran *)
   | `Failed of migration * Rowtype.error
     (** it failed, and the database is at the version before it -- or, for one
-        run outside a transaction, at whatever the failure left *)
+        run outside a transaction, at whatever the failure left, and for one
+        that ended its own transaction, at whatever that end kept, with the
+        migration not recorded *)
   | `No_database of string
     (** the server has no database of this name: it is made with
         [rowtype-migrate create] *)

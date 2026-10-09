@@ -196,7 +196,8 @@ rowtype-migrate squash VERSION     # every migration through it, as one baseline
 
 `up` applies each file in its own transaction, under an advisory lock, and
 records a digest of it. A migration edited after it ran, or merged out of
-order, is refused. `squash` proves the baseline makes the same schema as the
+order, is refused, and so is a file that ends its transaction itself with a
+`commit` or a `rollback`. `squash` proves the baseline makes the same schema as the
 history before it changes a file. The database is `--url`, or
 `DATABASE_URL`.
 

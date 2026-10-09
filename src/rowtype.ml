@@ -138,7 +138,6 @@ module type S = sig
     conn -> ('p, unit) statement -> 'p list -> (unit, [> error ]) result
 
   val exec_raw : conn -> string -> (unit, [> error ]) result
-  val commit : conn -> ([ `Committed | `Rolled_back ], [> error ]) result
 end
 
 (* The walk exists to pattern-match the GADT, and qualifying every
@@ -386,7 +385,6 @@ module Make (B : Backend) = struct
 
   let run_many db statement values = widen (many db statement values)
   let exec_raw db sql = widen (Result.map_error B.error (B.script db sql))
-  let commit db = widen (Result.map_error B.error (B.commit db))
 end
 
 (* ------------------------------------------------------------------ *)

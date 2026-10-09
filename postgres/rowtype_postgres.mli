@@ -8,11 +8,11 @@
     the style an interval's text is read in. Years 1 to 9999: within a day of
     either end, a session far from UTC prints a year that a connection reading
     text cannot read. A [COMMIT] of a transaction a failed statement aborted is
-    rolled back without an error, and {!commit} answers [`Rolled_back]. A result
-    is read in binary wherever the driver reads its type, and in text on a
-    connection that keeps no statements, which cannot be bound for binary. A
-    unique, exclusion or foreign-key violation is [`Conflict], with the
-    constraint the server named.
+    rolled back without an error, which {!Transaction.within} tells from a
+    commit. A result is read in binary wherever the driver reads its type, and
+    in text on a connection that keeps no statements, which cannot be bound for
+    binary. A unique, exclusion or foreign-key violation is [`Conflict], with
+    the constraint the server named.
 
     Each statement is a [debug] line on [rowtype-postgres] with how long it
     took: its first line of text, never its parameters. A statement runs on the

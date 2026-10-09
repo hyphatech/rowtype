@@ -345,7 +345,9 @@ module type Backend = sig
       one, or has more than one dimension, in words. *)
 
   val commit : conn -> ([ `Committed | `Rolled_back ], failure) result
-  (** [COMMIT], and what the database made of it. *)
+  (** [COMMIT], and what the database made of it: [`Rolled_back] for a
+      transaction a failed statement had already aborted, which a database may
+      roll back without an error, and nothing it wrote is kept. *)
 
   val error : failure -> error
   (** The failure told as {!type-error}: a constraint refusing the write because
@@ -385,13 +387,12 @@ module type S = sig
       anything is sent, since a batch reads no rows. *)
 
   val exec_raw : conn -> string -> (unit, [> error ]) result
-  (** For DDL and for control statements ([begin], [commit]): no parameters, and
-      rows are discarded. Several statements may be sent in one call. *)
-
-  val commit : conn -> ([ `Committed | `Rolled_back ], [> error ]) result
-  (** [COMMIT], and what the database made of it: [`Rolled_back] for a
-      transaction a failed statement had already aborted, which a database may
-      roll back without an error, and nothing it wrote is kept. *)
+  (** For DDL and for a session's settings: no parameters, and rows are
+      discarded. Several statements may be sent in one call. A transaction is
+      the backend's to run, never a [begin] and a [commit] sent here: a database
+      may answer the [COMMIT] of a transaction a failed statement aborted by
+      rolling it back without an error, which only the backend's own transaction
+      tells from a commit. *)
 end
 
 (** A functor, because one program may use two databases at once, each with its

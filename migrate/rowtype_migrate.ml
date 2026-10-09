@@ -310,29 +310,74 @@ let record ~table conn m =
 let failed m = function Ok v -> Ok v | Error e -> Error (`Failed (m, e))
 
 (* One transaction per file, with the row that records it, so a failure
-   leaves the database at exactly the version before it.
+   leaves the database at exactly the version before it. Run once, with no
+   retry, since a file run twice is a schema changed twice.
+
+   A file that ends that transaction itself -- a [commit], a [rollback] --
+   runs the rest of it outside one, and a [commit] there has kept the
+   record: it is refused, and its record removed. The transaction is known by its
+   id, so a file that begins another after its end is refused too.
 
    What Postgres will not run inside a transaction -- an index built
    concurrently, a VACUUM -- runs on its own, and its row is written after
    it: a run cut off between the two runs it again, which is why such a file
    has to be one that can run twice. *)
 let apply ~table conn m =
+  let ended =
+    "it ends the transaction it runs in, so it was not applied as one: its \
+     record is removed, and what ran before that end stays as the end left it. \
+     A file that runs outside a transaction says so on its first line, `-- \
+     rowtype-migrate: no transaction`"
+  in
+  let recorded () =
+    Pg.run conn
+      (S.find ~params:S.int ~row:S.bool
+         (Printf.sprintf "select exists (select from %s where version = $1)"
+            table))
+      m.version
+  in
+  let unrecord () =
+    Pg.run conn
+      (S.exec ~params:S.int
+         (Printf.sprintf "delete from %s where version = $1" table))
+      m.version
+  in
   (* The row first, since in one transaction the order is not seen, and a
      migration that moves the search path -- a baseline does -- would
      otherwise leave the record's table out of it. *)
   let in_transaction () =
-    let* () = failed m (Pg.exec_raw conn "begin") in
     match
-      let* () = record ~table conn m in
-      let* () = Pg.exec_raw conn m.sql in
-      Pg.commit conn
+      Pg.Transaction.within conn (fun conn ->
+          let* () = record ~table conn m in
+          let* id =
+            Pg.run conn
+              (S.find ~params:S.unit ~row:S.int "select txid_current()")
+              ()
+          in
+          let* () = Pg.exec_raw conn m.sql in
+          let* still =
+            Pg.run conn
+              (S.find ~params:S.unit ~row:(S.opt S.int)
+                 "select txid_current_if_assigned()")
+              ()
+          in
+          if Option.equal Int.equal (Some id) still then Ok () else Error `Ended)
     with
-    | Ok `Committed -> Ok ()
-    | Ok `Rolled_back ->
-        Error (`Failed (m, `Db "its transaction was aborted, and rolled back"))
-    | Error e ->
-        ignore (Pg.exec_raw conn "rollback" : (unit, S.error) result);
-        Error (`Failed (m, e))
+    | Ok () -> Ok ()
+    | Error `Ended ->
+        let* () = failed m (unrecord ()) in
+        Error (`Failed (m, `Db ended))
+    | Error (`Not_committed detail) -> Error (`Failed (m, `Db detail))
+    | Error (#S.error as e) -> (
+        (* The record outlives the rollback only where the file committed
+           it before it failed. *)
+        match recorded () with
+        | Ok true ->
+            let* () = failed m (unrecord ()) in
+            Error
+              (`Failed
+                 (m, `Db (ended ^ ". It then failed: " ^ S.error_to_string e)))
+        | Ok false | Error _ -> Error (`Failed (m, e)))
   in
   match m.kind with
   | Transaction -> in_transaction ()

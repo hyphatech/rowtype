@@ -709,7 +709,7 @@ module Transaction = struct
             rollback db;
             Printexc.raise_with_backtrace ex trace
         | Ok v -> (
-            match commit db with
+            match Result.map_error Backend.error (Backend.commit db) with
             | Ok `Committed -> Ok v
             | Ok `Rolled_back ->
                 not_committed "commit"
@@ -723,7 +723,7 @@ module Transaction = struct
             rollback db;
             Error e
         | Error e -> (
-            match commit db with
+            match Result.map_error Backend.error (Backend.commit db) with
             | Ok `Committed -> Error e
             (* The answer stands; that the write it asked to keep did not is
                the log's to say, or an attempt counted counts nothing. *)

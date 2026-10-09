@@ -12,6 +12,17 @@
   flight -- closes the connection, which ends the transaction, where it
   left the transaction open, with its locks, and the next `within` on it
   refused. The next `within` makes the connection again.
+- `rowtype-migrate`: a migration file that ends its own transaction -- a
+  `commit` or a `rollback` in it -- is refused, and its record removed,
+  where it was recorded as applied even when what followed its end failed.
+  The refusal names the `-- rowtype-migrate: no transaction` directive.
+  Breaking: such a file, which applied before, is now refused. A migration
+  runs through `Transaction.within`, once.
+- Breaking: `commit` leaves `Rowtype.S`, and so `Rowtype_postgres`, since a
+  `begin` and a `commit` sent by hand lose what `Transaction.within` tells
+  apart: a `COMMIT` that rolled back an aborted transaction. It stays in
+  `Rowtype.Backend`. `exec_raw` is for DDL and a session's settings, and a
+  transaction is `Transaction.within`'s.
 
 ## 0.2.0 (2026-10-06)
 

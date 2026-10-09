@@ -239,6 +239,55 @@ let test_a_failed_migration_stops_where_it_failed () =
             "and the fix runs" 3
             (List.length (ok_s (Rowtype_migrate.status db fixed)).applied)))
 
+(* A file that ends the transaction it runs in is refused, whether what
+   follows its [commit] fails, succeeds, or begins another: its record is
+   removed, so the database does not say it is applied, and the refusal
+   names the directive a file outside a transaction says it is with. *)
+let test_a_migration_that_ends_its_transaction_is_refused () =
+  List.iter
+    (fun sql ->
+      on_db [] (fun db ->
+          let first =
+            {
+              Rowtype_migrate.version = version 20260101000000;
+              name = "first";
+              kind = Transaction;
+              sql = "create table a (n int)";
+            }
+          and ends =
+            {
+              Rowtype_migrate.version = version 20260102000000;
+              name = "ends";
+              kind = Transaction;
+              sql;
+            }
+          in
+          (match Rowtype_migrate.run db [ first; ends ] with
+          | Ok () -> Alcotest.failf "applied: %s" sql
+          | Error (`Failed ((m, _) as e)) ->
+              Alcotest.(check string) "named" "ends" m.name;
+              Alcotest.(check bool)
+                ("names the directive: " ^ words (`Failed e))
+                true
+                (contains
+                   (words (`Failed e))
+                   "-- rowtype-migrate: no transaction")
+          | Error e -> Alcotest.failf "not the migration's: %s" (words e));
+          let st = ok_s (Rowtype_migrate.status db [ first; ends ]) in
+          Alcotest.(check (list int))
+            ("applied, after " ^ sql) [ 20260101000000 ]
+            (List.map (fun (v, _) -> number v) st.applied);
+          Alcotest.(check (list int))
+            "pending" [ 20260102000000 ]
+            (List.map
+               (fun (m : Rowtype_migrate.migration) -> number m.version)
+               st.pending)))
+    [
+      "create table b (n int); commit; select 1/0;";
+      "create table b (n int); commit;";
+      "create table b (n int); commit; begin; create table c (n int);";
+    ]
+
 (* A migration whose connection is lost is the failure told, by its name,
    rather than the lock's release that cannot follow it. *)
 let test_a_lost_connection_names_its_migration () =
@@ -777,6 +826,8 @@ let () =
             test_a_migration_is_unbounded;
           Alcotest.test_case "a status says what is pending, and writes nothing"
             `Quick test_a_status_says_what_is_pending_and_writes_nothing;
+          Alcotest.test_case "a migration that ends its transaction is refused"
+            `Quick test_a_migration_that_ends_its_transaction_is_refused;
           Alcotest.test_case "a failed migration stops where it failed" `Quick
             test_a_failed_migration_stops_where_it_failed;
           Alcotest.test_case "a lost connection names its migration" `Quick
