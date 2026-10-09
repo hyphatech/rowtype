@@ -257,7 +257,12 @@ module Transaction : sig
       before anything begins, since its [COMMIT] would end the outer one, and
       the outer one goes on. Each [`Not_committed] and [`Lost] is an [error]
       line on [rowtype-postgres]. A raise inside [work] rolls back and passes.
-  *)
+
+      A fiber cancelled inside [work], at a statement or at any other effect,
+      closes the connection, which ends the transaction with nothing kept, and
+      the cancellation passes. Its statements then answer [`Closed], and the
+      next [within] on it, or {!revive}, makes it again; a pooled one is made
+      again before it is next lent. *)
 end
 
 (** {1 Statements against the database} *)

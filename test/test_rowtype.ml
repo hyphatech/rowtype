@@ -963,6 +963,60 @@ let test_a_cancelled_transaction_keeps_nothing () =
       | Error _ -> Alcotest.fail "the next transaction failed");
       Alcotest.(check int) "only the next one was kept" 1 (committed db))
 
+(* A transaction cancelled between its statements, with nothing in flight,
+   ends with its connection rather than stay open on it: the server holds
+   nothing for it, and the next transaction makes the connection again.
+   The cancel comes once the work has written, so where it lands does not
+   depend on how fast the statement ran. *)
+let test_a_transaction_cancelled_between_statements_ends () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target and other = Db_target.connect target in
+      Fun.protect
+        ~finally:(fun () ->
+          Pg.close db;
+          Pg.close other)
+        (fun () ->
+          ok (Pg.exec_raw db "create table t (n int)");
+          let written, write = Eio.Promise.create () in
+          Eio.Fiber.first
+            (fun () ->
+              ignore
+                (T.within db (fun db ->
+                     let* () = insert db 1 in
+                     Eio.Promise.resolve write ();
+                     Eio.Time.Mono.sleep (Db_target.mono ()) 60.;
+                     Ok ())
+                  : (unit, _) result))
+            (fun () -> Eio.Promise.await written);
+          (match
+             Pg.run db
+               (S.find ~params:S.unit ~row:S.bool
+                  "select pg_current_xact_id_if_assigned() is not null")
+               ()
+           with
+          | Error `Closed -> ()
+          | Ok true -> Alcotest.fail "the transaction is still open"
+          | Ok false | Error _ -> Alcotest.fail "the connection was not closed");
+          (* A session told to end lets its locks go a moment later, and one
+             left in a transaction holds them as long as it stays: ten
+             seconds is far past the one and short of the other. *)
+          (match
+             T.within other (fun other ->
+                 let* () = Pg.exec_raw other "set local lock_timeout = '10s'" in
+                 Pg.exec_raw other "lock table t in access exclusive mode")
+           with
+          | Ok () -> ()
+          | Error _ -> Alcotest.fail "the cancelled transaction holds its lock");
+          (match T.within db (fun db -> insert db 2) with
+          | Ok () -> ()
+          | Error _ -> Alcotest.fail "the next transaction failed");
+          Alcotest.(check (list int))
+            "another connection sees the next one alone" [ 2 ]
+            (ok
+               (Pg.run other
+                  (S.list ~params:S.unit ~row:S.int "select n from t")
+                  ()))))
+
 (* A statement whose fiber is cancelled stops at the server too, rather
    than run on for nobody under whatever it holds. *)
 let test_a_cancelled_statement_stops_at_the_server () =
@@ -1655,6 +1709,8 @@ let () =
             test_a_transaction_begins_at_its_level;
           Alcotest.test_case "a cancelled transaction keeps nothing" `Quick
             test_a_cancelled_transaction_keeps_nothing;
+          Alcotest.test_case "a transaction cancelled between statements ends"
+            `Quick test_a_transaction_cancelled_between_statements_ends;
           Alcotest.test_case "a cancelled statement stops at the server" `Quick
             test_a_cancelled_statement_stops_at_the_server;
           Alcotest.test_case "a raise rolls back and passes" `Quick

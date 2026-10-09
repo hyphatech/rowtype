@@ -695,9 +695,15 @@ module Transaction = struct
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match work db with
-        (* A cancelled fiber can send nothing, a rollback included: the
-           driver closes the connection, which ends the transaction. *)
-        | exception (Eio.Cancel.Cancelled _ as ex) -> raise ex
+        (* A cancelled fiber may have stopped anywhere, mid-protocol
+           included, so a rollback sent now might never be answered. Closing
+           the connection ends the transaction whatever it was doing, as a
+           failure does, and leaves it for [revive] to make again; a pool
+           makes a closed connection again before it lends it. *)
+        | exception (Eio.Cancel.Cancelled _ as ex) ->
+            let trace = Printexc.get_raw_backtrace () in
+            Eio.Cancel.protect (fun () -> Pg.close db.pg);
+            Printexc.raise_with_backtrace ex trace
         | exception ex ->
             let trace = Printexc.get_raw_backtrace () in
             rollback db;
