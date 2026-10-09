@@ -21,7 +21,7 @@
   "A query's parameters and rows described once, binding and decoding both, and run by a backend. Reads no SQL and links no database's library.")
  (depends
   (ocaml
-   (>= 5.4))
+   (>= 5.5))
   (ptime
    (>= 1.2.0))
   (uuidm
@@ -62,7 +62,7 @@
   "Connections and a pool, notifications, transactions whose own failures are values, a load through one COPY, and a statement checked against the database without running it.")
  (depends
   (ocaml
-   (>= 5.4))
+   (>= 5.5))
   (rowtype
    (= :version))
   (postgres-eio
@@ -98,7 +98,7 @@
   "A directory of timestamped SQL files, applied in order under an advisory lock, each in one transaction with the row that records it and a digest of its text, or on its own where Postgres refuses one; a schema dump that changes only when the schema does; and a history squashed into one baseline.")
  (depends
   (ocaml
-   (>= 5.4))
+   (>= 5.5))
   (rowtype
    (= :version))
   (rowtype-postgres

@@ -11,7 +11,7 @@ homepage: "https://github.com/hyphatech/rowtype"
 bug-reports: "https://github.com/hyphatech/rowtype/issues"
 depends: [
   "dune" {>= "3.18"}
-  "ocaml" {>= "5.4"}
+  "ocaml" {>= "5.5"}
   "ptime" {>= "1.2.0"}
   "uuidm" {>= "0.9.10"}
   "alcotest" {with-test & >= "1.9.1"}

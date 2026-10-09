@@ -3,7 +3,7 @@
 [![ci](https://img.shields.io/github/actions/workflow/status/hyphatech/rowtype/ci.yml?branch=main&label=ci)](https://github.com/hyphatech/rowtype/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/hyphatech/rowtype?label=release)](https://github.com/hyphatech/rowtype/releases)
 [![license](https://img.shields.io/github/license/hyphatech/rowtype)](LICENSE)
-![OCaml 5.4+](https://img.shields.io/badge/OCaml-5.4%2B-EC6813?logo=ocaml&logoColor=white)
+![OCaml 5.5+](https://img.shields.io/badge/OCaml-5.5%2B-EC6813?logo=ocaml&logoColor=white)
 
 Typed Postgres queries and migrations for OCaml 5.
 
