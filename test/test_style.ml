@@ -10,8 +10,11 @@ let command_dirs = [ "migrate/bin" ]
 (* An [open] is refused but where the file names why: the walk over a
    query's shape pattern-matches the GADT it opens. *)
 let allowed_opens = [ ("src/rowtype.ml", "Shape") ]
+let never_prints = "a library never prints: log through Logs"
 
-(* An identifier, dotted path included, and the reason it is refused. *)
+(* An identifier, dotted path included, and the reason it is refused. A
+   name is looked up with a leading [Stdlib.] taken off, so
+   [Stdlib.compare] is [compare]. *)
 let banned =
   [
     ("failwith", "errors are values: return a result");
@@ -24,19 +27,33 @@ let banned =
     ("List.nth", "partial: use List.nth_opt");
     ("Obj.magic", "unsafe");
     ("compare", "polymorphic: use Int.compare, String.compare, ...");
-    ("Stdlib.compare", "polymorphic: use Int.compare, String.compare, ...");
     ("Sys.getenv", "a library reads no environment: take it as an argument");
     ("Sys.getenv_opt", "a library reads no environment: take it as an argument");
     ("Unix.getenv", "a library reads no environment: take it as an argument");
     ("Unix.environment", "a library reads no environment");
-    ("print_string", "a library never prints: log through Logs");
-    ("print_endline", "a library never prints: log through Logs");
-    ("prerr_string", "a library never prints: log through Logs");
-    ("prerr_endline", "a library never prints: log through Logs");
-    ("Printf.printf", "a library never prints: log through Logs");
-    ("Printf.eprintf", "a library never prints: log through Logs");
-    ("Format.printf", "a library never prints: log through Logs");
-    ("Format.eprintf", "a library never prints: log through Logs");
+    ("print_string", never_prints);
+    ("print_endline", never_prints);
+    ("print_bytes", never_prints);
+    ("print_char", never_prints);
+    ("print_int", never_prints);
+    ("print_float", never_prints);
+    ("print_newline", never_prints);
+    ("prerr_string", never_prints);
+    ("prerr_endline", never_prints);
+    ("prerr_bytes", never_prints);
+    ("prerr_char", never_prints);
+    ("prerr_int", never_prints);
+    ("prerr_float", never_prints);
+    ("prerr_newline", never_prints);
+    ("stdout", never_prints);
+    ("stderr", never_prints);
+    ("Printf.printf", never_prints);
+    ("Printf.eprintf", never_prints);
+    ("Format.printf", never_prints);
+    ("Format.eprintf", never_prints);
+    ("Format.print_string", never_prints);
+    ("Format.std_formatter", never_prints);
+    ("Format.err_formatter", never_prints);
     ("exit", "a library never exits");
   ]
 
@@ -139,7 +156,8 @@ let is_ident_char = function
 
 (* Every identifier, dotted path included, with its line. A field access
    ([t.open]) begins with a lowercase name and so never matches a banned
-   path, and a path never ends in a dot. *)
+   path, and a path never ends in a dot. A labelled argument's label
+   ([~stdout:]) names no value and is left out. *)
 let identifiers code =
   let n = String.length code in
   let rec go i line acc =
@@ -156,7 +174,13 @@ let identifiers code =
           String.sub word 0 (String.length word - 1)
         else word
       in
-      go !j line ((line, word) :: acc))
+      let label =
+        i > 0
+        && (Char.equal code.[i - 1] '~' || Char.equal code.[i - 1] '?')
+        && !j < n
+        && Char.equal code.[!j] ':'
+      in
+      go !j line (if label then acc else (line, word) :: acc))
     else go (i + 1) line acc
   in
   go 0 1 []
@@ -174,19 +198,135 @@ let sources ?(dirs = dirs) suffix =
 
 let read_source file = read (Filename.concat ".." file)
 
+(* Every banned identifier in [code], with its line and the reason. *)
+let refusals code =
+  let stdlib = "Stdlib." in
+  identifiers code
+  |> List.filter_map (fun (line, word) ->
+      let name =
+        if String.starts_with ~prefix:stdlib word then
+          String.sub word (String.length stdlib)
+            (String.length word - String.length stdlib)
+        else word
+      in
+      List.assoc_opt name banned |> Option.map (fun why -> (line, word, why)))
+
 let no_banned_identifier () =
   let found =
     List.concat_map
       (fun file ->
-        let code = code_of (read_source file) in
-        identifiers code
-        |> List.filter_map (fun (line, word) ->
-            List.assoc_opt word banned
-            |> Option.map (fun why ->
-                Printf.sprintf "%s:%d: %s -- %s" file line word why)))
+        refusals (code_of (read_source file))
+        |> List.map (fun (line, word, why) ->
+            Printf.sprintf "%s:%d: %s -- %s" file line word why))
       (sources ".ml" @ sources ".mli")
   in
   Alcotest.(check (list string)) "banned identifiers" [] found
+
+(* The names OCAML.md's *Shared shapes* has every library's test_style
+   refuse, in its words. *)
+let shared_rule =
+  [
+    "failwith";
+    "invalid_arg";
+    "Option.get";
+    "Result.get_ok";
+    "Result.get_error";
+    "List.hd";
+    "List.tl";
+    "List.nth";
+    "Obj.magic";
+    "compare";
+    "Stdlib.compare";
+    "Sys.getenv";
+    "Sys.getenv_opt";
+    "Unix.getenv";
+    "Unix.environment";
+    "exit";
+    "print_string";
+    "print_endline";
+    "print_bytes";
+    "print_char";
+    "print_int";
+    "print_float";
+    "print_newline";
+    "prerr_string";
+    "prerr_endline";
+    "prerr_bytes";
+    "prerr_char";
+    "prerr_int";
+    "prerr_float";
+    "prerr_newline";
+    "stdout";
+    "stderr";
+    "Printf.printf";
+    "Printf.eprintf";
+    "Format.printf";
+    "Format.eprintf";
+    "Format.print_string";
+    "Format.std_formatter";
+    "Format.err_formatter";
+  ]
+
+let refuses_the_shared_rule () =
+  let missed =
+    List.concat_map
+      (fun name ->
+        List.filter
+          (fun use -> List.is_empty (refusals ("let _ = " ^ use)))
+          (if String.starts_with ~prefix:"Stdlib." name then [ name ]
+           else [ name; "Stdlib." ^ name ]))
+      shared_rule
+  in
+  Alcotest.(check (list string)) "names the rule refuses, let through" [] missed;
+  let beyond =
+    List.filter_map
+      (fun (name, _) -> if List.mem name shared_rule then None else Some name)
+      banned
+  in
+  Alcotest.(check (list string)) "names refused beyond the rule" [] beyond
+
+(* A label is no use of the value it is named like; a punned one, [~exit],
+   may be, since it passes whatever [exit] is in scope. *)
+let a_label_is_no_use () =
+  let names code = List.map (fun (_, word, _) -> word) (refusals code) in
+  Alcotest.(check (list string))
+    "labels" []
+    (names "let _ = f ~stdout:a ?stderr:b ~exit:c");
+  Alcotest.(check (list string)) "a punned label" [ "exit" ] (names "f ~exit")
+
+(* The names in a dune file's [(libraries ...)] fields, comments taken off.
+   A field is read up to its closing bracket, since [src/dune] selects
+   nothing. *)
+let libraries_of dune =
+  let words =
+    String.split_on_char '\n' dune
+    |> List.concat_map (fun line ->
+        match String.split_on_char ';' line with
+        | code :: _ -> String.split_on_char ' ' code
+        | [] -> [])
+    |> List.concat_map (String.split_on_char '(')
+    |> List.concat_map (fun w ->
+        match String.split_on_char ')' w with
+        | [ w ] -> [ w ]
+        | w :: _ -> [ w; ")" ]
+        | [] -> [])
+    |> List.filter (fun w -> not (String.equal w ""))
+  in
+  let rec field = function
+    | "libraries" :: rest -> names rest
+    | _ :: rest -> field rest
+    | [] -> []
+  and names = function
+    | ")" :: rest -> field rest
+    | name :: rest -> name :: names rest
+    | [] -> []
+  in
+  field words
+
+let rowtype_links_ptime_and_uuidm_alone () =
+  Alcotest.(check (list string))
+    "src/dune's libraries" [ "ptime"; "uuidm" ]
+    (libraries_of (read_source "src/dune"))
 
 (* Every local open, [M.(...)], [M.[...]] or [M.{...}], with its line and
    module: a bracket after a path whose last name is capitalised. An array's
@@ -288,6 +428,11 @@ let () =
       ( "libraries",
         [
           Alcotest.test_case "no banned identifier" `Quick no_banned_identifier;
+          Alcotest.test_case "refuses the shared rule" `Quick
+            refuses_the_shared_rule;
+          Alcotest.test_case "a label is no use" `Quick a_label_is_no_use;
+          Alcotest.test_case "rowtype links ptime and uuidm alone" `Quick
+            rowtype_links_ptime_and_uuidm_alone;
           Alcotest.test_case "no open but the named" `Quick
             no_open_but_the_named;
           Alcotest.test_case "no silenced warning" `Quick no_silenced_warning;

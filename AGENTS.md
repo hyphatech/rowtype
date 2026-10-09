@@ -58,8 +58,9 @@ Each rule comes with why it exists and the test that catches a break.
   but `ptime` and `uuidm`, whose types an instant and a uuid are; a backend is a package of its own, `rowtype-postgres`, and a
   statement reaches the database as written. Why: a rule of one database's
   syntax in the library every database shares is a rule the next backend
-  has to undo. Test: `src/dune` names `ptime` and `uuidm` alone, and `opam install
-  rowtype` installs nothing else.
+  has to undo. Test: `rowtype links ptime and uuidm alone`, in
+  `test_style`, reads `src/dune`'s libraries, and `opam install rowtype`
+  installs nothing else.
 - **A migration is applied by the command, and never by an application.**
   `rowtype-migrate up` applies the files from a directory and links no
   application; `Rowtype_migrate.run` is for a test and a tool. Why: every

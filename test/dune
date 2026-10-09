@@ -70,6 +70,7 @@
  (modules test_style)
  (libraries alcotest)
  (deps
+  ../src/dune
   (glob_files ../src/*.ml)
   (glob_files ../src/*.mli)
   (glob_files ../postgres/*.ml)
