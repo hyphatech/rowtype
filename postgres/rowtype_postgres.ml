@@ -627,8 +627,11 @@ module Pool = struct
     Pg.Pool.use ?wait_s t.pool (fun pg ->
         f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
 
+  (* Postgres_eio.Pool.error_to_string's sentence, word for word, so the same
+     failure reads the same through either library; the postgres-eio this
+     builds against has no printer to call. *)
   let error_to_string : [< `Busy ] -> string = function
-    | `Busy -> "no connection came free within the wait"
+    | `Busy -> "no connection came free within the pool's wait"
 
   type stats = Pg.Pool.stats = {
     size : int;

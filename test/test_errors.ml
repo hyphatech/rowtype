@@ -252,7 +252,7 @@ let test_every_failure_has_its_words () =
     "the transaction was not committed: commit: the server refused it"
     (Pg.Transaction.error_to_string
        (`Not_committed "commit: the server refused it"));
-  told "busy" "no connection came free within the wait"
+  told "busy" "no connection came free within the pool's wait"
     (Pg.Pool.error_to_string `Busy);
   told "disagreements"
     "the database disagrees: select a from t: 1 columns declared, and the \
