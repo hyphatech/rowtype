@@ -211,7 +211,7 @@ let test_a_closed_listener_hears_nothing () =
       with_listener target (fun l ->
           Pg.Listener.close l;
           match Pg.Listener.next l with
-          | Error `Closed -> ()
+          | Error `Connection_closed -> ()
           | Error (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) ->
               Alcotest.fail "not the closed connection's failure"
           | Ok _ -> Alcotest.fail "a closed listener heard something"))

@@ -41,7 +41,7 @@ type error =
         with a concurrent one -- a serialization failure, or a deadlock -- in
         its words: running the transaction again may succeed, which is the one
         thing no other failure here says *)
-  | `Closed
+  | `Connection_closed
     (** the connection was closed before the statement was sent -- by its owner,
         or by a failure before it -- so nothing was sent and nothing it would
         have done was done *)
@@ -352,9 +352,9 @@ module type Backend = sig
   val error : failure -> error
   (** The failure told as {!type-error}: a constraint refusing the write because
       of other rows is [`Conflict], naming the constraint where the database
-      does; a connection closed before the statement was sent is [`Closed], and
-      one that failed with it in flight [`Lost]; and anything else is [`Db] in
-      words for a log -- never a parameter's value. *)
+      does; a connection closed before the statement was sent is
+      [`Connection_closed], and one that failed with it in flight [`Lost]; and
+      anything else is [`Db] in words for a log -- never a parameter's value. *)
 end
 
 (** What {!Make} gives: statements run on a backend's connection. *)

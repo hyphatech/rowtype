@@ -144,7 +144,7 @@ Every failure is a value. `` `Conflict (Some "users_email_key") `` is a
 unique, exclusion or foreign-key constraint that refused the write, named.
 A NOT NULL or CHECK violation is the program's mistake, so it is `` `Db ``.
 `` `Not_serializable `` is a
-transaction a concurrent one won. `` `Closed `` is a connection closed
+transaction a concurrent one won. `` `Connection_closed `` is a connection closed
 before the statement was sent, so nothing it would have done was done, and
 `` `Lost `` one that failed with the statement in flight -- a timeout, a
 broken socket, a server that ended the session -- so a write may have been

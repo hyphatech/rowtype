@@ -180,8 +180,8 @@ let test_a_read_agrees_with_the_check () =
                       | Ok _ -> true
                       | Error (`Db _) -> false
                       | Error
-                          (( `Conflict _ | `Not_serializable _ | `Closed
-                           | `Lost _ ) as e) ->
+                          (( `Conflict _ | `Not_serializable _
+                           | `Connection_closed | `Lost _ ) as e) ->
                           Alcotest.failf "the read could not run: %s"
                             (S.error_to_string e)
                     in

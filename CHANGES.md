@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `rowtype`: `Rowtype.error`'s `` `Closed `` is `` `Connection_closed ``,
+  beside the pool's `` `Pool_closed ``, so a program that merges the two
+  reads which one closed. Its words are unchanged. Breaking: a match over
+  the error names `` `Connection_closed ``.
 - `rowtype-postgres`: `Pool.use` answers `` `Pool_closed `` beside
   `` `Busy ``, both a `Pool.error`, and `Pool.error_to_string` words each
   as postgres-eio does. postgres-eio answers `` `Pool_closed `` for a

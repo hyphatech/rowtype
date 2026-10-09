@@ -20,8 +20,8 @@
     took: its first line of text, never its parameters. A statement runs on the
     calling fiber, as an Eio effect, and a connection is one fiber's at a time.
     A raise from {!fold}'s function passes, and closes the connection, whose
-    answer was read only in part: its next statement is [`Closed] until
-    {!revive}. A fiber cancelled with a statement in flight closes its
+    answer was read only in part: its next statement is [`Connection_closed]
+    until {!revive}. A fiber cancelled with a statement in flight closes its
     connection and asks the server to cancel the statement, waiting a few
     seconds at most for the server to take the request, so nothing runs on for
     nobody. *)
@@ -277,9 +277,9 @@ module Transaction : sig
 
       A fiber cancelled inside [work], at a statement or at any other effect,
       closes the connection, which ends the transaction with nothing kept, and
-      the cancellation passes. Its statements then answer [`Closed], and the
-      next [within] on it, or {!revive}, makes it again; a pooled one is made
-      again before it is next lent. *)
+      the cancellation passes. Its statements then answer [`Connection_closed],
+      and the next [within] on it, or {!revive}, makes it again; a pooled one is
+      made again before it is next lent. *)
 end
 
 (** {1 Statements against the database} *)

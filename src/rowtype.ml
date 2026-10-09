@@ -3,7 +3,7 @@ let ( let* ) = Result.bind
 type error =
   [ `Conflict of string option
   | `Not_serializable of string
-  | `Closed
+  | `Connection_closed
   | `Lost of string
   | `Db of string ]
 
@@ -11,7 +11,7 @@ let error_to_string : [< error ] -> string = function
   | `Conflict (Some name) -> Printf.sprintf "the constraint %s refused it" name
   | `Conflict None -> "a constraint refused it"
   | `Not_serializable m -> m
-  | `Closed -> "the connection is closed"
+  | `Connection_closed -> "the connection is closed"
   | `Lost m -> m
   | `Db m -> m
 

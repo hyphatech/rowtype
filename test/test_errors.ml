@@ -27,7 +27,7 @@ let told = function
   | Ok () -> Alcotest.fail "the statement succeeded"
   | Error (`Conflict name) -> Conflict name
   | Error (`Not_serializable _) -> Not_serializable
-  | Error `Closed -> Closed
+  | Error `Connection_closed -> Closed
   | Error (`Lost _) -> Lost
   | Error (`Db _) -> Db
 
@@ -236,7 +236,7 @@ let test_every_failure_has_its_words () =
       `Conflict (Some "users_email_key");
       `Conflict None;
       `Not_serializable "could not serialize access";
-      `Closed;
+      `Connection_closed;
       `Lost "the connection timed out";
       `Db "relation \"users\" does not exist";
     ]

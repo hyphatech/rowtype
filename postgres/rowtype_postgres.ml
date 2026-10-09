@@ -492,7 +492,7 @@ module Backend = struct
      PANIC, which it sends instead of the statement's answer. Whether the
      statement ran is not known. *)
   let error = function
-    | Unsent -> `Closed
+    | Unsent -> `Connection_closed
     | Failed (Pg.Server e as failure) when ends_session e ->
         `Lost (Pg.error_to_string failure)
     | Failed (Pg.Server e) when List.mem (Pg.Server_error.sqlstate e) other_rows
@@ -597,7 +597,7 @@ let close t =
    loses nothing. *)
 let revive t =
   match t.ownership with
-  | Closed_by_owner -> Error `Closed
+  | Closed_by_owner -> Error `Connection_closed
   | Kept ->
       if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
       else Ok ()
@@ -668,7 +668,7 @@ module Listener = struct
       (Pg.Listener.connect ~sw ~net ~clock ?parameters ?timeout_s ?heartbeat_s c)
 
   (* A listener closed hears nothing more, and sends nothing. *)
-  let error = function Pg.Closed -> `Closed | e -> db_error e
+  let error = function Pg.Closed -> `Connection_closed | e -> db_error e
   let listen t channel = Result.map_error error (Pg.Listener.listen t channel)
 
   let unlisten t channel =
