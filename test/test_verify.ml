@@ -198,6 +198,53 @@ let test_a_read_agrees_with_the_check () =
         "every read the check does not expect" []
         (reads_in "binary" None @ reads_in "text" (Some 0)))
 
+(* A type no scalar reads is written as text cast twice, as the README
+   says: [$1::numeric] alone types the parameter numeric, which a text is
+   not, and [$1::text::numeric] types it text. *)
+let test_a_type_no_scalar_reads_is_written_as_text () =
+  Db_target.with_postgres (fun target ->
+      let db = Db_target.connect target in
+      Fun.protect
+        ~finally:(fun () -> Pg.close db)
+        (fun () ->
+          ok
+            (Pg.exec_raw db "create table n (price numeric, at time, addr inet)");
+          let accepted statement =
+            match Pg.verify db [ statement ] with
+            | Ok () -> true
+            | Error (`Disagreements _) -> false
+            | Error (#S.error as e) ->
+                Alcotest.failf "the check could not run: %s"
+                  (S.error_to_string e)
+          in
+          let insert =
+            S.exec
+              ~params:S.(t3 text text text)
+              "insert into n values ($1::text::numeric, $2::text::time, \
+               $3::text::inet)"
+          and read =
+            S.find ~params:S.unit
+              ~row:S.(t3 text text text)
+              "select price::text, at::text, addr::text from n"
+          in
+          List.iter
+            (fun (what, statement, expected) ->
+              Alcotest.(check bool) what expected (accepted statement))
+            [
+              ("written through ::text::", S.Any insert, true);
+              ("read through ::text", S.Any read, true);
+              ( "written through the type's cast alone",
+                S.Any
+                  (S.exec ~params:S.text
+                     "insert into n (price) values ($1::numeric)"),
+                false );
+            ];
+          ok (Pg.run db insert ("12.50", "10:30:00", "192.168.0.1"));
+          Alcotest.(check (triple string string string))
+            "read back as written, an inet with its mask"
+            ("12.50", "10:30:00", "192.168.0.1/32")
+            (ok (Pg.run db read ()))))
+
 let () =
   Db_target.required ~suite:"verify";
   Eio_main.run @@ fun env ->
@@ -211,5 +258,7 @@ let () =
             test_every_scalar_against_every_type;
           Alcotest.test_case "a read agrees with the check" `Quick
             test_a_read_agrees_with_the_check;
+          Alcotest.test_case "a type no scalar reads is written as text" `Quick
+            test_a_type_no_scalar_reads_is_written_as_text;
         ] );
     ]

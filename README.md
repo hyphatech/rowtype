@@ -114,7 +114,10 @@ a migration may add a label before the code that reads it ships.
 
 Any other type -- `numeric`, `time`, a range, `inet` -- is read through a
 cast in the SQL (`price::text`, `spans::text[]`) and `S.text`, and a read
-without one is refused, saying so.
+without one is refused, saying so. It is written from `S.text` the same way,
+cast to text and then to its type: `$1::text::numeric`, `$1::text::time`,
+`$1::text::inet`. `$1::numeric` alone makes the parameter a `numeric`, which
+`Pg.verify` refuses for a text.
 
 `S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map
 a column onto your own type. A list bound as an array writes many rows in one
@@ -197,14 +200,26 @@ rowtype-migrate up                 # apply what is pending
 rowtype-migrate status [--check]   # applied and pending
 rowtype-migrate dump [--check]     # the schema they make, as db/schema.sql
 rowtype-migrate squash VERSION     # every migration through it, as one baseline
+rowtype-migrate drop               # drop the database, if nobody is connected
 ```
 
 `up` applies each file in its own transaction, under an advisory lock, and
 records a digest of it. A migration edited after it ran, or merged out of
 order, is refused, and so is a file that ends its transaction itself with a
-`commit` or a `rollback`. `squash` proves the baseline makes the same schema as the
-history before it changes a file. The database is `--url`, or
-`DATABASE_URL`.
+`commit` or a `rollback`. A statement Postgres refuses inside a transaction
+-- `create index concurrently`, `vacuum` -- goes in a file of its own whose
+first line is
+
+```sql
+-- rowtype-migrate: no transaction
+```
+
+Such a file is one statement, and is recorded after it succeeds, so a run
+cut off between the two runs it again: write it to run twice
+(`create index concurrently if not exists`).
+
+`squash` proves the baseline makes the same schema as the history before it
+changes a file. The database is `--url`, or `DATABASE_URL`.
 
 ## Packages
 
