@@ -14,7 +14,7 @@ ORM, no query DSL, no ppx.
 ## Why not Caqti?
 
 Caqti is the mature choice, and the right one for MariaDB, SQLite or Lwt.
-rowtype does less, Postgres on Eio only, and in return gives you:
+The rowtype library does less, Postgres on Eio only, and in return gives you:
 
 - a driver written for Eio, [postgres-eio](https://github.com/hyphatech/postgres-eio),
   rather than libpq bindings or a driver adapted to it;

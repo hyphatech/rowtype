@@ -2,18 +2,18 @@
 
 ## Unreleased
 
-- `rowtype`: `Rowtype.error`'s `` `Closed `` is `` `Connection `Closed ``,
+- In `rowtype`, `Rowtype.error`'s `` `Closed `` is `` `Connection `Closed ``,
   the connection's state under the connection, so a program that merges
   it with a pool's error reads which one closed. Its words are unchanged.
   Breaking: a match over the error names `` `Connection `Closed ``.
-- `rowtype-postgres`: `Pool.error` is
+- In `rowtype-postgres`, `Pool.error` is
   `` [ `Pool of [ `Busy | `Closed ] ] ``, the pool's states under the pool:
   `Pool.use` answers `` `Pool `Busy `` where it answered `` `Busy ``, and
   `` `Pool `Closed `` at once for a closed pool, and `Pool.error_to_string`
-  words each as postgres-eio does. postgres-eio tells a closed pool apart
+  words each as postgres-eio does. In postgres-eio, a closed pool is told apart
   after its 0.1.0, which answers `` `Pool `Busy `` there. Breaking: a match
   on what `Pool.use` answers names `` `Pool ``.
-- `rowtype-postgres`: every failure it answers has a printer beside it:
+- In `rowtype-postgres`, every failure it answers has a printer beside it:
   `Transaction.error_to_string` for what `Transaction.within` answers, its
   own failures and a statement's, `Pool.error_to_string` for a
   `Pool.error`, and `error_to_string` for what `verify` answers,
@@ -22,26 +22,26 @@
 - Breaking: OCaml 5.5 or later is required. The opam files asked for 5.4,
   which CI tested and nothing else did; every switch the code is written
   in is 5.5.
-- `rowtype-postgres` pins postgres-eio to its 0.1.0 tag from its own opam
+- The `rowtype-postgres` package pins postgres-eio to its 0.1.0 tag from its own opam
   file, so pinning rowtype is the whole install.
-- `rowtype-postgres`: a fiber cancelled inside `Transaction.within`
+- In `rowtype-postgres`, a fiber cancelled inside `Transaction.within`
   between statements -- at a sleep, a wait, anything but a statement in
   flight -- closes the connection, which ends the transaction, where it
   left the transaction open, with its locks, and the next `within` on it
   refused. The next `within` makes the connection again.
-- `rowtype-migrate`: a migration file that ends its own transaction -- a
+- In `rowtype-migrate`, a migration file that ends its own transaction -- a
   `commit` or a `rollback` in it -- is refused, and its record removed,
   where it was recorded as applied even when what followed its end failed.
   The refusal names the `-- rowtype-migrate: no transaction` directive.
   Breaking: such a file, which applied before, is now refused. A migration
   runs through `Transaction.within`, once.
-- `rowtype`: a row with more columns than its shape reads is refused, as
+- In `rowtype`, a row with more columns than its shape reads is refused, as
   one with fewer is and as `verify` refuses the statement, where the
   columns after the shape's were dropped: `select 1, 2` read as `S.int`
   answered 1. Breaking: such a read, a `find` of `S.unit` over a
   `select` included, is now refused; a statement whose rows are not read
   is an `exec`.
-- `rowtype-postgres`: a value its scalar cannot hold -- an `int8` past 63
+- In `rowtype-postgres`, a value its scalar cannot hold -- an `int8` past 63
   bits read as `S.int`, infinity, a year outside 1 to 9999 -- is refused
   as what it is, naming what reads it, `Rowtype.int64` or a NULL read
   with `Rowtype.opt`, where it was told as a type it is not ("expected

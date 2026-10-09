@@ -1,6 +1,6 @@
 # AGENTS.md
 
-rowtype describes a query's parameters and rows once, runs it through a
+The rowtype library describes a query's parameters and rows once, runs it through a
 backend, and migrates a Postgres database. This file is for anyone changing
 it, human or agent. Users start at [README.md](README.md).
 
@@ -54,26 +54,27 @@ module.
 
 Each rule comes with why it exists and the test that catches a break.
 
-- **`rowtype` reads no SQL, and names no database.** It links no library
-  but `ptime` and `uuidm`, whose types an instant and a uuid are; a backend is a package of its own, `rowtype-postgres`, and a
-  statement reaches the database as written. Why: a rule of one database's
+- **The `rowtype` package reads no SQL, and names no database.** It links no
+  library but `ptime` and `uuidm`, whose types an instant and a uuid are; a
+  backend is a package of its own, `rowtype-postgres`, and a statement reaches the database as written. Why: a rule of one database's
   syntax in the library every database shares is a rule the next backend
   has to undo. Test: `rowtype links ptime and uuidm alone`, in
   `test_style`, reads `src/dune`'s libraries, and `opam install rowtype`
   installs nothing else.
 - **A migration is applied by the command, and never by an application.**
-  `rowtype-migrate up` applies the files from a directory and links no
-  application; `Rowtype_migrate.run` is for a test and a tool. Why: every
+  The command `rowtype-migrate up` applies the files from a directory and
+  links no application; `Rowtype_migrate.run` is for a test and a tool. Why: every
   instance of an application would race to migrate, its role would have to
   own the schema, and no migration could run ahead of the code that needs
-  it.
+  it. Symptom: an application that migrates itself at start, every instance
+  racing to apply the same files.
 - **A migration is known by its text.** Each applied one is recorded with a
   digest of what ran, and a database whose record disagrees with the files
   (edited, unknown to `up`, or older than one applied) is refused by `up`,
   naming it, before anything is applied. A baseline replaces the files up
   to its version, and what the database recorded below it is history:
   accepted, and compared with nothing. Why: two databases that ran "the
-  same" migration must hold the same schema. Tests: `test_migrate`.
+  same" migration must hold the same schema. Test: `test_migrate`.
 - **No value is logged, handed to an observer or put in a failure's
   words.** A statement's `debug` line and `?observe` carry its text, with
   placeholders, and never its parameters; a cell that does not decode is
@@ -84,7 +85,7 @@ Each rule comes with why it exists and the test that catches a break.
 - **A transaction's own failures are values.** One that could not begin or
   commit, or whose work answered `Ok` after a failed statement aborted it,
   is `` `Not_committed ``, never a success. Why: Postgres rolls such a
-  transaction back in silence. Tests: `transactions` in `test_rowtype`.
+  transaction back in silence. Test: `transactions` in `test_rowtype`.
 - **The one `open` is `open Shape` in `src/rowtype.ml`.** Why: its walk
   exists to pattern-match that GADT, and every constructor qualified would
   bury the match. Test: `test_style` names it and refuses any other.
