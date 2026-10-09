@@ -222,6 +222,71 @@ let test_intervals () =
         (Ok { months = 1; days = -1; microseconds = 0 })
         (reads db S.interval "select interval '1 mon -1 day'"))
 
+(* A value of the right type that the scalar cannot hold -- an int8 past
+   63 bits, an infinity, a year outside 1 to 9999 -- is refused as what it
+   is, with what to read it as, and never as a type it is not; and its
+   words hold no value. *)
+let test_a_value_the_scalar_cannot_hold () =
+  let words what = function
+    | Error (`Db m) -> m
+    | Ok _ -> Alcotest.failf "%s was read" what
+    | Error e -> Alcotest.failf "%s: %s" what (S.error_to_string e)
+  in
+  let contains m needle =
+    let n = String.length needle in
+    let rec go i =
+      i + n <= String.length m
+      && (String.equal (String.sub m i n) needle || go (i + 1))
+    in
+    go 0
+  in
+  let says what m needles =
+    List.iter
+      (fun needle ->
+        Alcotest.(check bool)
+          (Printf.sprintf "%s says %S: %s" what needle m)
+          true (contains m needle))
+      needles;
+    List.iter
+      (fun value ->
+        Alcotest.(check bool)
+          (Printf.sprintf "%s holds no value: %s" what m)
+          false (contains m value))
+      [ "9223372036854775807"; "10000"; "BC"; "expected" ]
+  in
+  let beyond = [ "infinity"; "1 to 9999"; "Rowtype.opt" ] in
+  on_each_format [] (fun format db ->
+      let row what ty sql needles =
+        let what = format ^ ": " ^ what in
+        says what (words what (reads db ty sql)) needles
+      in
+      row "an int8 past 63 bits" S.int "select 9223372036854775807::int8"
+        [ "63 bits"; "Rowtype.int64" ];
+      row "an element past 63 bits"
+        S.(array int)
+        "select array[9223372036854775807]::int8[]"
+        [ "element 1"; "63 bits"; "Rowtype.int64" ];
+      List.iter
+        (fun sql -> row sql S.instant sql beyond)
+        [
+          "select 'infinity'::timestamptz";
+          "select '-infinity'::timestamptz";
+          "select '10000-01-01 00:00:00+00'::timestamptz";
+          "select '0001-01-01 00:00:00+00'::timestamptz - interval '1 day'";
+        ];
+      List.iter
+        (fun sql -> row sql S.date sql beyond)
+        [
+          "select 'infinity'::date";
+          "select '10000-01-01'::date";
+          "select '0001-01-01'::date - 1";
+        ];
+      List.iter
+        (fun sql -> row sql S.timestamp sql beyond)
+        [ "select '-infinity'::timestamp"; "select '10000-01-01'::timestamp" ];
+      row "an infinite interval" S.interval "select 'infinity'::interval"
+        [ "infinity"; "Rowtype.opt" ])
+
 let test_uuids () =
   round_trips ~column:"uuid" Db_target.uuid_text Alcotest.string
     [
@@ -343,9 +408,9 @@ let test_an_element_is_named () =
         "column 2, element 2: NULL where a value was expected"
         (said S.(t2 int (array int)) "select 0, array[1, null]");
       Alcotest.(check string)
-        (format ^ ": not its type")
-        "column 1, element 3: expected INT, got an element of an array of type \
-         1016"
+        (format ^ ": past 63 bits")
+        "column 1, element 3: an integer past 63 bits, which an int cannot \
+         hold: read it with Rowtype.int64"
         (said (S.array S.int) "select array[1, 2, 9223372036854775807]::int8[]"))
 
 (* An element is read as its type alone is: a [real] rounded to single
@@ -485,6 +550,8 @@ let () =
           Alcotest.test_case "dates" `Quick test_dates;
           Alcotest.test_case "timestamps" `Quick test_timestamps;
           Alcotest.test_case "intervals" `Quick test_intervals;
+          Alcotest.test_case "a value the scalar cannot hold" `Quick
+            test_a_value_the_scalar_cannot_hold;
           Alcotest.test_case "uuids" `Quick test_uuids;
           Alcotest.test_case "JSON" `Quick test_json;
         ] );

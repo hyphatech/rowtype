@@ -24,6 +24,11 @@
   answered 1. Breaking: such a read, a `find` of `S.unit` over a
   `select` included, is now refused; a statement whose rows are not read
   is an `exec`.
+- `rowtype-postgres`: a value its scalar cannot hold -- an `int8` past 63
+  bits read as `S.int`, infinity, a year outside 1 to 9999 -- is refused
+  as what it is, naming what reads it, `Rowtype.int64` or a NULL read
+  with `Rowtype.opt`, where it was told as a type it is not ("expected
+  INT, got a value of type 20").
 - Breaking: `commit` leaves `Rowtype.S`, and so `Rowtype_postgres`, since a
   `begin` and a `commit` sent by hand lose what `Transaction.within` tells
   apart: a `COMMIT` that rolled back an aborted transaction. It stays in

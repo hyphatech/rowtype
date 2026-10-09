@@ -94,10 +94,10 @@ value in one round trip, all or nothing: if any run fails, none applies.
 | `S.text` | `text`, `varchar`, `char`, `name`, `uuid`, `json`, `jsonb` | `string` |
 | `S.bytes` | `bytea` | `string` |
 | `S.bool` | `bool` | `bool` |
-| `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond |
-| `S.date` | `date` | `Ptime.date` |
-| `S.timestamp` | `timestamp` | `Ptime.t`, the instant whose reading in UTC it is |
-| `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart |
+| `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond; years 1 to 9999, and infinity is refused |
+| `S.date` | `date` | `Ptime.date`; years 1 to 9999, and infinity is refused |
+| `S.timestamp` | `timestamp` | `Ptime.t`, the instant whose reading in UTC it is; years 1 to 9999, and infinity is refused |
+| `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart; infinity is refused |
 | `S.uuid` | `uuid` | `Uuidm.t` |
 | `S.json` | `json`, `jsonb` | `string`, the document |
 | `S.enum label values` | an enum | each of `values`, written as its `label` |

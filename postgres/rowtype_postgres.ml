@@ -139,6 +139,31 @@ let cast_hint : type a. a S.scalar -> int -> string -> string =
        any other, as " ^ cast
   | _ -> ""
 
+(* What a value of a type the scalar reads can be and the scalar not hold,
+   for which the driver answers no value, and what reads it instead. *)
+let beyond : type a. a S.scalar -> string option =
+ fun scalar ->
+  let in_time what =
+    Some
+      ("infinity or a year outside 1 to 9999, which " ^ what
+     ^ " cannot hold: make it NULL in the query and read it with Rowtype.opt")
+  in
+  match scalar with
+  | S.Int ->
+      Some
+        "an integer past 63 bits, which an int cannot hold: read it with \
+         Rowtype.int64"
+  | S.Instant -> in_time "an instant"
+  | S.Date -> in_time "a date"
+  | S.Timestamp -> in_time "a timestamp"
+  | S.Interval ->
+      Some
+        "infinity, which an interval cannot hold: make it NULL in the query \
+         and read it with Rowtype.opt"
+  | S.Int64 | S.Float | S.Text | S.Bytes | S.Bool | S.Uuid | S.Json | S.Enum _
+    ->
+      None
+
 (* A statement on a connection already closed is never sent, which is what
    tells a failure that did nothing from one whose statement was in flight.
    The driver answers [Closed] to both, and a connection is one fiber's, so
@@ -235,9 +260,10 @@ module Backend = struct
     let oid = Pg.Oid.to_int column.type_oid in
     let hint = cast_hint s oid cast in
     let as_ expected v =
-      match v with
-      | Some v when reads_builtin s oid -> Ok v
-      | Some _ | None ->
+      match (v, beyond s) with
+      | Some v, _ when reads_builtin s oid -> Ok v
+      | None, Some beyond when reads_builtin s oid -> Error beyond
+      | Some _, _ | None, _ ->
           Error (Printf.sprintf "expected %s, got %s%s" expected got hint)
     in
     match s with
