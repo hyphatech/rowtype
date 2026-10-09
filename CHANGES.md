@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- `rowtype-postgres`: `Pool.use` answers `` `Closed `` beside `` `Busy ``,
-  both a `Pool.error`, and `Pool.error_to_string` words each as
-  postgres-eio does. postgres-eio answers `` `Closed `` for a closed pool
-  after its 0.1.0, which answers `` `Busy `` there. Breaking: a match on
-  what `Pool.use` answers handles `` `Closed ``.
+- `rowtype-postgres`: `Pool.use` answers `` `Pool_closed `` beside
+  `` `Busy ``, both a `Pool.error`, and `Pool.error_to_string` words each
+  as postgres-eio does. postgres-eio answers `` `Pool_closed `` for a
+  closed pool after its 0.1.0, which answers `` `Busy `` there. Breaking: a
+  match on what `Pool.use` answers handles `` `Pool_closed ``.
 - `rowtype-postgres`: every failure it answers has a printer beside it:
   `Transaction.error_to_string` for what `Transaction.within` answers, its
   own failures and a statement's, `Pool.error_to_string` for a

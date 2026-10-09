@@ -623,7 +623,7 @@ module Pool = struct
             ?timeout_s ?statement_cache ?size ?wait_s ?reset ?max_lifetime_s
             ?idle_check_s c))
 
-  type error = [ `Busy | `Closed ]
+  type error = [ `Busy | `Pool_closed ]
 
   let use ?wait_s t f =
     match
@@ -635,10 +635,10 @@ module Pool = struct
 
   (* Postgres_eio.Pool.error_to_string's sentences, word for word, so the same
      failure reads the same through either library; the postgres-eio this
-     builds against has no printer to call, and no [`Closed]. *)
+     builds against has no printer to call, and no [`Pool_closed]. *)
   let error_to_string : [< error ] -> string = function
     | `Busy -> "no connection came free within the pool's wait"
-    | `Closed -> "the pool is closed"
+    | `Pool_closed -> "the pool is closed"
 
   type stats = Pg.Pool.stats = {
     size : int;
