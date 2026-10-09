@@ -103,9 +103,7 @@ let notify db channel payload =
   ignore
     (ok
        (Pg.run db
-          (S.find
-             ~params:S.(t2 text text)
-             ~row:S.unit "select pg_notify($1, $2)")
+          (S.exec ~params:S.(t2 text text) "select pg_notify($1, $2)")
           (channel, payload)))
 
 let heard l =

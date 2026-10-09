@@ -18,6 +18,12 @@
   The refusal names the `-- rowtype-migrate: no transaction` directive.
   Breaking: such a file, which applied before, is now refused. A migration
   runs through `Transaction.within`, once.
+- `rowtype`: a row with more columns than its shape reads is refused, as
+  one with fewer is and as `verify` refuses the statement, where the
+  columns after the shape's were dropped: `select 1, 2` read as `S.int`
+  answered 1. Breaking: such a read, a `find` of `S.unit` over a
+  `select` included, is now refused; a statement whose rows are not read
+  is an `exec`.
 - Breaking: `commit` leaves `Rowtype.S`, and so `Rowtype_postgres`, since a
   `begin` and a `commit` sent by hand lose what `Transaction.within` tells
   apart: a `COMMIT` that rolled back an aborted transaction. It stays in

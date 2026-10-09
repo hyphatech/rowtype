@@ -363,7 +363,8 @@ module type S = sig
 
   val run : conn -> ('p, 'r) statement -> 'p -> ('r, [> error ]) result
   (** [run db statement args]: the statement with its parameters, answering what
-      it says it answers. *)
+      it says it answers. A row with more columns or fewer than its shape reads
+      is a [`Db] error, as a backend's check of the statement refuses it. *)
 
   val fold :
     conn ->

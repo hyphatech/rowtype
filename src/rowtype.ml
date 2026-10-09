@@ -292,7 +292,16 @@ module Make (B : Backend) = struct
     | Ok (answer, _) -> answer
     | Error f -> Error (B.error f)
 
-  let decode_row ty cells = Result.map fst (decode ~name:row_column ty cells 0)
+  (* A shape narrower than the result leaves a column nobody reads: the
+     query and the shape disagree, as they do where it is wider. *)
+  let decode_row ty cells =
+    let* v, read = decode ~name:row_column ty cells 0 in
+    if read = Array.length cells then Ok v
+    else
+      Error
+        (`Db
+           (Printf.sprintf "the result has %d columns, and the row reads %d"
+              (Array.length cells) read))
 
   (* The first row, decoded, and how many there were: [find] and [find_opt]
      count, because a statement that promised one row and answered several

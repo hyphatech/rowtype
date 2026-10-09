@@ -1624,6 +1624,29 @@ let test_a_shape_wider_than_the_result () =
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ | Error (`Conflict _) -> Alcotest.fail "decoded a column not there")
 
+(* A shape narrower than the result is refused as a wider one is, since a
+   column read by nobody is a query and a shape that disagree, as [verify]
+   says of it. *)
+let test_a_shape_narrower_than_the_result () =
+  on_db [] (fun db ->
+      let refused what = function
+        | Error (`Db m) ->
+            Alcotest.(check bool)
+              (what ^ ", the columns counted: " ^ m)
+              true (contains m "2 columns")
+        | Error e ->
+            Alcotest.failf "%s: not the shape's: %s" what (S.error_to_string e)
+        | Ok _ -> Alcotest.failf "%s: decoded, a column left over" what
+      in
+      refused "find"
+        (Pg.run db (S.find ~params:S.unit ~row:S.int "select 1, 2") ());
+      refused "list"
+        (Pg.run db (S.list ~params:S.unit ~row:S.int "select 1, 2") ());
+      refused "an option over the row"
+        (Pg.run db
+           (S.find ~params:S.unit ~row:S.(opt int) "select null::int, 2")
+           ()))
+
 (* Another database is the same server with another name, through the
    connection string's own reading: a URL's query kept, a URL with no path
    given one, and a keyword list's quoted value kept whole. *)
@@ -1770,5 +1793,7 @@ let () =
             test_a_null_is_not_empty_text;
           Alcotest.test_case "a shape wider than the result" `Quick
             test_a_shape_wider_than_the_result;
+          Alcotest.test_case "a shape narrower than the result" `Quick
+            test_a_shape_narrower_than_the_result;
         ] );
     ]
