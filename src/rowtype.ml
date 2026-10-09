@@ -183,14 +183,14 @@ module Make (B : Backend) = struct
         if not (element t) then Error not_element
         else
           let* elements =
-            List.fold_right
-              (fun x acc ->
+            List.fold_left
+              (fun acc x ->
                 let* acc = acc in
                 let* e = encode t x in
                 match e with [ p ] -> Ok (p :: acc) | _ -> Error not_element)
-              xs (Ok [])
+              (Ok []) xs
           in
-          Ok [ B.array elements ]
+          Ok [ B.array (List.rev elements) ]
 
   (* A shape wider than the result asks for a column the row does not
      have: the caller's error, said as one. *)
