@@ -22,8 +22,7 @@ let with_pool ?(size = 4) ?wait_s target f =
 let lent pool f =
   match Pg.Pool.use pool f with
   | Ok v -> v
-  | Error ((`Busy | `Pool_closed) as e) ->
-      Alcotest.fail (Pg.Pool.error_to_string e)
+  | Error (`Pool _ as e) -> Alcotest.fail (Pg.Pool.error_to_string e)
 
 let echo = S.find ~params:S.int ~row:S.int "select $1::int"
 
@@ -72,7 +71,7 @@ let test_a_borrower_leaves_nothing_behind () =
                 "the temporary table is gone" false
                 (ok (Pg.run db temp ())))))
 
-(* A borrow that finds no connection free within its wait is [`Busy], and
+(* A borrow that finds no connection free within its wait is [`Pool `Busy], and
    the pool lends again once one comes back. *)
 let test_a_borrow_past_its_wait_is_busy () =
   Db_target.with_postgres (fun target ->
@@ -82,8 +81,9 @@ let test_a_borrow_past_its_wait_is_busy () =
             (fun () -> lent pool (fun _ -> Eio.Promise.await release))
             (fun () ->
               (match Pg.Pool.use ~wait_s:0.05 pool (fun _ -> ()) with
-              | Error `Busy -> ()
-              | Error `Pool_closed -> Alcotest.fail "the open pool was closed"
+              | Error (`Pool `Busy) -> ()
+              | Error (`Pool `Closed) ->
+                  Alcotest.fail "the open pool was closed"
               | Ok () -> Alcotest.fail "lent a connection already lent");
               Eio.Promise.resolve released ());
           Alcotest.(check int)
@@ -211,7 +211,7 @@ let test_a_closed_listener_hears_nothing () =
       with_listener target (fun l ->
           Pg.Listener.close l;
           match Pg.Listener.next l with
-          | Error `Connection_closed -> ()
+          | Error (`Connection `Closed) -> ()
           | Error (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) ->
               Alcotest.fail "not the closed connection's failure"
           | Ok _ -> Alcotest.fail "a closed listener heard something"))

@@ -27,7 +27,7 @@ let told = function
   | Ok () -> Alcotest.fail "the statement succeeded"
   | Error (`Conflict name) -> Conflict name
   | Error (`Not_serializable _) -> Not_serializable
-  | Error `Connection_closed -> Closed
+  | Error (`Connection `Closed) -> Closed
   | Error (`Lost _) -> Lost
   | Error (`Db _) -> Db
 
@@ -236,7 +236,7 @@ let test_every_failure_has_its_words () =
       `Conflict (Some "users_email_key");
       `Conflict None;
       `Not_serializable "could not serialize access";
-      `Connection_closed;
+      `Connection `Closed;
       `Lost "the connection timed out";
       `Db "relation \"users\" does not exist";
     ]
@@ -253,8 +253,10 @@ let test_every_failure_has_its_words () =
     (Pg.Transaction.error_to_string
        (`Not_committed "commit: the server refused it"));
   told "busy" "no connection came free within the pool's wait"
-    (Pg.Pool.error_to_string `Busy);
-  told "closed" "the pool is closed" (Pg.Pool.error_to_string `Pool_closed);
+    (Pg.Pool.error_to_string (`Pool `Busy));
+  told "closed" "the pool is closed" (Pg.Pool.error_to_string (`Pool `Closed));
+  told "connection closed" "the connection is closed"
+    (S.error_to_string (`Connection `Closed));
   told "disagreements"
     "the database disagrees: select a from t: 1 columns declared, and the \
      database has 2; insert into t values ($1): parameter 1 is declared int, \

@@ -65,7 +65,7 @@ let reads db ty sql = Pg.run db (S.find ~params:S.unit ~row:ty sql) ()
 let refused what = function
   | Ok _ -> Alcotest.failf "%s was read" what
   | Error (`Db _) -> ()
-  | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _) ->
+  | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _) ->
       Alcotest.failf "%s: not a decoding failure" what
 
 let test_integers () =
@@ -401,7 +401,7 @@ let test_an_element_is_named () =
         | Error (`Db m) -> m
         | Ok _
         | Error
-            (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+            (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
           ->
             Alcotest.failf "%s: %s was read" format sql
       in
@@ -457,7 +457,7 @@ let test_an_enum_is_read_through_a_cast () =
                 (String.ends_with ~suffix:("cast any other, as " ^ cast) m)
           | Ok _
           | Error
-              (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+              (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
             ->
               Alcotest.failf "%s: %s was read" format what)
         [

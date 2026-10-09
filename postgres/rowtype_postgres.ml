@@ -492,7 +492,7 @@ module Backend = struct
      PANIC, which it sends instead of the statement's answer. Whether the
      statement ran is not known. *)
   let error = function
-    | Unsent -> `Connection_closed
+    | Unsent -> `Connection `Closed
     | Failed (Pg.Server e as failure) when ends_session e ->
         `Lost (Pg.error_to_string failure)
     | Failed (Pg.Server e) when List.mem (Pg.Server_error.sqlstate e) other_rows
@@ -597,7 +597,7 @@ let close t =
    loses nothing. *)
 let revive t =
   match t.ownership with
-  | Closed_by_owner -> Error `Connection_closed
+  | Closed_by_owner -> Error (`Connection `Closed)
   | Kept ->
       if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
       else Ok ()
@@ -623,22 +623,26 @@ module Pool = struct
             ?timeout_s ?statement_cache ?size ?wait_s ?reset ?max_lifetime_s
             ?idle_check_s c))
 
-  type error = [ `Busy | `Pool_closed ]
+  type error = [ `Pool of [ `Busy | `Closed ] ]
 
+  (* postgres-eio 0.1.0 answers a flat [`Busy], and a later one the pool's
+     states under [`Pool]. Its answer is an open variant, so an arm for each
+     builds against both. *)
   let use ?wait_s t f =
     match
       Pg.Pool.use ?wait_s t.pool (fun pg ->
           f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
     with
     | Ok v -> Ok v
-    | Error e -> Error (e :> [> error ])
+    | Error `Busy -> Error (`Pool `Busy)
+    | Error (`Pool p) -> Error (`Pool p)
 
   (* Postgres_eio.Pool.error_to_string's sentences, word for word, so the same
      failure reads the same through either library; the postgres-eio this
-     builds against has no printer to call, and no [`Pool_closed]. *)
+     builds against has no printer to call, and no closed pool. *)
   let error_to_string : [< error ] -> string = function
-    | `Busy -> "no connection came free within the pool's wait"
-    | `Pool_closed -> "the pool is closed"
+    | `Pool `Busy -> "no connection came free within the pool's wait"
+    | `Pool `Closed -> "the pool is closed"
 
   type stats = Pg.Pool.stats = {
     size : int;
@@ -668,7 +672,7 @@ module Listener = struct
       (Pg.Listener.connect ~sw ~net ~clock ?parameters ?timeout_s ?heartbeat_s c)
 
   (* A listener closed hears nothing more, and sends nothing. *)
-  let error = function Pg.Closed -> `Connection_closed | e -> db_error e
+  let error = function Pg.Closed -> `Connection `Closed | e -> db_error e
   let listen t channel = Result.map_error error (Pg.Listener.listen t channel)
 
   let unlisten t channel =

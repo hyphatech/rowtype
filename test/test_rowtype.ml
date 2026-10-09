@@ -92,7 +92,7 @@ let test_find_opt () =
           Alcotest.(check bool)
             ("several, said: " ^ m) true (contains m "2 rows")
       | Error (`Conflict _) -> Alcotest.fail "not a conflict"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ -> Alcotest.fail "several rows answered as one")
 
@@ -106,7 +106,7 @@ let test_conflict_is_distinct () =
       | Error (`Conflict _) -> ()
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.failf "expected Conflict, got Db %S" m
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "duplicate insert was accepted")
 
@@ -132,7 +132,7 @@ let test_conflict_through_returning () =
       | Error (`Conflict _) -> ()
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.failf "expected Conflict, got Db %S" m
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ -> Alcotest.fail "duplicate insert was accepted")
 
@@ -153,7 +153,7 @@ let test_a_conflict_names_its_constraint () =
         | Error (`Conflict name) -> name
         | Error (`Db m | `Not_serializable m) ->
             Alcotest.failf "not a conflict: %s" m
-        | Error ((`Connection_closed | `Lost _) as e) ->
+        | Error ((`Connection `Closed | `Lost _) as e) ->
             Alcotest.failf "the connection failed: %s" (S.error_to_string e)
         | Ok () -> Alcotest.fail "the duplicate was accepted"
       in
@@ -186,7 +186,7 @@ let test_a_conflict_is_about_other_rows () =
         | Error (`Conflict name) -> `Conflict name
         | Error (`Db _) -> `Db
         | Error (`Not_serializable m) -> Alcotest.failf "not serializable: %s" m
-        | Error ((`Connection_closed | `Lost _) as e) ->
+        | Error ((`Connection `Closed | `Lost _) as e) ->
             Alcotest.failf "the connection failed: %s" (S.error_to_string e)
         | Ok () -> Alcotest.failf "accepted: %s" sql
       in
@@ -243,7 +243,7 @@ let test_a_fold_stops_at_a_row_it_cannot_read () =
       let seen = ref [] in
       (match Pg.fold db mixed () ~init:() (fun () x -> seen := x :: !seen) with
       | Error (`Db _) -> ()
-      | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+      | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
         ->
           Alcotest.fail "not a decoding failure"
       | Ok () -> Alcotest.fail "a NULL read as an int");
@@ -264,7 +264,7 @@ let test_a_raise_from_a_fold_closes_the_connection () =
       | exception Exit -> ()
       | Ok () | Error _ -> Alcotest.fail "the raise did not pass");
       (match Pg.run db (S.find ~params:S.unit ~row:S.int "select 1") () with
-      | Error `Connection_closed -> ()
+      | Error (`Connection `Closed) -> ()
       | Error ((`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) as e) ->
           Alcotest.failf "after the raise, told as: %s" (S.error_to_string e)
       | Ok _ -> Alcotest.fail "the connection read on after the raise");
@@ -286,7 +286,7 @@ let test_find_is_exactly_one_row () =
         match one sql with
         | Error (`Db m | `Not_serializable m) -> m
         | Error (`Conflict _) -> Alcotest.fail "not a conflict"
-        | Error ((`Connection_closed | `Lost _) as e) ->
+        | Error ((`Connection `Closed | `Lost _) as e) ->
             Alcotest.failf "the connection failed: %s" (S.error_to_string e)
         | Ok n -> Alcotest.failf "answered %d" n
       in
@@ -308,7 +308,7 @@ let test_type_mismatch_reported () =
           Alcotest.(check bool) "names the column" true (contains m "column 1")
       | Error (`Conflict _) ->
           Alcotest.fail "expected a decode error, got Conflict"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ -> Alcotest.fail "decoded TEXT as INT")
 
@@ -398,7 +398,8 @@ let test_run_many_is_all_or_nothing () =
       (match Pg.run_many db insert [ 4; 1; 5 ] with
       | Error (`Conflict (Some "b_k_key")) -> ()
       | Error
-          (( `Conflict _ | `Db _ | `Not_serializable _ | `Connection_closed
+          (( `Conflict _ | `Db _ | `Not_serializable _
+           | `Connection `Closed
            | `Lost _ ) as e) ->
           Alcotest.failf "not the key's conflict: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a batch with a taken key applied");
@@ -406,7 +407,7 @@ let test_run_many_is_all_or_nothing () =
       let refused what = function
         | Error (`Db _) -> ()
         | Error
-            ((`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+            ((`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
              as e) ->
             Alcotest.failf "%s, told as: %s" what (S.error_to_string e)
         | Ok () -> Alcotest.failf "%s ran" what
@@ -470,7 +471,7 @@ let test_parse_refuses_what_it_cannot_read () =
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.(check bool) "names the column" true (contains m "column 1")
       | Error (`Conflict _) -> Alcotest.fail "expected a decode error"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ -> Alcotest.fail "decoded a value nothing reads")
 
@@ -599,7 +600,7 @@ let test_statements_are_checked_against_the_database () =
              said to disagree. *)
           Pg.close db;
           match Pg.verify db (right @ wrong) with
-          | Error `Connection_closed -> ()
+          | Error (`Connection `Closed) -> ()
           | Error (`Disagreements ps) ->
               Alcotest.failf "a closed connection disagreed: %s"
                 (String.concat "; " ps)
@@ -691,7 +692,7 @@ let test_an_element_of_two_columns_is_refused () =
           [ (1, 2) ]
       with
       | Error (`Db m) -> Alcotest.(check bool) m true (contains m "one column")
-      | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+      | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
         ->
           Alcotest.fail "not the shape's error"
       | Ok _ -> Alcotest.fail "an array of pairs was sent")
@@ -870,13 +871,13 @@ let test_a_lost_connection_is_an_error () =
       (match Pg.exec_raw db "select 1" with
       | Error (`Lost _) -> ()
       | Error
-          ((`Db _ | `Conflict _ | `Not_serializable _ | `Connection_closed) as e)
-        ->
+          ((`Db _ | `Conflict _ | `Not_serializable _ | `Connection `Closed) as
+           e) ->
           Alcotest.failf "a lost connection, told as: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a statement on a dropped connection succeeded");
       (* Closed by the failure, the next statement is never sent. *)
       (match Pg.exec_raw db "select 1" with
-      | Error `Connection_closed -> ()
+      | Error (`Connection `Closed) -> ()
       | Error ((`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) as e) ->
           Alcotest.failf "a closed connection, told as: %s"
             (S.error_to_string e)
@@ -999,7 +1000,7 @@ let test_a_transaction_cancelled_between_statements_ends () =
                   "select pg_current_xact_id_if_assigned() is not null")
                ()
            with
-          | Error `Connection_closed -> ()
+          | Error (`Connection `Closed) -> ()
           | Ok true -> Alcotest.fail "the transaction is still open"
           | Ok false | Error _ -> Alcotest.fail "the connection was not closed");
           (* A session told to end lets its locks go a moment later, and one
@@ -1105,7 +1106,7 @@ let test_a_closed_connection_stays_closed () =
       ok (Pg.exec_raw db "create table t (n int)");
       Pg.close db;
       (match Pg.revive db with
-      | Error `Connection_closed -> ()
+      | Error (`Connection `Closed) -> ()
       | Error (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) | Ok () ->
           Alcotest.fail "a closed connection revived");
       (match T.within db (fun db -> insert db 1) with
@@ -1115,7 +1116,7 @@ let test_a_closed_connection_stays_closed () =
       | Error (#S.error as e) ->
           Alcotest.failf "the work ran: %s" (S.error_to_string e));
       (match Pg.exec_raw db "select 1" with
-      | Error `Connection_closed -> ()
+      | Error (`Connection `Closed) -> ()
       | Error ((`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) as e) ->
           Alcotest.failf "a closed connection, told as: %s"
             (S.error_to_string e)
@@ -1141,7 +1142,7 @@ let test_a_revival_that_fails_says_why () =
             ("the server's reason: " ^ m)
             true
             (contains m "does not exist")
-      | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+      | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
       | Ok () ->
           Alcotest.fail "a connection to no database revived");
       match T.within db (fun db -> insert db 1) with
@@ -1269,7 +1270,7 @@ let test_a_lost_commit_is_lost () =
           | Error (`Lost _) -> ()
           | Error (`Not_committed m | `Not_serializable m | `Db m) ->
               Alcotest.failf "a lost commit, told as: %s" m
-          | Error ((`Conflict _ | `Connection_closed) as e) ->
+          | Error ((`Conflict _ | `Connection `Closed) as e) ->
               Alcotest.failf "a lost commit, told as: %s" (S.error_to_string e)
           | Ok () -> Alcotest.fail "a commit whose answer was lost answered Ok");
           Pg.close db);
@@ -1289,7 +1290,7 @@ let test_a_failed_commit_is_not_committed () =
       | Error (`Not_committed _) -> ()
       | Error (`Conflict _ | `Db _ | `Not_serializable _) ->
           Alcotest.fail "the insert itself was refused"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a failed commit answered success");
       Alcotest.(check int) "nothing was kept" 1 (committed db))
@@ -1348,7 +1349,7 @@ let test_a_returned_failure_is_the_works_answer () =
             | Error (`Db m | `Not_serializable m) ->
                 Alcotest.failf "not a conflict: %s" m
             | Error (`Not_committed m) -> Alcotest.failf "not the work's: %s" m
-            | Error ((`Connection_closed | `Lost _) as e) ->
+            | Error ((`Connection `Closed | `Lost _) as e) ->
                 Alcotest.failf "the connection failed: %s" (S.error_to_string e)
             | Ok () -> Alcotest.fail "the duplicate was accepted")
       in
@@ -1372,7 +1373,7 @@ let test_a_refusal_rolls_back_unless_it_says () =
         | Error (`Conflict _ | `Db _ | `Not_serializable _ | `Not_committed _)
           ->
             Alcotest.fail "not the refusal"
-        | Error ((`Connection_closed | `Lost _) as e) ->
+        | Error ((`Connection `Closed | `Lost _) as e) ->
             Alcotest.failf "the connection failed: %s" (S.error_to_string e)
         | Ok () -> Alcotest.fail "not refused"
       in
@@ -1474,7 +1475,7 @@ let test_a_serialization_failure_is_its_own () =
           with
           | Error (`Not_serializable _) -> ()
           | Error (`Conflict _ | `Db _) -> Alcotest.failf "%s: not its own" code
-          | Error ((`Connection_closed | `Lost _) as e) ->
+          | Error ((`Connection `Closed | `Lost _) as e) ->
               Alcotest.failf "the connection failed: %s" (S.error_to_string e)
           | Ok () -> Alcotest.failf "%s: nothing was raised" code)
         [ "40001"; "40P01" ])
@@ -1509,7 +1510,7 @@ let test_retries_run_the_transaction_again () =
       | Error (`Not_serializable _) -> ()
       | Error (`Conflict _ | `Db _ | `Not_committed _) ->
           Alcotest.fail "not the serialization failure"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "the first attempt landed");
       Alcotest.(check int) "unless asked, once" 1 (tries db);
@@ -1536,7 +1537,7 @@ let test_a_commit_not_serializable_is_retried () =
       | Error (`Not_serializable _) -> ()
       | Error (`Not_committed m) -> Alcotest.failf "said not committed: %s" m
       | Error (`Conflict _ | `Db _) -> Alcotest.fail "the insert was refused"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a refused commit answered success");
       Alcotest.(check int) "nothing kept" 0 (committed db);
@@ -1566,7 +1567,7 @@ let test_a_kept_refusal_not_serializable_is_retried () =
       | Error (`Not_serializable _) -> Alcotest.fail "not run again"
       | Error (`Not_committed m) -> Alcotest.failf "said not committed: %s" m
       | Error (`Conflict _ | `Db _) -> Alcotest.fail "the insert was refused"
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a refusal answered success");
       Alcotest.(check int) "its write kept, once" 1 (committed db))
@@ -1585,7 +1586,7 @@ let test_a_count_that_disagrees_is_refused_by_the_server () =
          with
         | Error (`Db _) -> true
         | Error
-            (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+            (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
         | Ok _ ->
             false);
       Alcotest.(check bool)
@@ -1595,7 +1596,7 @@ let test_a_count_that_disagrees_is_refused_by_the_server () =
          with
         | Error (`Db _) -> true
         | Error
-            (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+            (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
         | Ok _ ->
             false))
 
@@ -1608,7 +1609,7 @@ let test_a_null_is_not_empty_text () =
        with
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.(check bool) "said as NULL" true (contains m "NULL")
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ | Error (`Conflict _) -> Alcotest.fail "a NULL read as text");
       Alcotest.(check (option (option string)))
@@ -1628,7 +1629,7 @@ let test_a_shape_wider_than_the_result () =
       | Error (`Db m | `Not_serializable m) ->
           Alcotest.(check bool)
             "the column it lacks" true (contains m "column 2")
-      | Error ((`Connection_closed | `Lost _) as e) ->
+      | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok _ | Error (`Conflict _) -> Alcotest.fail "decoded a column not there")
 

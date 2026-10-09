@@ -2,15 +2,17 @@
 
 ## Unreleased
 
-- `rowtype`: `Rowtype.error`'s `` `Closed `` is `` `Connection_closed ``,
-  beside the pool's `` `Pool_closed ``, so a program that merges the two
-  reads which one closed. Its words are unchanged. Breaking: a match over
-  the error names `` `Connection_closed ``.
-- `rowtype-postgres`: `Pool.use` answers `` `Pool_closed `` beside
-  `` `Busy ``, both a `Pool.error`, and `Pool.error_to_string` words each
-  as postgres-eio does. postgres-eio answers `` `Pool_closed `` for a
-  closed pool after its 0.1.0, which answers `` `Busy `` there. Breaking: a
-  match on what `Pool.use` answers handles `` `Pool_closed ``.
+- `rowtype`: `Rowtype.error`'s `` `Closed `` is `` `Connection `Closed ``,
+  the connection's state under the connection, so a program that merges
+  it with a pool's error reads which one closed. Its words are unchanged.
+  Breaking: a match over the error names `` `Connection `Closed ``.
+- `rowtype-postgres`: `Pool.error` is
+  `` [ `Pool of [ `Busy | `Closed ] ] ``, the pool's states under the pool:
+  `Pool.use` answers `` `Pool `Busy `` where it answered `` `Busy ``, and
+  `` `Pool `Closed `` at once for a closed pool, and `Pool.error_to_string`
+  words each as postgres-eio does. postgres-eio tells a closed pool apart
+  after its 0.1.0, which answers `` `Pool `Busy `` there. Breaking: a match
+  on what `Pool.use` answers names `` `Pool ``.
 - `rowtype-postgres`: every failure it answers has a printer beside it:
   `Transaction.error_to_string` for what `Transaction.within` answers, its
   own failures and a statement's, `Pool.error_to_string` for a

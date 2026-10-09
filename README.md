@@ -144,7 +144,7 @@ Every failure is a value. `` `Conflict (Some "users_email_key") `` is a
 unique, exclusion or foreign-key constraint that refused the write, named.
 A NOT NULL or CHECK violation is the program's mistake, so it is `` `Db ``.
 `` `Not_serializable `` is a
-transaction a concurrent one won. `` `Connection_closed `` is a connection closed
+transaction a concurrent one won. `` `Connection `Closed `` is a connection closed
 before the statement was sent, so nothing it would have done was done, and
 `` `Lost `` one that failed with the statement in flight -- a timeout, a
 broken socket, a server that ended the session -- so a write may have been
@@ -176,7 +176,7 @@ with
 
 `Pg.Transaction.error_to_string` tells what `within` answers, the
 transaction's own failures and its statements', in one call, and
-`Pg.Pool.error_to_string` a pool's `` `Busy `` or `` `Pool_closed ``.
+`Pg.Pool.error_to_string` a pool's `` `Pool `Busy `` or `` `Pool `Closed ``.
 
 ## Checking statements
 

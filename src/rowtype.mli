@@ -41,17 +41,21 @@ type error =
         with a concurrent one -- a serialization failure, or a deadlock -- in
         its words: running the transaction again may succeed, which is the one
         thing no other failure here says *)
-  | `Connection_closed
-    (** the connection was closed before the statement was sent -- by its owner,
-        or by a failure before it -- so nothing was sent and nothing it would
-        have done was done *)
+  | `Connection of
+    [ `Closed
+      (** the connection was closed before the statement was sent -- by its
+          owner, or by a failure before it -- so nothing was sent and nothing it
+          would have done was done *) ]
+    (** what the statement met in its connection, a state of the connection's
+        own *)
   | `Lost of string
     (** the connection failed with the statement sent and no answer back -- a
         timeout, a socket that broke, a server that ended the session -- in
         words for a log: what the statement did is unknown, and a write may have
-        been applied. Inside a transaction, a statement lost before its [COMMIT]
-        did nothing, since an open transaction ends with its connection; only a
-        lost [COMMIT] may have committed. *)
+        been applied, so it is never run again blindly, only once what it did is
+        known or doing it twice is harmless. Inside a transaction, a statement
+        lost before its [COMMIT] did nothing, since an open transaction ends
+        with its connection; only a lost [COMMIT] may have committed. *)
   | `Db of string  (** anything else, in words for a log *) ]
 (** A polymorphic variant, so a statement's failures join the ones a caller adds
     around it -- a pool's, a transaction's, the work's own -- in one result:
@@ -353,7 +357,7 @@ module type Backend = sig
   (** The failure told as {!type-error}: a constraint refusing the write because
       of other rows is [`Conflict], naming the constraint where the database
       does; a connection closed before the statement was sent is
-      [`Connection_closed], and one that failed with it in flight [`Lost]; and
+      [`Connection `Closed], and one that failed with it in flight [`Lost]; and
       anything else is [`Db] in words for a log -- never a parameter's value. *)
 end
 

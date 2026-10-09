@@ -290,7 +290,7 @@ let test_an_array_of_arrays_is_refused () =
     | Error (`Db m) ->
         Alcotest.(check string)
           what "an array's element is one column and no array of its own" m
-    | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+    | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
       ->
         Alcotest.failf "%s: not the shape's error" what
     | Ok _ -> Alcotest.failf "%s: passed" what
@@ -306,7 +306,7 @@ let test_an_unknown_label_is_refused () =
   let refused what = function
     | Error (`Db m) ->
         Alcotest.(check string) what "column 1: unreadable value" m
-    | Error (`Conflict _ | `Not_serializable _ | `Connection_closed | `Lost _)
+    | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
       ->
         Alcotest.failf "%s: not the shape's error" what
     | Ok _ -> Alcotest.failf "%s: read" what

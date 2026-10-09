@@ -20,7 +20,7 @@
     took: its first line of text, never its parameters. A statement runs on the
     calling fiber, as an Eio effect, and a connection is one fiber's at a time.
     A raise from {!fold}'s function passes, and closes the connection, whose
-    answer was read only in part: its next statement is [`Connection_closed]
+    answer was read only in part: its next statement is [`Connection `Closed]
     until {!revive}. A fiber cancelled with a statement in flight closes its
     connection and asks the server to cancel the statement, waiting a few
     seconds at most for the server to take the request, so nothing runs on for
@@ -132,14 +132,16 @@ module Pool : sig
       connection it lends. *)
 
   type error =
-    [ `Busy  (** no connection came free within the wait *)
-    | `Pool_closed  (** the pool is closed *) ]
+    [ `Pool of
+      [ `Busy  (** no connection came free within the wait *)
+      | `Closed  (** the pool is closed *) ] ]
+  (** What a borrow meets in the pool, a state of the pool's own. *)
 
   val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> error ]) result
-  (** As [Postgres_eio.Pool.use]: [`Busy] if no connection came free within the
-      wait, and [`Pool_closed] at once if the pool is closed, or closes while
-      the borrow waits. postgres-eio answers [`Pool_closed] after its 0.1.0,
-      which answers [`Busy] there. *)
+  (** As [Postgres_eio.Pool.use]: [`Pool `Busy] if no connection came free
+      within the wait, and [`Pool `Closed] at once if the pool is closed, or
+      closes while the borrow waits. postgres-eio tells a closed pool apart
+      after its 0.1.0, which answers [`Pool `Busy] there. *)
 
   val error_to_string : [< error ] -> string
   (** An {!error} in words for a log. *)
@@ -277,7 +279,7 @@ module Transaction : sig
 
       A fiber cancelled inside [work], at a statement or at any other effect,
       closes the connection, which ends the transaction with nothing kept, and
-      the cancellation passes. Its statements then answer [`Connection_closed],
+      the cancellation passes. Its statements then answer [`Connection `Closed],
       and the next [within] on it, or {!revive}, makes it again; a pooled one is
       made again before it is next lent. *)
 end
