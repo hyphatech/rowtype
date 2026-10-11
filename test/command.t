@@ -39,6 +39,16 @@ names; from --env-file where one is given, the last line that sets it:
   .env does not set OTHER
   [1]
 
+A password holding a space is refused, and the words after the space,
+which are the password's, are not repeated:
+
+  $ rowtype-migrate status --dir m --url "user=app password=ab12 cd34"
+  a word after the connection string's password has no =; a password holding a space is quoted: password='a b'
+  [1]
+  $ rowtype-migrate status --dir m --url "user=app password=ab12 cd34=ef"
+  a key after the connection string's password is not one this driver reads; a password holding a space is quoted: password='a b'
+  [1]
+
 A squash is through a migration's version, fourteen digits, refused before
 anything is read:
 

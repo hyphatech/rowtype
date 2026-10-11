@@ -66,7 +66,7 @@
   (rowtype
    (= :version))
   (postgres-eio
-   (>= 0.1.0))
+   (>= 0.2.0))
   (ptime
    (>= 1.2.0))
   (uuidm

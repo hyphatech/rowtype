@@ -13,10 +13,10 @@
 - In `rowtype-postgres`, `Pool.error` is
   `` [ `Pool of [ `Busy | `Closed ] ] ``, the pool's states under the pool:
   `Pool.use` answers `` `Pool `Busy `` where it answered `` `Busy ``, and
-  `` `Pool `Closed `` at once for a closed pool, and `Pool.error_to_string`
-  words each as postgres-eio does. In postgres-eio, a closed pool is told apart
-  after its 0.1.0, which answers `` `Pool `Busy `` there. Breaking: a match
-  on what `Pool.use` answers names `` `Pool ``.
+  `` `Pool `Closed `` at once for a closed pool, where it waited out
+  `wait_s` and answered `` `Busy ``, and `Pool.error_to_string` is
+  postgres-eio's. Breaking: a match on what `Pool.use` answers names
+  `` `Pool ``.
 - In `rowtype-postgres`, every failure it answers has a printer beside it:
   `Transaction.error_to_string` for what `Transaction.within` answers, its
   own failures and a statement's, `Pool.error_to_string` for a
@@ -26,8 +26,19 @@
 - Breaking: OCaml 5.5 or later is required. The opam files asked for 5.4,
   which CI tested and nothing else did; every switch the code is written
   in is 5.5.
-- The `rowtype-postgres` package pins postgres-eio to its 0.1.0 tag from its own opam
+- The `rowtype-postgres` package pins postgres-eio to its 0.2.0 tag from its own opam
   file, so pinning rowtype is the whole install.
+- `rowtype-postgres` asks for postgres-eio 0.2.0, and what changed there
+  reaches it. Breaking: `Conninfo.protocol_minor`, which `Rowtype_postgres.Conninfo`
+  re-exports, is gone; it was a step of the driver's start-up. Breaking: a
+  fiber cancelled while `Pool.use` runs its function stops at once, its
+  connection closed and made again at the next lend, where the function
+  ran to its end; and a `Listener` whose server is restarting waits for it,
+  where `next` answered the server's refusal.
+- In `rowtype-postgres` and `rowtype-migrate`, a connection string whose
+  password holds an unquoted space is refused without repeating the words
+  after the space, which are the password's: `password=ab12 cd34` was
+  refused naming `"cd34"`. The refusal says to quote the password.
 - In `rowtype-postgres`, a fiber cancelled inside `Transaction.within`
   between statements -- at a sleep, a wait, anything but a statement in
   flight -- closes the connection, which ends the transaction, where it

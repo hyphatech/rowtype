@@ -90,6 +90,19 @@ let test_a_borrow_past_its_wait_is_busy () =
             "and lends again once it is back" 7
             (lent pool (fun db -> ok (Pg.run db echo 7)))))
 
+(* A closed pool answers [`Pool `Closed] at once: no connection will ever come
+   free, so the borrow does not wait. The wait is long, so a borrow that sat
+   it out would answer [`Pool `Busy], whatever the machine's speed. *)
+let test_a_closed_pool_answers_closed () =
+  Db_target.with_postgres (fun target ->
+      with_pool ~size:1 target (fun pool ->
+          Pg.Pool.close pool;
+          match Pg.Pool.use ~wait_s:10. pool (fun _ -> ()) with
+          | Error (`Pool `Closed) -> ()
+          | Error (`Pool `Busy) ->
+              Alcotest.fail "waited for a connection a closed pool never lends"
+          | Ok () -> Alcotest.fail "a closed pool lent a connection"))
+
 (* ------------------------------------------------------------------ *)
 (* Notifications *)
 
@@ -231,6 +244,8 @@ let () =
             test_a_borrower_leaves_nothing_behind;
           Alcotest.test_case "a borrow past its wait is busy" `Quick
             test_a_borrow_past_its_wait_is_busy;
+          Alcotest.test_case "a closed pool answers closed" `Quick
+            test_a_closed_pool_answers_closed;
         ] );
       ( "listener",
         [

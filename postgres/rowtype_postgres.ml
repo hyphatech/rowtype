@@ -625,24 +625,12 @@ module Pool = struct
 
   type error = [ `Pool of [ `Busy | `Closed ] ]
 
-  (* postgres-eio 0.1.0 answers a flat [`Busy], and a later one the pool's
-     states under [`Pool]. Its answer is an open variant, so an arm for each
-     builds against both. *)
   let use ?wait_s t f =
-    match
-      Pg.Pool.use ?wait_s t.pool (fun pg ->
-          f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
-    with
-    | Ok v -> Ok v
-    | Error `Busy -> Error (`Pool `Busy)
-    | Error (`Pool p) -> Error (`Pool p)
+    Pg.Pool.use ?wait_s t.pool (fun pg ->
+        f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
 
-  (* Postgres_eio.Pool.error_to_string's sentences, word for word, so the same
-     failure reads the same through either library; the postgres-eio this
-     builds against has no printer to call, and no closed pool. *)
-  let error_to_string : [< error ] -> string = function
-    | `Pool `Busy -> "no connection came free within the pool's wait"
-    | `Pool `Closed -> "the pool is closed"
+  let error_to_string (e : [< error ]) =
+    Pg.Pool.error_to_string (e :> Pg.Pool.error)
 
   type stats = Pg.Pool.stats = {
     size : int;
