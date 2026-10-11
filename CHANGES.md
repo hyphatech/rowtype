@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.4.0 (2026-10-11)
 
 - Breaking: `commit` leaves `Rowtype.Backend`. A backend runs its own
   transactions, since databases differ in how one begins and what a
