@@ -468,16 +468,6 @@ module Backend = struct
               go (start + 1) []
             else Error "not an array")
 
-  (* A transaction a failed statement aborted is not an error to COMMIT:
-     the server rolls it back and says so in the command tag. *)
-  let commit t =
-    timed t "commit" @@ fun () ->
-    Result.map
-      (fun tag ->
-        if String.equal (Pg.Tag.command tag) "ROLLBACK" then `Rolled_back
-        else `Committed)
-      (send t (fun pg -> Pg.execute pg "commit" ~params:[]))
-
   (* A constraint that refused the write because of other rows -- unique,
      exclusion, a foreign key either way round -- is the caller's answer and
      not a failure: a racing second writer is refused, and that refusal is
@@ -696,6 +686,17 @@ module Transaction = struct
     | Some Repeatable_read -> "begin isolation level repeatable read"
     | Some Serializable -> "begin isolation level serializable"
 
+  type ended = Committed | Rolled_back
+
+  (* A transaction a failed statement aborted is not an error to COMMIT:
+     the server rolls it back and says so in the command tag. *)
+  let commit db =
+    timed db "commit" @@ fun () ->
+    match send db (fun pg -> Pg.execute pg "commit" ~params:[]) with
+    | Ok tag when String.equal (Pg.Tag.command tag) "ROLLBACK" -> Ok Rolled_back
+    | Ok _ -> Ok Committed
+    | Error f -> Error (Backend.error f)
+
   let not_committed what detail =
     Log.err (fun m -> m "a transaction was not committed: %s: %s" what detail);
     Error (`Not_committed (what ^ ": " ^ detail))
@@ -744,9 +745,9 @@ module Transaction = struct
             rollback db;
             Printexc.raise_with_backtrace ex trace
         | Ok v -> (
-            match Result.map_error Backend.error (Backend.commit db) with
-            | Ok `Committed -> Ok v
-            | Ok `Rolled_back ->
+            match commit db with
+            | Ok Committed -> Ok v
+            | Ok Rolled_back ->
                 not_committed "commit"
                   "the work answered Ok in a transaction a failed statement \
                    had aborted"
@@ -758,11 +759,11 @@ module Transaction = struct
             rollback db;
             Error e
         | Error e -> (
-            match Result.map_error Backend.error (Backend.commit db) with
-            | Ok `Committed -> Error e
+            match commit db with
+            | Ok Committed -> Error e
             (* The answer stands; that the write it asked to keep did not is
                the log's to say, or an attempt counted counts nothing. *)
-            | Ok `Rolled_back ->
+            | Ok Rolled_back ->
                 Log.warn (fun m ->
                     m
                       "a refusal that kept its write was rolled back: a \

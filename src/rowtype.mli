@@ -297,7 +297,10 @@ type _ scalar =
       (** a label of a type with a closed set of them, these, as {!enum} reads
           one *)
 
-(** A database, as {!Make} needs it. *)
+(** A database, as {!Make} needs it: statements run on a connection, and values
+    sent and read. A transaction is not in it. A backend runs its own, since
+    databases differ in how one begins, what isolation it has and what a
+    [COMMIT] after a failed statement does, and this library runs none. *)
 module type Backend = sig
   type conn
   (** A connection, which the backend opens, closes and serialises. *)
@@ -348,11 +351,6 @@ module type Backend = sig
   (** An array's elements, in order, [None] for a NULL; [Error] for what is not
       one, or has more than one dimension, in words. *)
 
-  val commit : conn -> ([ `Committed | `Rolled_back ], failure) result
-  (** [COMMIT], and what the database made of it: [`Rolled_back] for a
-      transaction a failed statement had already aborted, which a database may
-      roll back without an error, and nothing it wrote is kept. *)
-
   val error : failure -> error
   (** The failure told as {!type-error}: a constraint refusing the write because
       of other rows is [`Conflict], naming the constraint where the database
@@ -394,10 +392,10 @@ module type S = sig
   val exec_raw : conn -> string -> (unit, [> error ]) result
   (** For DDL and for a session's settings: no parameters, and rows are
       discarded. Several statements may be sent in one call. A transaction is
-      the backend's to run, never a [begin] and a [commit] sent here: a database
-      may answer the [COMMIT] of a transaction a failed statement aborted by
-      rolling it back without an error, which only the backend's own transaction
-      tells from a commit. *)
+      never a [begin] and a [commit] sent here: a backend runs its own, and this
+      library runs none, since a database may answer the [COMMIT] of a
+      transaction a failed statement aborted by rolling it back without an
+      error, which only the backend's own transaction tells from a commit. *)
 end
 
 (** A functor, because one program may use two databases at once, each with its

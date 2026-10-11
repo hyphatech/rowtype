@@ -20,7 +20,8 @@ output says so. CI runs `make lint` and `make test` on OCaml 5.5.
 ## Layout
 
 ```
-src/                 rowtype: shapes, statements, the backend signature; no IO
+src/                 rowtype: shapes, statements, the backend signature; no IO,
+                     and no transaction, which each backend runs its own way
   shape              the GADT a query's shape is
   rowtype            statements, and the walk of a shape against a backend
 postgres/            rowtype-postgres: the backend over postgres-eio, the one

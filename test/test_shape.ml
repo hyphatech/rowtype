@@ -82,7 +82,6 @@ module Echo = struct
     | Elements elements -> Ok elements
     | Value _ -> Error "a scalar where an array was expected"
 
-  let commit () = Ok `Committed
   let error m = `Db m
 end
 

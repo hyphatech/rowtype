@@ -1,5 +1,14 @@
 # Changes
 
+## Unreleased
+
+- Breaking: `commit` leaves `Rowtype.Backend`. A backend runs its own
+  transactions, since databases differ in how one begins and what a
+  `COMMIT` after a failed statement does, and `Rowtype.Make` runs none.
+  A backend that defines `commit` still compiles, the value now its own;
+  code that calls `B.commit` through a `Rowtype.Backend`, in a functor
+  over one, does not, and calls its backend's transaction instead.
+
 ## 0.3.0 (2026-10-11)
 
 - In `rowtype-migrate`, a record's table refused for its name says the

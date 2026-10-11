@@ -158,7 +158,9 @@ Pg.Transaction.within db ~isolation:Serializable ~retries:3 (fun db ->
     else Pg.run db withdraw (account, amount))
 ```
 
-`Ok` commits and `Error` rolls back. A transaction that could not commit is
+A transaction is the backend's, since each database runs one its own
+way: `rowtype` runs none, and `Pg.Transaction.within` is the Postgres
+backend's. `Ok` commits and `Error` rolls back. A transaction that could not commit is
 `` `Not_committed ``, never a silent success, and one whose `COMMIT` was
 sent with no answer back is `` `Lost ``: it may have committed. The transaction's own failures
 are `Pg.Transaction.failure`, so a caller whose errors are an ordinary

@@ -117,7 +117,6 @@ module type Backend = sig
   val script : conn -> string -> (unit, failure) result
   val array : param list -> param
   val elements : cell -> (cell option list, string) result
-  val commit : conn -> ([ `Committed | `Rolled_back ], failure) result
   val error : failure -> error
 end
 
