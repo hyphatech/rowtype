@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.3.0 (2026-10-11)
 
 - In `rowtype-migrate`, a record's table refused for its name says the
   name starts with a letter or an underscore, as its odoc now does too:
