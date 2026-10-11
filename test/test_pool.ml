@@ -11,11 +11,11 @@ let ok = function
 
 let conninfo target = ok (Pg.conninfo target)
 
-let with_pool ?(size = 4) ?wait_s target f =
+let with_pool ?(size = 4) ?wait target f =
   let pool =
     ok
       (Pg.Pool.create ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ~size ?wait_s (conninfo target))
+         ~mono_clock:(Db_target.mono ()) ~size ?wait (conninfo target))
   in
   Fun.protect ~finally:(fun () -> Pg.Pool.close pool) (fun () -> f pool)
 
@@ -80,7 +80,9 @@ let test_a_borrow_past_its_wait_is_busy () =
           Eio.Fiber.both
             (fun () -> lent pool (fun _ -> Eio.Promise.await release))
             (fun () ->
-              (match Pg.Pool.use ~wait_s:0.05 pool (fun _ -> ()) with
+              (match
+                 Pg.Pool.use ~wait:Mtime.Span.(50 * ms) pool (fun _ -> ())
+               with
               | Error (`Pool `Busy) -> ()
               | Error (`Pool `Closed) ->
                   Alcotest.fail "the open pool was closed"
@@ -97,7 +99,7 @@ let test_a_closed_pool_answers_closed () =
   Db_target.with_postgres (fun target ->
       with_pool ~size:1 target (fun pool ->
           Pg.Pool.close pool;
-          match Pg.Pool.use ~wait_s:10. pool (fun _ -> ()) with
+          match Pg.Pool.use ~wait:Mtime.Span.(10 * s) pool (fun _ -> ()) with
           | Error (`Pool `Closed) -> ()
           | Error (`Pool `Busy) ->
               Alcotest.fail "waited for a connection a closed pool never lends"
@@ -106,11 +108,11 @@ let test_a_closed_pool_answers_closed () =
 (* ------------------------------------------------------------------ *)
 (* Notifications *)
 
-let with_listener ?heartbeat_s target f =
+let with_listener ?heartbeat target f =
   let l =
     ok
       (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ?heartbeat_s (conninfo target))
+         ~mono_clock:(Db_target.mono ()) ?heartbeat (conninfo target))
   in
   Fun.protect ~finally:(fun () -> Pg.Listener.close l) (fun () -> f l)
 
@@ -156,7 +158,10 @@ let test_a_listener_survives_a_lost_connection () =
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
-          with_listener ~heartbeat_s:0.1 target (fun l ->
+          with_listener
+            ~heartbeat:Mtime.Span.(100 * ms)
+            target
+            (fun l ->
               ok (Pg.Listener.listen l "jobs");
               ignore
                 (ok

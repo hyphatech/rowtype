@@ -173,7 +173,7 @@ type failure = Unsent | Failed of Pg.error
 (* How long a cancelled fiber waits for the server to take its cancel
    request, a new connection's worth of round trips: past it the fiber
    goes, and the statement runs on as it would have without asking. *)
-let cancel_request_s = 5.
+let cancel_request = Mtime.Span.(5 * s)
 
 (* A fiber cancelled with its statement in flight leaves the statement
    running: the driver closes the socket, and the server notices only when
@@ -190,7 +190,7 @@ let send t f =
         Eio.Cancel.protect (fun () ->
             Eio.Fiber.first
               (fun () -> ignore (Pg.cancel t.pg : (unit, Pg.error) result))
-              (fun () -> Eio.Time.Mono.sleep t.clock cancel_request_s));
+              (fun () -> Eio.Time.Mono.sleep_span t.clock cancel_request));
         Printexc.raise_with_backtrace ex trace
 
 (* A FATAL or a PANIC ends the session, and the server sends it in place
@@ -567,7 +567,7 @@ let on_database ~server name =
     (fun (c : Conninfo.t) -> Conninfo.to_url { c with database = name })
     (conninfo server)
 
-let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?statement_cache
+let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout ?statement_cache
     ?(observe = unobserved) c =
   Result.map
     (fun pg ->
@@ -575,7 +575,7 @@ let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?statement_cache
     (Result.map_error db_error
        (Pg.connect ~sw ~net ~clock
           ~parameters:(with_output_styles parameters)
-          ?timeout_s ?statement_cache c))
+          ?timeout ?statement_cache c))
 
 let close t =
   t.ownership <- Closed_by_owner;
@@ -592,8 +592,8 @@ let revive t =
       if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
       else Ok ()
 
-let timeout_s t = Pg.timeout_s t.pg
-let set_timeout_s t timeout_s = Pg.set_timeout t.pg ~timeout_s
+let timeout t = Pg.timeout t.pg
+let set_timeout t ~timeout = Pg.set_timeout t.pg ~timeout
 
 module Pool = struct
   type t = {
@@ -602,21 +602,20 @@ module Pool = struct
     clock : Eio.Time.Mono.ty Eio.Std.r;
   }
 
-  let create ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?statement_cache
-      ?size ?wait_s ?reset ?max_lifetime_s ?idle_check_s ?(observe = unobserved)
-      c =
+  let create ~sw ~net ~mono_clock:clock ?parameters ?timeout ?statement_cache
+      ?size ?wait ?reset ?max_lifetime ?idle_check ?(observe = unobserved) c =
     Result.map
       (fun pool -> { pool; observe; clock :> Eio.Time.Mono.ty Eio.Std.r })
       (Result.map_error db_error
          (Pg.Pool.create ~sw ~net ~clock
             ~parameters:(with_output_styles parameters)
-            ?timeout_s ?statement_cache ?size ?wait_s ?reset ?max_lifetime_s
-            ?idle_check_s c))
+            ?timeout ?statement_cache ?size ?wait ?reset ?max_lifetime
+            ?idle_check c))
 
   type error = [ `Pool of [ `Busy | `Closed ] ]
 
-  let use ?wait_s t f =
-    Pg.Pool.use ?wait_s t.pool (fun pg ->
+  let use ?wait t f =
+    Pg.Pool.use ?wait t.pool (fun pg ->
         f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
 
   let error_to_string (e : [< error ]) =
@@ -645,9 +644,9 @@ module Listener = struct
     | Notification of { channel : string; payload : string }
     | Reconnected
 
-  let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout_s ?heartbeat_s c =
+  let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout ?heartbeat c =
     Result.map_error db_error
-      (Pg.Listener.connect ~sw ~net ~clock ?parameters ?timeout_s ?heartbeat_s c)
+      (Pg.Listener.connect ~sw ~net ~clock ?parameters ?timeout ?heartbeat c)
 
   (* A listener closed hears nothing more, and sends nothing. *)
   let error = function Pg.Closed -> `Connection `Closed | e -> db_error e

@@ -511,9 +511,10 @@ let default_lock = 7_265_756_171
    release's, which a lost connection has already made. *)
 let run ?(lock = default_lock) ?(table = default_table) conn migrations =
   let* table = table_name table in
-  let reads = Pg.timeout_s conn in
-  Pg.set_timeout_s conn None;
-  Fun.protect ~finally:(fun () -> Pg.set_timeout_s conn reads) @@ fun () ->
+  let reads = Pg.timeout conn in
+  Pg.set_timeout conn ~timeout:None;
+  Fun.protect ~finally:(fun () -> Pg.set_timeout conn ~timeout:reads)
+  @@ fun () ->
   let* () = Pg.exec_raw conn "set statement_timeout = 0" in
   let* () =
     Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock
@@ -687,7 +688,7 @@ let capture ~process_mgr ~secrets argv =
    command that never ends; what runs on the connection is not, since an
    administrator's statement -- a database made or dropped, a migration --
    runs as long as it takes. *)
-let connect_timeout_s = 10.
+let connect_timeout = Mtime.Span.(10 * s)
 
 (* Quiet: [create table if not exists] is a NOTICE on every run, and a notice
    is a line in what a command prints. *)
@@ -696,8 +697,8 @@ let connect ~sw ~net ~mono_clock url =
   let c =
     {
       c with
-      connect_timeout_s =
-        Some (Option.value c.connect_timeout_s ~default:connect_timeout_s);
+      connect_timeout =
+        Some (Option.value c.connect_timeout ~default:connect_timeout);
     }
   in
   Pg.connect ~sw ~net ~mono_clock

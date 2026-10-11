@@ -8,6 +8,24 @@
   A backend that defines `commit` still compiles, the value now its own;
   code that calls `B.commit` through a `Rowtype.Backend`, in a functor
   over one, does not, and calls its backend's transaction instead.
+- Breaking: in `rowtype-postgres`, every duration is an `Mtime.Span.t`
+  named for what it bounds, not a float of seconds named for its unit, so
+  a wait in the wrong unit no longer compiles. `connect`'s and
+  `Listener.connect`'s `?timeout_s` is `?timeout`, `Listener.connect`'s
+  `?heartbeat_s` is `?heartbeat`, `Pool.create`'s `?timeout_s`,
+  `?wait_s`, `?max_lifetime_s` and `?idle_check_s` are `?timeout`,
+  `?wait`, `?max_lifetime` and `?idle_check`, and `Pool.use`'s `?wait_s`
+  is `?wait`: write `~timeout:Mtime.Span.(10 * s)`.
+- Breaking: in `rowtype-postgres`, `timeout_s` is `timeout`, and
+  `set_timeout_s conn t` is `set_timeout conn ~timeout:t`, with
+  `t : Mtime.Span.t option`, as postgres-eio writes it.
+- `rowtype-postgres` asks for postgres-eio 0.3.0, and pins it at that tag.
+  Breaking: the `Conninfo.t` field `connect_timeout_s : float option`,
+  which `Rowtype_postgres.Conninfo` re-exports, is
+  `connect_timeout : Mtime.Span.t option`; a connection string still
+  gives it in whole seconds.
+- `rowtype-migrate` links `mtime`, for the ten seconds its commands give
+  a connect.
 
 ## 0.3.0 (2026-10-11)
 

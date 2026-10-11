@@ -77,7 +77,7 @@ val connect :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   ?parameters:(string * string) list ->
-  ?timeout_s:float ->
+  ?timeout:Mtime.Span.t ->
   ?statement_cache:int ->
   ?observe:observer ->
   Conninfo.t ->
@@ -100,12 +100,12 @@ val revive : conn -> (unit, [> Rowtype.error ]) result
     again, saying why -- an address that does not answer, a password the server
     now refuses. *)
 
-val timeout_s : conn -> float option
-(** The bound on every read and write, in seconds, [None] for none. *)
+val timeout : conn -> Mtime.Span.t option
+(** The bound on every read and write, [None] for none. *)
 
-val set_timeout_s : conn -> float option -> unit
-(** Set {!timeout_s}: lifted around work that runs longer, a migration, and put
-    back after it. *)
+val set_timeout : conn -> timeout:Mtime.Span.t option -> unit
+(** Set {!val-timeout}: lifted around work that runs longer, a migration, and
+    put back after it. *)
 
 (** Connections made up front and lent one at a time, as [Postgres_eio.Pool]
     lends them. *)
@@ -117,13 +117,13 @@ module Pool : sig
     net:_ Eio.Net.t ->
     mono_clock:_ Eio.Time.Mono.t ->
     ?parameters:(string * string) list ->
-    ?timeout_s:float ->
+    ?timeout:Mtime.Span.t ->
     ?statement_cache:int ->
     ?size:int ->
-    ?wait_s:float ->
+    ?wait:Mtime.Span.t ->
     ?reset:bool ->
-    ?max_lifetime_s:float ->
-    ?idle_check_s:float ->
+    ?max_lifetime:Mtime.Span.t ->
+    ?idle_check:Mtime.Span.t ->
     ?observe:observer ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
@@ -137,7 +137,7 @@ module Pool : sig
       | `Closed  (** the pool is closed *) ] ]
   (** What a borrow meets in the pool, a state of the pool's own. *)
 
-  val use : ?wait_s:float -> t -> (conn -> 'a) -> ('a, [> error ]) result
+  val use : ?wait:Mtime.Span.t -> t -> (conn -> 'a) -> ('a, [> error ]) result
   (** As [Postgres_eio.Pool.use]: [`Pool `Busy] if no connection came free
       within the wait, and [`Pool `Closed] at once if the pool is closed, or
       closes while the borrow waits. *)
@@ -176,13 +176,13 @@ module Listener : sig
     net:_ Eio.Net.t ->
     mono_clock:_ Eio.Time.Mono.t ->
     ?parameters:(string * string) list ->
-    ?timeout_s:float ->
-    ?heartbeat_s:float ->
+    ?timeout:Mtime.Span.t ->
+    ?heartbeat:Mtime.Span.t ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
   (** A connection that only listens, made as [Postgres_eio.Listener.connect]
-      makes one, [parameters] and [timeout_s] passed through; [heartbeat_s] is
-      how long {!next} waits in silence before it pings the server, 10 unless
+      makes one, [parameters] and [timeout] passed through; [heartbeat] is how
+      long {!next} waits in silence before it pings the server, 10 s unless
       given. *)
 
   val listen : t -> string -> (unit, [> Rowtype.error ]) result

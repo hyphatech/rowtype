@@ -26,6 +26,7 @@
   eio
   eio_main
   logs
+  mtime
   alcotest
   qcheck-core))
 
@@ -42,6 +43,7 @@
   db_target
   eio
   eio_main
+  mtime
   unix
   alcotest))
 
@@ -77,7 +79,8 @@
   (glob_files ../postgres/*.mli)
   (glob_files ../migrate/*.ml)
   (glob_files ../migrate/*.mli)
-  (glob_files ../migrate/bin/*.ml)))
+  (glob_files ../migrate/bin/*.ml)
+  (glob_files *.ml)))
 
 ; The command, where it needs no database.
 

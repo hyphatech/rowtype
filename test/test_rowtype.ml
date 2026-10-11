@@ -960,7 +960,7 @@ let test_a_cancelled_transaction_keeps_nothing () =
                 : (unit, _) result);
             "finished")
           (fun () ->
-            Eio.Time.Mono.sleep (Db_target.mono ()) 0.3;
+            Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(300 * ms);
             "cancelled")
       in
       Alcotest.(check string) "the work was cancelled" "cancelled" answer;
@@ -990,7 +990,8 @@ let test_a_transaction_cancelled_between_statements_ends () =
                 (T.within db (fun db ->
                      let* () = insert db 1 in
                      Eio.Promise.resolve write ();
-                     Eio.Time.Mono.sleep (Db_target.mono ()) 60.;
+                     Eio.Time.Mono.sleep_span (Db_target.mono ())
+                       Mtime.Span.(60 * s);
                      Ok ())
                   : (unit, _) result))
             (fun () -> Eio.Promise.await written);
@@ -1030,7 +1031,8 @@ let test_a_cancelled_statement_stops_at_the_server () =
       let sleeping = "select pg_sleep(10) -- cancelled" in
       Eio.Fiber.first
         (fun () -> ignore (Pg.exec_raw db sleeping : (unit, _) result))
-        (fun () -> Eio.Time.Mono.sleep (Db_target.mono ()) 0.3);
+        (fun () ->
+          Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(300 * ms));
       let running () =
         Db_target.admin (fun admin ->
             ok
@@ -1046,7 +1048,7 @@ let test_a_cancelled_statement_stops_at_the_server () =
         running () = 0
         || tries > 0
            &&
-           (Eio.Time.Mono.sleep (Db_target.mono ()) 0.1;
+           (Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(100 * ms);
             stopped (tries - 1))
       in
       Alcotest.(check bool) "it stopped at the server" true (stopped 30))

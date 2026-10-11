@@ -17,6 +17,7 @@ depends: [
   "ptime" {>= "1.2.0"}
   "cmdliner" {>= "2.1.1"}
   "eio" {>= "1.5"}
+  "mtime" {>= "2.1.0"}
   "eio_main" {>= "1.5"}
   "alcotest" {with-test & >= "1.9.1"}
   "odoc" {with-doc}

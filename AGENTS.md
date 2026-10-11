@@ -87,9 +87,12 @@ Each rule comes with why it exists and the test that catches a break.
   commit, or whose work answered `Ok` after a failed statement aborted it,
   is `` `Not_committed ``, never a success. Why: Postgres rolls such a
   transaction back in silence. Test: `transactions` in `test_rowtype`.
-- **The one `open` is `open Shape` in `src/rowtype.ml`.** Why: its walk
-  exists to pattern-match that GADT, and every constructor qualified would
-  bury the match. Test: `test_style` names it and refuses any other.
+- **The one module `open` is `open Shape` in `src/rowtype.ml`**, and the
+  one local open a span's, `Mtime.Span.(5 * s)`. Why: the walk exists to
+  pattern-match that GADT, and every constructor qualified would bury the
+  match; a span's operators are made to be opened around the one
+  expression, as OCAML.md writes one. Test: `test_style` names both and
+  refuses any other.
 
 ## House style
 

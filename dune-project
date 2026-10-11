@@ -66,7 +66,7 @@
   (rowtype
    (= :version))
   (postgres-eio
-   (>= 0.2.0))
+   (>= 0.3.0))
   (ptime
    (>= 1.2.0))
   (uuidm
@@ -109,6 +109,8 @@
    (>= 2.1.1))
   (eio
    (>= 1.5))
+  (mtime
+   (>= 2.1.0))
   (eio_main
    (>= 1.5))
   (alcotest

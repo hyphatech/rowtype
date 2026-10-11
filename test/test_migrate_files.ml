@@ -126,14 +126,13 @@ let test_a_baseline_is_the_oldest_and_the_only_one () =
     "two of them" false
     (Result.is_ok (read [ first; baseline "20260103000000" ]))
 
-(* 2026-09-25 12:34:56 UTC, and a second later. *)
-let at seconds =
-  match Ptime.of_float_s seconds with
+let at time =
+  match Ptime.of_date_time ((2026, 9, 25), (time, 0)) with
   | Some t -> t
-  | None -> Alcotest.failf "%f is no instant" seconds
+  | None -> Alcotest.fail "no such instant"
 
-let noon = at 1_790_339_696.
-let a_second_later = at 1_790_339_697.
+let noon = at (12, 34, 56)
+let a_second_later = at (12, 34, 57)
 
 let test_a_new_migration_is_stamped_in_utc () =
   let dir = temp_dir () in

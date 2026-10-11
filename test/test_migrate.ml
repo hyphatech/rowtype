@@ -6,6 +6,7 @@ let ok = function
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
 let words = Rowtype_migrate.error_to_string
+let span = Alcotest.testable Mtime.Span.pp Mtime.Span.equal
 
 let ok_s = function
   | Ok v -> v
@@ -31,12 +32,16 @@ let on_db setup f =
           f db))
 
 (* A connection bounded as a server bounds its own, so a migration has a
-   bound to lift. *)
-let connect ?statement_timeout_ms target =
+   bound to lift. Postgres reads the bound in whole milliseconds, so it is
+   written rounded up. *)
+let connect ?statement_timeout target =
   let parameters =
-    match statement_timeout_ms with
+    match statement_timeout with
     | None -> []
-    | Some ms -> [ ("statement_timeout", string_of_int ms) ]
+    | Some bound ->
+        let ns = Mtime.Span.to_uint64_ns bound in
+        let ms = Int64.unsigned_div (Int64.add ns 999_999L) 1_000_000L in
+        [ ("statement_timeout", Int64.to_string ms) ]
   in
   ok
     (Result.bind (Pg.conninfo target)
@@ -55,8 +60,9 @@ let contains haystack needle =
    every read, each lifted for the run and each back after it. *)
 let test_a_migration_is_unbounded () =
   Db_target.with_postgres (fun target ->
-      let db = connect ~statement_timeout_ms:100 target in
-      Pg.set_timeout_s db (Some 0.2);
+      let db = connect ~statement_timeout:Mtime.Span.(100 * ms) target in
+      let reads = Some Mtime.Span.(200 * ms) in
+      Pg.set_timeout db ~timeout:reads;
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -74,9 +80,9 @@ let test_a_migration_is_unbounded () =
           | Ok () -> ()
           | Error m ->
               Alcotest.failf "the migration was cut short: %s" (words m));
-          Alcotest.(check (option (float 0.)))
-            "the read bound back" (Some 0.2) (Pg.timeout_s db);
-          Pg.set_timeout_s db None;
+          Alcotest.(check (option span))
+            "the read bound back" reads (Pg.timeout db);
+          Pg.set_timeout db ~timeout:None;
           match Pg.exec_raw db "select pg_sleep(1)" with
           | Error _ -> ()
           | Ok () -> Alcotest.fail "the request bound did not come back"))
@@ -628,12 +634,24 @@ let test_a_failed_dump_names_no_password () =
       | Error e -> Alcotest.failf "not the dump's: %s" (words e))
 
 (* A dump cancelled while pg_dump runs ends at once: the program is killed,
-   the loop never waited on it, and the scratch database is dropped. *)
+   the loop never waited on it, and the scratch database is dropped. The
+   cancel waits for the program to say it started, so it lands in pg_dump
+   however long the migrating before it took, and five seconds is far past
+   a kill and short of the thirty the program sleeps. *)
 let test_a_dump_cancelled_in_pg_dump_ends () =
   Db_target.with_postgres (fun target ->
-      let sleeps = script "sleep 30" in
+      let started = Filename.temp_file "pg_dump" ".started" in
+      Sys.remove started;
+      let sleeps =
+        script (Printf.sprintf "touch %s\nsleep 30" (Filename.quote started))
+      in
       let mono = Db_target.mono () in
-      let started = Eio.Time.Mono.now mono in
+      let rec in_pg_dump () =
+        if not (Sys.file_exists started) then (
+          Eio.Time.Mono.sleep_span mono Mtime.Span.(50 * ms);
+          in_pg_dump ())
+      in
+      let cancelled = ref (Eio.Time.Mono.now mono) in
       let answer =
         Eio.Fiber.first
           (fun () ->
@@ -642,17 +660,17 @@ let test_a_dump_cancelled_in_pg_dump_ends () =
                 : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
-            Eio.Time.Mono.sleep mono 1.;
+            in_pg_dump ();
+            cancelled := Eio.Time.Mono.now mono;
             "cancelled")
       in
-      let took =
-        Mtime.Span.to_float_ns (Mtime.span started (Eio.Time.Mono.now mono))
-        /. 1e9
-      in
+      let took = Mtime.span !cancelled (Eio.Time.Mono.now mono) in
+      if Sys.file_exists started then Sys.remove started;
       Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
       Alcotest.(check bool)
-        (Printf.sprintf "at once: %.1fs" took)
-        true (took < 5.);
+        (Format.asprintf "at once: %a" Mtime.Span.pp took)
+        true
+        (Mtime.Span.is_shorter took ~than:Mtime.Span.(5 * s));
       let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
       Db_target.admin (fun db ->
           Alcotest.(check bool)
@@ -689,7 +707,7 @@ let test_a_cancelled_dump_leaves_nothing () =
                 : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
-            Eio.Time.Mono.sleep (Db_target.mono ()) 0.5;
+            Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(500 * ms);
             "cancelled")
       in
       Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
