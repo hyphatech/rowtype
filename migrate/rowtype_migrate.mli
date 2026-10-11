@@ -180,11 +180,11 @@ val default_lock : int
 val default_table : string
 (** [schema_migrations], the table the database's record is kept in unless told
     another. Every function that reads or writes the record takes [?table]: a
-    name of lower-case letters, digits and underscores, after a schema and a dot
-    if it names one, found through the search path as the statements that write
-    it find it -- so two applications can keep two records in one database. A
-    name outside that grammar is refused, since a table's name cannot be a
-    parameter. *)
+    name of lower-case letters, digits and underscores, starting with a letter
+    or an underscore, after a schema and a dot if it names one, found through
+    the search path as the statements that write it find it -- so two
+    applications can keep two records in one database. A name outside that
+    grammar is refused, since a table's name cannot be a parameter. *)
 
 val run :
   ?lock:int ->

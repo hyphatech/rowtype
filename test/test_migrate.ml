@@ -443,7 +443,16 @@ let test_a_record_can_have_a_table_of_its_own () =
            Rowtype_migrate.run ~table:"m; drop table app.one" db [ one ]
          with
         | Error (`Invalid _) -> true
-        | Ok () | Error _ -> false))
+        | Ok () | Error _ -> false);
+      Alcotest.(check (option string))
+        "a name that starts with a digit, told what it lacks"
+        (Some
+           "\"1migrations\" is not a table's name: lower-case letters, digits \
+            and underscores, starting with a letter or an underscore, after a \
+            schema and a dot if it names one")
+        (match Rowtype_migrate.run ~table:"1migrations" db [ one ] with
+        | Error (`Invalid m) -> Some m
+        | Ok () | Error _ -> None))
 
 let on_server f url =
   f ~sw:(Db_target.sw ()) ~net:(Db_target.net ())

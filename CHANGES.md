@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- In `rowtype-migrate`, a record's table refused for its name says the
+  name starts with a letter or an underscore, as its odoc now does too:
+  `1migrations`, all of whose characters were allowed, was refused with
+  words that named only the characters.
 - In `rowtype`, `Rowtype.error`'s `` `Closed `` is `` `Connection `Closed ``,
   the connection's state under the connection, so a program that merges
   it with a pool's error reads which one closed. Its words are unchanged.

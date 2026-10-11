@@ -277,7 +277,8 @@ let table_name t =
         (`Invalid
            (Printf.sprintf
               "%S is not a table's name: lower-case letters, digits and \
-               underscores, after a schema and a dot if it names one"
+               underscores, starting with a letter or an underscore, after a \
+               schema and a dot if it names one"
               t))
 
 (* The table and its checksum column, which a database migrated before
