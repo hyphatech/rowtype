@@ -264,10 +264,18 @@ let fenced fence markdown =
   in
   outside (String.split_on_char '\n' markdown)
 
-(* OCAML.md's two lists, read from its copy at the root, so no list is kept
-   here: every file refuses the names in [refused], and a library's also
-   those in [refused-in-a-library]. A block that cannot be found fails
-   every test that reads it rather than refusing nothing. *)
+(* OCAML.md's three lists, read from its copy at the root, so no list is
+   kept here: every file refuses the names in [refused], a library's also
+   those in [refused-in-a-library], and every file but a library's clock
+   module, [instant.ml], those in [only-in-the-clock-module]. A block that
+   cannot be found fails every test that reads it rather than refusing
+   nothing. *)
+type refusals = {
+  refused : string list;
+  only_in_the_clock_module : string list;
+  in_a_library : string list;
+}
+
 let refusals () =
   let markdown = read_source "OCAML.md" in
   let block fence =
@@ -275,7 +283,11 @@ let refusals () =
     | [] -> Alcotest.failf "OCAML.md has no names in a block fenced as %s" fence
     | names -> names
   in
-  (block "refused", block "refused-in-a-library")
+  {
+    refused = block "refused";
+    only_in_the_clock_module = block "only-in-the-clock-module";
+    in_a_library = block "refused-in-a-library";
+  }
 
 (* Each name of [names] in [source], a file's text, as a line naming it and
    [why], but where [allowed] allows it in that file. *)
@@ -291,43 +303,61 @@ let refused_in ~names ~why file source =
   |> List.map (fun (line, word) ->
       Printf.sprintf "%s:%d: %s -- %s" file line (unqualified word) why)
 
+(* Each refused name in [source], the text of [file] in [place], held to the
+   lists its place takes: a library's [instant.ml] is its clock module,
+   where time crosses to the two calls that have no typed form. *)
+let refused_names (r : refusals) place file source =
+  let clock_module =
+    library place && String.equal (Filename.basename file) "instant.ml"
+  in
+  refused_in ~names:r.refused ~why:"refused by OCAML.md" file source
+  @ (if clock_module then []
+     else
+       refused_in ~names:r.only_in_the_clock_module
+         ~why:"only in a library's clock module, instant.ml, by OCAML.md" file
+         source)
+  @
+  if library place then
+    refused_in ~names:r.in_a_library ~why:"refused in a library by OCAML.md"
+      file source
+  else []
+
 let no_refused_name () =
-  let refused, in_a_library = refusals () in
+  let r = refusals () in
   let found =
     List.concat_map
       (fun place ->
         List.concat_map
-          (fun file ->
-            let source = read_source file in
-            refused_in ~names:refused ~why:"refused by OCAML.md" file source
-            @
-            if library place then
-              refused_in ~names:in_a_library
-                ~why:"refused in a library by OCAML.md" file source
-            else [])
+          (fun file -> refused_names r place file (read_source file))
           (files_of place))
       (places ())
   in
   Alcotest.(check (list string)) "refused names" [] found
 
-(* Both blocks are read whole, a name is found bare and behind [Stdlib.],
-   a label is no use of the value it is named like, and a dune file says
-   which of its directory's files are built and whether it is a
+(* The three blocks are read whole, a name is found bare and behind
+   [Stdlib.], a label is no use of the value it is named like, and a dune
+   file says which of its directory's files are built and whether it is a
    library's. *)
 let the_refusals_are_read () =
-  let refused, in_a_library = refusals () in
+  let r = refusals () in
   List.iter
     (fun (names, name) ->
       Alcotest.(check bool) (name ^ " is read") true (List.mem name names))
     [
-      (refused, "failwith");
-      (refused, "Unix.sleepf");
-      (refused, "compare");
-      (in_a_library, "print_string");
-      (in_a_library, "exit");
+      (r.refused, "failwith");
+      (r.refused, "Unix.sleep");
+      (r.refused, "compare");
+      (r.only_in_the_clock_module, "Eio.Time.now");
+      (r.only_in_the_clock_module, "Unix.sleepf");
+      (r.in_a_library, "print_string");
+      (r.in_a_library, "exit");
     ];
   Alcotest.(check bool)
-    "exit is no refusal outside a library" false (List.mem "exit" refused);
+    "exit is no refusal outside a library" false
+    (List.mem "exit" r.refused);
+  Alcotest.(check bool)
+    "Unix.sleepf is no refusal in every file" false
+    (List.mem "Unix.sleepf" r.refused);
   Alcotest.(check (list string))
     "a block read" [ "exit"; "compare" ]
     (fenced "refused-in-a-library"
@@ -363,85 +393,46 @@ let the_refusals_are_read () =
        "(rule (target b.ml) (action (with-stdout-to %{target} (run x))))\n\
         (rule (targets c.ml d.ml))")
 
-(* Each [Eio.Time.now] not written as [Ptime.of_float_s (Eio.Time.now
-   clock)], with its line: OCAML.md makes that the one place a clock
-   becomes an instant, and it is written nowhere else. *)
-let clocks_read_bare code =
-  let n = String.length code in
-  let now = "Eio.Time.now" and of_float = "Ptime.of_float_s" in
-  let is_space = function ' ' | '\n' | '\t' | '\r' -> true | _ -> false in
-  let word_at i w =
-    i >= 0
-    && i + String.length w <= n
-    && String.equal (String.sub code i (String.length w)) w
-    && (i = 0 || not (is_ident_char code.[i - 1]))
-    && (i + String.length w = n
-       || not (is_ident_char code.[i + String.length w]))
+(* The clock module's names are refused in every file but a library's
+   [instant.ml]: in a library's other files, in an [instant.ml] a test or
+   a command builds, and in an [.mli] beside the clock module; the other
+   lists hold in the clock module as anywhere. *)
+let the_clock_module_alone_crosses () =
+  let r =
+    {
+      refused = [ "failwith" ];
+      only_in_the_clock_module = [ "Eio.Time.now"; "Unix.sleepf" ];
+      in_a_library = [ "exit" ];
+    }
   in
-  let rec back_over_space i =
-    if i >= 0 && is_space code.[i] then back_over_space (i - 1) else i
+  let lib = { dir = "src"; stanzas = [ "library" ] }
+  and test = { dir = "test"; stanzas = [ "test" ] } in
+  let source =
+    "let now c = Eio.Time.now c\nlet sleep s = Unix.sleepf s\nlet _ = failwith"
   in
-  let rec over_space i =
-    if i < n && is_space code.[i] then over_space (i + 1) else i
+  let found place file =
+    List.map
+      (fun l ->
+        match String.index_opt l ' ' with
+        | Some i -> String.sub l 0 i
+        | None -> l)
+      (refused_names r place file source)
   in
-  (* [(], after [Ptime.of_float_s], before; one name, then [)], after. *)
-  let made_an_instant i =
-    let paren = back_over_space (i - 1) in
-    let arg = over_space (i + String.length now) in
-    let j = ref arg in
-    while !j < n && is_ident_char code.[!j] do
-      incr j
-    done;
-    let close = over_space !j in
-    paren >= 0
-    && Char.equal code.[paren] '('
-    && word_at
-         (back_over_space (paren - 1) - String.length of_float + 1)
-         of_float
-    && !j > arg && close < n
-    && Char.equal code.[close] ')'
-  in
-  let rec go i line acc =
-    if i >= n then List.rev acc
-    else if Char.equal code.[i] '\n' then go (i + 1) (line + 1) acc
-    else if word_at i now then
-      go
-        (i + String.length now)
-        line
-        (if made_an_instant i then acc else line :: acc)
-    else go (i + 1) line acc
-  in
-  go 0 1 []
-
-let no_clock_read_bare () =
-  let found =
-    List.concat_map
-      (fun file ->
-        clocks_read_bare (code_of (read_source file))
-        |> List.map (fun line ->
-            Printf.sprintf
-              "%s:%d: Eio.Time.now -- write Ptime.of_float_s (Eio.Time.now \
-               clock)"
-              file line))
-      (every_file ())
-  in
-  Alcotest.(check (list string)) "clocks read bare" [] found
-
-(* The one form is let through, across a line break too, and any other is
-   found. *)
-let every_clock_read_bare () =
-  Alcotest.(check (list int))
-    "found" [ 4; 5; 6; 7; 8 ]
-    (clocks_read_bare
-       "let a = Ptime.of_float_s (Eio.Time.now clock)\n\
-        let b = Ptime.of_float_s\n\
-       \  ( Eio.Time.now t.clock )\n\
-        let c = Eio.Time.now clock\n\
-        let d = Ptime.of_float_s (Eio.Time.now clock +. 1.)\n\
-        let e = Ptime.of_float_s (1. +. Eio.Time.now clock)\n\
-        let f = Eio.Time.now\n\
-        let g = Ptime.of_float_s (Float.round (Eio.Time.now clock))\n\
-        let h = Eio.Time.Mono.now clock")
+  Alcotest.(check (list string))
+    "in a library's instant.ml" [ "src/instant.ml:3:" ]
+    (found lib "src/instant.ml");
+  Alcotest.(check (list string))
+    "in a library's other file"
+    [ "src/log.ml:3:"; "src/log.ml:1:"; "src/log.ml:2:" ]
+    (found lib "src/log.ml");
+  Alcotest.(check (list string))
+    "in a library's instant.mli"
+    [ "src/instant.mli:3:"; "src/instant.mli:1:"; "src/instant.mli:2:" ]
+    (found lib "src/instant.mli");
+  Alcotest.(check (list string))
+    "in a test's instant.ml"
+    [ "test/instant.ml:3:"; "test/instant.ml:1:"; "test/instant.ml:2:" ]
+    (found test "test/instant.ml")
 
 (* Each name ending in a unit, [_s], [_ms], [_us] or [_ns], given the type
    [float], with its line: [x_s : float], [~x_s:float] and
@@ -700,9 +691,8 @@ let () =
           Alcotest.test_case "no refused name" `Quick no_refused_name;
           Alcotest.test_case "the refusals are read" `Quick
             the_refusals_are_read;
-          Alcotest.test_case "no clock read bare" `Quick no_clock_read_bare;
-          Alcotest.test_case "every clock read bare" `Quick
-            every_clock_read_bare;
+          Alcotest.test_case "the clock module alone crosses" `Quick
+            the_clock_module_alone_crosses;
           Alcotest.test_case "no float with a unit" `Quick no_float_with_a_unit;
           Alcotest.test_case "every float with a unit" `Quick
             every_float_with_a_unit;
