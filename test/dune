@@ -72,6 +72,7 @@
  (modules test_style)
  (libraries alcotest)
  (deps
+  ../OCAML.md
   ../src/dune
   (glob_files ../src/*.ml)
   (glob_files ../src/*.mli)
