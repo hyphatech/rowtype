@@ -1,52 +1,54 @@
 (* Where a test's database comes from.
 
-   Every suite that touches a database needs a Postgres server, and names it
-   with ROWTYPE_TEST_PG -- which `make test` sets after bringing the tests'
-   own container up. A bare `dune test` leaves it unset, and those suites
-   then skip themselves and SAY so, rather than failing on a machine with
-   no Docker or passing without having run. {!required} is that seam. *)
+   Every suite that touches a database needs a Postgres server, and its
+   runner names it with ROWTYPE_TEST_PG -- which `make test` sets after
+   bringing the tests' own container up. A bare `dune test` leaves it unset,
+   and those suites then skip themselves and SAY so, rather than failing on
+   a machine with no Docker or passing without having run. The suite reads
+   the variable where it starts, as an executable does; this is what it
+   reads it for. *)
 
-let base = Sys.getenv_opt "ROWTYPE_TEST_PG"
+let variable = "ROWTYPE_TEST_PG"
 
-(* Called first by every suite that needs a database. Without one it prints
-   why and exits cleanly, so a skipped suite is a line in the output and not
-   a silent green. *)
-let required ~suite =
-  if Option.is_none base then begin
-    Printf.printf
-      "  [%s skipped: no ROWTYPE_TEST_PG -- set it to a Postgres server's URL]\n\
-       %!"
-      suite;
-    exit 0
-  end
+let skipped ~suite =
+  Printf.sprintf "  [%s skipped: no %s -- set it to a Postgres server's URL]"
+    suite variable
 
-(* The Eio loop a suite runs its cases in, and a switch that lasts as long:
-   a connection is Eio's, and a suite's cases are functions of nothing, so
-   the one [Eio_main.run] a suite starts in hands both over once, with
-   [eio env ~sw]. *)
-let loop : (Eio_unix.Stdenv.base * Eio.Switch.t) option ref = ref None
-let eio env ~sw = loop := Some ((env :> Eio_unix.Stdenv.base), sw)
+(* The Eio loop a suite runs its cases in, a switch that lasts as long and
+   the server it was given: a connection is Eio's, and a suite's cases are
+   functions of nothing, so the one [Eio_main.run] a suite starts in hands
+   all three over once, with [eio env ~sw ~server]. *)
+let loop : (Eio_unix.Stdenv.base * Eio.Switch.t * string) option ref = ref None
+
+let eio env ~sw ~server =
+  loop := Some ((env :> Eio_unix.Stdenv.base), sw, server)
 
 let io () =
   match !loop with
   | Some v -> v
-  | None -> Alcotest.fail "the suite did not call Db_target.eio env ~sw"
+  | None -> Alcotest.fail "the suite did not call Db_target.eio env ~sw ~server"
 
-let sw () = snd (io ())
-let net () = Eio.Stdenv.net (fst (io ()))
-let mono () = Eio.Stdenv.mono_clock (fst (io ()))
-let process_mgr () = Eio.Stdenv.process_mgr (fst (io ()))
+let sw () =
+  let _, sw, _ = io () in
+  sw
+
+let env () =
+  let env, _, _ = io () in
+  env
+
+let net () = Eio.Stdenv.net (env ())
+let mono () = Eio.Stdenv.mono_clock (env ())
+let process_mgr () = Eio.Stdenv.process_mgr (env ())
 
 let server () =
-  match base with
-  | None -> Alcotest.fail "ROWTYPE_TEST_PG is not set"
-  | Some server -> server
+  let _, _, server = io () in
+  server
 
 (* The server a URL names, with the database path replaced. *)
 let on_database name =
   match Rowtype_postgres.on_database ~server:(server ()) name with
   | Ok url -> url
-  | Error e -> Alcotest.failf "ROWTYPE_TEST_PG: %s" (Rowtype.error_to_string e)
+  | Error e -> Alcotest.failf "%s: %s" variable (Rowtype.error_to_string e)
 
 (* [statement_cache:0] is a connection that keeps no statements, whose
    results all arrive as text: the other way every cell is read. *)

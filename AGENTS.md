@@ -45,7 +45,8 @@ test/
   test_migrate_files the files' pieces, which need no database
   command.t          the command, where it needs no database
   test_style         the house rules that can be checked mechanically
-  db_target          where a suite's database comes from
+  db_target/         where a suite's database comes from: a library, so it
+                     reads no variable, prints nothing and never exits
 ```
 
 Each module's contract is its `.mli`. Read the `.mli` before changing a

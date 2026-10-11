@@ -246,11 +246,19 @@ let test_a_type_no_scalar_reads_is_written_as_text () =
             ("12.50", "10:30:00", "192.168.0.1/32")
             (ok (Pg.run db read ()))))
 
+(* The server the suite's databases are made on, read where it starts:
+   without one, the suite says it is skipped, and passes. *)
+let server =
+  match Sys.getenv_opt Db_target.variable with
+  | Some server -> server
+  | None ->
+      print_endline (Db_target.skipped ~suite:"verify");
+      exit 0
+
 let () =
-  Db_target.required ~suite:"verify";
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw;
+  Db_target.eio env ~sw ~server;
   Alcotest.run ~and_exit:false "verify"
     [
       ( "types",

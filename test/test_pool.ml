@@ -234,11 +234,19 @@ let test_a_closed_listener_hears_nothing () =
               Alcotest.fail "not the closed connection's failure"
           | Ok _ -> Alcotest.fail "a closed listener heard something"))
 
+(* The server the suite's databases are made on, read where it starts:
+   without one, the suite says it is skipped, and passes. *)
+let server =
+  match Sys.getenv_opt Db_target.variable with
+  | Some server -> server
+  | None ->
+      print_endline (Db_target.skipped ~suite:"pool");
+      exit 0
+
 let () =
-  Db_target.required ~suite:"pool";
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw;
+  Db_target.eio env ~sw ~server;
   Alcotest.run ~and_exit:false "pool"
     [
       ( "pool",

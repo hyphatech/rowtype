@@ -1678,11 +1678,19 @@ let test_another_database_keeps_its_server () =
     "postgres://u:a%20b@h:5432/t_1?sslmode=prefer"
     (on "host=h dbname=main user=u password='a b'" "t_1")
 
+(* The server the suite's databases are made on, read where it starts:
+   without one, the suite says it is skipped, and passes. *)
+let server =
+  match Sys.getenv_opt Db_target.variable with
+  | Some server -> server
+  | None ->
+      print_endline (Db_target.skipped ~suite:"rowtype");
+      exit 0
+
 let () =
-  Db_target.required ~suite:"rowtype";
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw;
+  Db_target.eio env ~sw ~server;
   Alcotest.run ~and_exit:false "rowtype"
     [
       ( "shapes",

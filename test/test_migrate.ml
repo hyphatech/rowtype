@@ -840,11 +840,19 @@ let test_a_squash_stands_for_its_history () =
               Alcotest.fail "a baseline that is not the history was proved"
           | Error e -> Alcotest.failf "not unproved: %s" (words e))
 
+(* The server the suite's databases are made on, read where it starts:
+   without one, the suite says it is skipped, and passes. *)
+let server =
+  match Sys.getenv_opt Db_target.variable with
+  | Some server -> server
+  | None ->
+      print_endline (Db_target.skipped ~suite:"rowtype-migrate");
+      exit 0
+
 let () =
-  Db_target.required ~suite:"rowtype-migrate";
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw;
+  Db_target.eio env ~sw ~server;
   Alcotest.run ~and_exit:false "rowtype-migrate"
     [
       ( "the runner",

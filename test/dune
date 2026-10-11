@@ -1,11 +1,3 @@
-; Where a suite's database comes from: ROWTYPE_TEST_PG, and a database of
-; a case's own on it.
-
-(library
- (name db_target)
- (modules db_target)
- (libraries rowtype rowtype-postgres ptime uuidm eio eio_main unix alcotest))
-
 ; The Postgres backend: statements, scalars, failures, the pool, verify and
 ; COPY.
 
@@ -72,16 +64,11 @@
  (modules test_style)
  (libraries alcotest)
  (deps
+  ; The shared refusals, read from the blocks OCAML.md fences, and every
+  ; directory the build reads, each held to them by what its dune builds.
   ../OCAML.md
-  ../src/dune
-  (glob_files ../src/*.ml)
-  (glob_files ../src/*.mli)
-  (glob_files ../postgres/*.ml)
-  (glob_files ../postgres/*.mli)
-  (glob_files ../migrate/*.ml)
-  (glob_files ../migrate/*.mli)
-  (glob_files ../migrate/bin/*.ml)
-  (glob_files *.ml)))
+  (glob_files_rec ../dune)
+  (glob_files_rec ../*.{ml,mli})))
 
 ; The command, where it needs no database.
 

@@ -1,0 +1,6 @@
+; Where a suite's database comes from: the server its runner names, and a
+; database of a case's own on it.
+
+(library
+ (name db_target)
+ (libraries rowtype rowtype-postgres ptime uuidm eio eio_main unix alcotest))
