@@ -9,6 +9,7 @@
     rowtype-migrate up                    apply what is pending
     rowtype-migrate status [--check]      applied and pending, by version
     rowtype-migrate new add_users         migrations/<UTC stamp>_add_users.sql
+    rowtype-migrate up --source spool     a library's migrations, then these
     rowtype-migrate dump [--check]        what the migrations add up to, as one file
     rowtype-migrate squash VERSION        every migration through it, as one
     rowtype-migrate create                make the database the URL names
@@ -20,6 +21,15 @@
     from the environment if not; the files are [--dir], [migrations] unless
     given; the record is [--table], {!default_table} unless given. Every command
     has [--help].
+
+    A library that owns a table ships the migrations that make it, as files of
+    its own installed with its package, in [share/<package>/migrations]; the
+    command applies them beside the application's with [--source <package>], or
+    [--source <name>=<dir>] for a folder anywhere. Each source is a history of
+    its own, recorded with its name -- the application's is [app] -- and ordered
+    and checked only among its own, so a library's migration is never late
+    beside an application's. Libraries run first, in the order given, and the
+    application last, since its migrations may stand on their tables.
 
     An application never migrates, and knows nothing of its migrations: they are
     applied as a step of their own before it starts, and [status --check] is how
@@ -138,6 +148,28 @@ val new_migration :
     there. A name is lower-case letters, digits and underscores; a stamp already
     in [dir] is refused, since two migrations may not share a version. *)
 
+(** {1 Sources} *)
+
+val app : string
+(** [app], the name the application's own history is recorded under, in every
+    database and set by nothing: a name one machine gave and another did not
+    would be a history applied again from its start. *)
+
+type source
+(** A library's migrations, under the library's name. *)
+
+val source : string -> migration list -> (source, [> error ]) result
+(** [source name migrations], for a name of lower-case letters, digits, hyphens
+    and underscores starting with a letter, as a package's is. [app] is the
+    application's and refused, as is any other name outside that grammar
+    ([`Invalid]). *)
+
+val of_package : prefix:string -> string -> (migration list, [> error ]) result
+(** [of_package ~prefix package] reads [<prefix>/share/<package>/migrations],
+    where a package installs its migrations, as {!of_directory} reads a folder.
+    [prefix] is the switch's: the command takes it from [OPAM_SWITCH_PREFIX], or
+    else from where it is installed itself. *)
+
 (** {1 A database} *)
 
 val with_connection :
@@ -189,6 +221,7 @@ val default_table : string
 val run :
   ?lock:int ->
   ?table:string ->
+  ?libraries:source list ->
   Rowtype_postgres.conn ->
   migration list ->
   (unit, [> error ]) result
@@ -198,7 +231,11 @@ val run :
     number fixed for the database. The connection's bounds are lifted for the
     run: a migration is bounded by nothing but itself.
 
-    Refused, naming the migration, and nothing applied:
+    [libraries] are applied first, in the order given, each as a history of its
+    own: what follows holds within each source, never across two. A source given
+    twice is [`Invalid].
+
+    Refused, naming the migration, and nothing more applied:
     - [`Behind], a database whose record stops before the list's baseline, which
       has to be migrated with a build from before the squash first;
     - [`Unknown], a database that records a version the list does not know,
@@ -212,15 +249,18 @@ val run :
 
     A migration that fails is [`Failed], and the ones before it stay applied.
 
-    Each applied migration is recorded with a digest of its text, and a database
-    migrated before the digests were kept has them recorded on its next run.
-    What a baseline replaced is history: recorded, and compared with nothing.
+    Each applied migration is recorded with its source and a digest of its text.
+    A database migrated before the digests were kept has them recorded on its
+    next run, and one migrated before sources were kept has its record given a
+    source column on its next run, every row the application's. What a baseline
+    replaced is history: recorded, and compared with nothing.
 
     A baseline is a pg_dump, which sets the session's parameters as it starts --
     an empty search path among them -- and so the session's parameters are reset
     after one, as a connection's own would be ([reset all]). *)
 
 type status = {
+  source : string;  (** {!app}, or a library's name *)
   applied : (version * string) list;  (** version and name, as recorded *)
   pending : migration list;  (** in the list and not recorded, in order *)
   unknown : version list;
@@ -233,11 +273,13 @@ type status = {
 
 val status :
   ?table:string ->
+  ?libraries:source list ->
   Rowtype_postgres.conn ->
   migration list ->
-  (status, [> error ]) result
-(** What {!run} would do, without doing it; it writes nothing, not even the
-    table that records migrations. *)
+  (status list, [> error ]) result
+(** What {!run} would do, without doing it, one status for each source in the
+    order {!run} takes them, the application's last; it writes nothing, not even
+    the table that records migrations. *)
 
 (** {1 The schema, as one file} *)
 
@@ -248,14 +290,16 @@ val dump :
   process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
+  ?libraries:source list ->
   pg_dump:string ->
   restrict_key:string ->
   migrations:migration list ->
   string ->
   (string, [> error ]) result
-(** What the migrations add up to from nothing: a database of its own on the
-    server the URL names, migrated, dumped, and dropped however that went --
-    never what some database has drifted to.
+(** What the migrations add up to from nothing, the libraries' with the
+    application's: a database of its own on the server the URL names, migrated,
+    dumped, and dropped however that went -- never what some database has
+    drifted to.
 
     [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
     replaced in each word by the scratch database's; it is not given to a shell,
@@ -273,6 +317,7 @@ val squash :
   process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
+  ?libraries:source list ->
   pg_dump:string ->
   restrict_key:string ->
   through:version ->
@@ -289,4 +334,11 @@ val squash :
     make a database that dumps the same, row for row, as the one the whole
     history makes, or it is [`Unproved]. Writing it and removing the files it
     replaced is the caller's. [`Invalid]: a [through] that is no migration's
-    version, and one that is the baseline's with nothing before it. *)
+    version, and one that is the baseline's with nothing before it.
+
+    It squashes the application's history alone: with [libraries], they run
+    first on each scratch database, and the tables they made are left out of the
+    baseline, since their own migrations make them. A library that made anything
+    but tables -- a type, a function, a view -- is [`Invalid], since a baseline
+    could not tell it from the application's. A library squashes its own history
+    in its own repository, where it is the application. *)

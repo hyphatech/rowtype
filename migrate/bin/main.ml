@@ -110,6 +110,46 @@ let url =
               Error (Printf.sprintf "no database: give --url, or set %s" var)))
   $ url $ var $ env_file
 
+(* Where a package installs its migrations: the switch's [share], the
+   switch being [OPAM_SWITCH_PREFIX] where opam has set it, and else the one
+   this command is installed in -- its [bin]'s parent, as an image that
+   copies the switch's [bin] and [share] keeps them. *)
+let prefix () =
+  match Sys.getenv_opt "OPAM_SWITCH_PREFIX" with
+  | Some p when not (String.equal (String.trim p) "") -> p
+  | Some _ | None -> Filename.dirname (Filename.dirname Sys.executable_name)
+
+let sources =
+  Arg.value
+    (Arg.opt_all Arg.string []
+       (Arg.info [ "source" ] ~docv:"NAME[=DIR]"
+          ~doc:
+            "A library's migrations, applied before the application's as a \
+             history of their own: the folder the package $(i,NAME) installs, \
+             $(i,share/NAME/migrations) in the switch, or $(i,DIR). Repeat it \
+             for each library, in the order they run."))
+
+(* Each [--source], read: a folder named, or the one its package installed. *)
+let libraries specs =
+  List.fold_left
+    (fun acc spec ->
+      let* acc = acc in
+      let* name, migrations =
+        match String.index_opt spec '=' with
+        | Some i ->
+            let name = String.sub spec 0 i
+            and dir = String.sub spec (i + 1) (String.length spec - i - 1) in
+            Result.map (fun m -> (name, m)) (told (M.of_directory dir))
+        | None ->
+            Result.map
+              (fun m -> (spec, m))
+              (told (M.of_package ~prefix:(prefix ()) spec))
+      in
+      let* library = told (M.source name migrations) in
+      Ok (library :: acc))
+    (Ok []) specs
+  |> Result.map List.rev
+
 let table =
   Arg.value
     (Arg.opt Arg.string M.default_table
@@ -136,11 +176,13 @@ let up =
   Cmd.v
     (Cmd.info "up"
        ~doc:"Apply every migration in $(b,--dir) the database has not recorded.")
-    (Term.const (fun dir url lock table ->
+    (Term.const (fun dir url lock table sources ->
          exits
            (let* migrations = told (M.of_directory dir) in
-            with_db url (fun conn -> M.run ~lock ~table conn migrations)))
-    $ dir $ url $ lock $ table)
+            let* libraries = libraries sources in
+            with_db url (fun conn ->
+                M.run ~lock ~table ~libraries conn migrations)))
+    $ dir $ url $ lock $ table $ sources)
 
 let status =
   let check =
@@ -151,56 +193,74 @@ let status =
               "Exit 1 while any migration is pending, so a script can wait on \
                it."))
   in
-  let show ~check (status : M.status) =
+  (* One source's lines; with libraries, each line names its source first. *)
+  let lines ~named (status : M.status) =
     let number (v : M.version) = (v :> int) in
+    let line fmt =
+      if named then Printf.printf ("%-12s " ^^ fmt) status.source
+      else Printf.printf fmt
+    in
     List.iter
-      (fun (v, n) -> Printf.printf "applied  %d_%s\n" (number v) n)
+      (fun (v, n) -> line "applied  %d_%s\n" (number v) n)
       status.applied;
     List.iter
       (fun (m : M.migration) ->
-        Printf.printf "pending  %d_%s\n" (number m.version) m.name)
+        line "pending  %d_%s\n" (number m.version) m.name)
       status.pending;
     List.iter
-      (fun v ->
-        Printf.printf "unknown  %d (from a newer checkout)\n" (number v))
+      (fun v -> line "unknown  %d (from a newer checkout)\n" (number v))
       status.unknown;
     List.iter
-      (fun v -> Printf.printf "edited   %d (changed since it ran)\n" (number v))
+      (fun v -> line "edited   %d (changed since it ran)\n" (number v))
       status.edited;
     List.iter
-      (fun v ->
-        Printf.printf "late     %d (older than one applied)\n" (number v))
+      (fun v -> line "late     %d (older than one applied)\n" (number v))
       status.late;
     Option.iter
-      (fun v ->
-        Printf.printf "behind   %d (a baseline it has not reached)\n" (number v))
-      status.behind;
+      (fun v -> line "behind   %d (a baseline it has not reached)\n" (number v))
+      status.behind
+  in
+  let refused (status : M.status) =
+    let whose =
+      if String.equal status.source M.app then ""
+      else Printf.sprintf " (%s)" status.source
+    in
     match (status.behind, status.unknown, status.edited, status.late) with
     | Some _, _, _, _ ->
-        Error
-          "the database is behind the squash: migrate it with a build from \
-           before it first"
+        Some
+          ("the database is behind the squash: migrate it with a build from \
+            before it first" ^ whose)
     | None, _ :: _, _, _ ->
-        Error "the database was migrated from a newer checkout"
-    | None, [], _ :: _, _ -> Error "a migration was edited after it ran"
+        Some ("the database was migrated from a newer checkout" ^ whose)
+    | None, [], _ :: _, _ -> Some ("a migration was edited after it ran" ^ whose)
     | None, [], [], _ :: _ ->
-        Error "a migration is older than one already applied"
-    | None, [], [], [] -> (
-        match status.pending with
+        Some ("a migration is older than one already applied" ^ whose)
+    | None, [], [], [] -> None
+  in
+  let show ~check (statuses : M.status list) =
+    let named = List.length statuses > 1 in
+    List.iter (lines ~named) statuses;
+    match List.find_map refused statuses with
+    | Some m -> Error m
+    | None -> (
+        match List.concat_map (fun (s : M.status) -> s.pending) statuses with
         | _ :: _ as pending when check ->
             Error (Printf.sprintf "%d pending" (List.length pending))
         | _ :: _ | [] -> Ok ())
   in
+
   Cmd.v
     (Cmd.info "status" ~doc:"List the migrations applied, and those pending.")
-    (Term.const (fun dir url table check ->
+    (Term.const (fun dir url table check sources ->
          exits
            (let* migrations = told (M.of_directory dir) in
-            let* status =
-              with_db url (fun conn -> M.status ~table conn migrations)
+            let* libraries = libraries sources in
+            let* statuses =
+              with_db url (fun conn ->
+                  M.status ~table ~libraries conn migrations)
             in
-            show ~check status))
-    $ dir $ url $ table $ check)
+            show ~check statuses))
+    $ dir $ url $ table $ check $ sources)
 
 let new_ =
   let name =
@@ -245,14 +305,15 @@ let dump =
               "Write nothing; fail if $(b,--output) is not what the migrations \
                make."))
   in
-  let run dir url lock table output check pg_dump restrict_key =
+  let run dir url lock table output check pg_dump restrict_key sources =
     let* migrations = told (M.of_directory dir) in
+    let* libraries = libraries sources in
     let* url = url in
     let* schema =
       told
         (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~pg_dump
-               ~restrict_key ~migrations url))
+             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
+               ~pg_dump ~restrict_key ~migrations url))
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -278,9 +339,10 @@ let dump =
        ~doc:
          "Write what the migrations add up to, dumped from a scratch database \
           on the server $(b,--url) names.")
-    (Term.const (fun dir url lock table output check pg_dump key ->
-         exits (run dir url lock table output check pg_dump key))
-    $ dir $ url $ lock $ table $ output $ check $ pg_dump $ restrict_key)
+    (Term.const (fun dir url lock table output check pg_dump key sources ->
+         exits (run dir url lock table output check pg_dump key sources))
+    $ dir $ url $ lock $ table $ output $ check $ pg_dump $ restrict_key
+    $ sources)
 
 (* The baseline is written before a file is removed, and removed only once
    the library has proved it: an interrupted squash leaves a directory
@@ -291,7 +353,7 @@ let squash =
     Arg.required
       (Arg.pos 0 (Arg.some Arg.int) None (Arg.info [] ~docv:"VERSION"))
   in
-  let run dir url lock table pg_dump restrict_key through =
+  let run dir url lock table pg_dump restrict_key through sources =
     let* through =
       Option.to_result
         ~none:
@@ -300,12 +362,13 @@ let squash =
         (M.version_of_int through)
     in
     let* migrations = told (M.of_directory dir) in
+    let* libraries = libraries sources in
     let* url = url in
     let* baseline =
       told
         (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~pg_dump
-               ~restrict_key ~through ~migrations url))
+             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
+               ~pg_dump ~restrict_key ~through ~migrations url))
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -346,9 +409,9 @@ let squash =
          "Replace every migration through $(i,VERSION) with one baseline, \
           proved on scratch databases on the server $(b,--url) names to make \
           what they made.")
-    (Term.const (fun dir url lock table pg_dump key through ->
-         exits (run dir url lock table pg_dump key through))
-    $ dir $ url $ lock $ table $ pg_dump $ restrict_key $ through)
+    (Term.const (fun dir url lock table pg_dump key through sources ->
+         exits (run dir url lock table pg_dump key through sources))
+    $ dir $ url $ lock $ table $ pg_dump $ restrict_key $ through $ sources)
 
 let on_database name ~doc f =
   Cmd.v (Cmd.info name ~doc)

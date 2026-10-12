@@ -144,6 +144,53 @@ let test_a_new_migration_is_stamped_in_utc () =
         path;
       Alcotest.(check bool) "and there" true (Sys.file_exists path)
 
+(* A new file says one thing to fill in: what it changes, and why. That it
+   is forward only and never edited is the tool's to hold, not a line in
+   every file. *)
+let test_a_new_migration_asks_what_and_why () =
+  let dir = temp_dir () in
+  match C.new_migration ~dir ~now:noon "add_ratings" with
+  | Error e -> Alcotest.fail (words e)
+  | Ok path ->
+      check_string "one line" "-- add_ratings: what this changes, and why.\n\n"
+        (In_channel.with_open_bin path In_channel.input_all)
+
+(* A package installs its migrations in the switch's share, and is read
+   from there by its name; a name that is no package's is refused before
+   anything is read. *)
+let test_a_package_is_read_from_the_switch () =
+  let prefix = Filename.temp_dir "rowtype_migrate_prefix" "" in
+  let share = Filename.concat prefix "share" in
+  let package = Filename.concat share "spool" in
+  let dir = Filename.concat package "migrations" in
+  List.iter (fun d -> Sys.mkdir d 0o755) [ share; package; dir ];
+  let made = file dir "20260101000000_create_jobs.sql" "select 1;" in
+  Fun.protect
+    ~finally:(fun () ->
+      Sys.remove made;
+      List.iter Sys.rmdir [ dir; package; share; prefix ])
+    (fun () ->
+      (match C.of_package ~prefix "spool" with
+      | Ok [ m ] -> check_string "its migration" "create_jobs" m.name
+      | Ok _ -> Alcotest.fail "not the one migration it installed"
+      | Error e -> Alcotest.fail (words e));
+      (match C.of_package ~prefix "Spool" with
+      | Error (`Invalid _) -> ()
+      | Ok _ | Error _ -> Alcotest.fail "a name no package has was read");
+      match C.of_package ~prefix "absent" with
+      | Error (`Files _) -> ()
+      | Ok _ | Error _ ->
+          Alcotest.fail "a package that installed nothing was read")
+
+(* A source is named as a package is, and [app] is the application's. *)
+let test_a_source_is_named_as_a_package () =
+  let named name = Result.is_ok (C.source name []) in
+  Alcotest.(check bool) "a package's name" true (named "spool");
+  Alcotest.(check bool) "with a hyphen" true (named "rowtype-postgres");
+  Alcotest.(check bool) "the application's" false (named C.app);
+  Alcotest.(check bool) "upper case" false (named "Spool");
+  Alcotest.(check bool) "empty" false (named "")
+
 (* A project's first migration is its first command: the directory is made,
    and a file where it would go is refused. *)
 let test_a_new_migration_makes_its_directory () =
@@ -260,5 +307,14 @@ let () =
             test_a_new_migration_makes_its_directory;
           Alcotest.test_case "a new one refuses what would collide" `Quick
             test_a_new_migration_refuses_what_would_collide;
+          Alcotest.test_case "a new one asks what and why" `Quick
+            test_a_new_migration_asks_what_and_why;
+        ] );
+      ( "sources",
+        [
+          Alcotest.test_case "a package is read from the switch" `Quick
+            test_a_package_is_read_from_the_switch;
+          Alcotest.test_case "a source is named as a package" `Quick
+            test_a_source_is_named_as_a_package;
         ] );
     ]

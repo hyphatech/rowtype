@@ -223,6 +223,24 @@ cut off between the two runs it again: write it to run twice
 `squash` proves the baseline makes the same schema as the history before it
 changes a file. The database is `--url`, or `DATABASE_URL`.
 
+### A library's migrations
+
+A library that owns a table ships the migrations that make it, in its own
+`migrations/`, installed with its package. Name it with `--source` and its
+migrations run first, as a history of their own:
+
+```sh
+rowtype-migrate up --source spool            # the library's, then yours
+rowtype-migrate up --source spool=vendor/sql  # a library's folder, named
+```
+
+Each source is ordered and checked only among its own, so upgrading a
+library whose migration is older than your last one applies it rather
+than refusing it as late. The record says whose each migration is: yours
+are `app`. `status`, `dump` and `squash` take `--source` too, and `squash`
+leaves a library's tables out of your baseline, since its own migrations
+make them.
+
 ## Packages
 
 | Package | What it is |

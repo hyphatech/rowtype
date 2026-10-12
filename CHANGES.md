@@ -1,5 +1,24 @@
 # Changes
 
+## Unreleased
+
+- A library's migrations are a history of their own: a library ships them
+  in its package, `rowtype-migrate --source <package>` (or
+  `--source <name>=<dir>`) applies them before the application's, and each
+  source is ordered and checked only among its own, so a library's
+  migration is never late beside an application's. `Rowtype_migrate.run`,
+  `dump` and `squash` take `?libraries`; `source` and `of_package` make
+  one; `squash` leaves a library's tables out of an application's
+  baseline.
+- Breaking: the record's table gains a `source` column, and its key is the
+  source and the version. A record made before is given them on its next
+  `up`, every row the application's, `app`; nothing else is asked of it.
+- Breaking: `Rowtype_migrate.status` answers a status for each source, the
+  application's last, and `status` has a `source` field.
+- `rowtype-migrate new` writes one line, asking what the migration changes
+  and why; it no longer says in every file that a migration is forward only,
+  which the command holds.
+
 ## 0.4.0 (2026-10-11)
 
 - Breaking: `commit` leaves `Rowtype.Backend`. A backend runs its own

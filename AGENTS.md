@@ -68,10 +68,12 @@ Each rule comes with why it exists and the test that catches a break.
   own the schema, and no migration could run ahead of the code that needs
   it. Symptom: an application that migrates itself at start, every instance
   racing to apply the same files.
-- **A migration is known by its text.** Each applied one is recorded with a
-  digest of what ran, and a database whose record disagrees with the files
-  (edited, unknown to `up`, or older than one applied) is refused by `up`,
-  naming it, before anything is applied. A baseline replaces the files up
+- **A migration is known by its source and its text.** Each applied one is
+  recorded with the history it belongs to -- `app`, or a library's -- and a
+  digest of what ran, and a database whose record disagrees with a source's
+  files (edited, unknown to `up`, or older than one that source applied) is
+  refused by `up`, naming it, before that source is applied. Every check is
+  made within one source, never across two. A baseline replaces the files up
   to its version, and what the database recorded below it is history:
   accepted, and compared with nothing. Why: two databases that ran "the
   same" migration must hold the same schema. Test: `test_migrate`.

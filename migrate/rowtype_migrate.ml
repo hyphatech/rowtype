@@ -192,6 +192,45 @@ let of_directory dir =
       |> List.map (Filename.concat dir)
       |> of_files
 
+(* ------------------------------------------------------------------ *)
+(* Sources *)
+
+(* The application's history is [app] in every database, and set by no
+   flag: a name one machine passed and another did not would be a history
+   applied again from its start. *)
+let app = "app"
+
+type source = { name : string; migrations : migration list }
+
+let source_name n =
+  String.length n > 0
+  && (match n.[0] with 'a' .. 'z' -> true | _ -> false)
+  && String.for_all
+       (function 'a' .. 'z' | '0' .. '9' | '_' | '-' -> true | _ -> false)
+       n
+
+let source name migrations =
+  if String.equal name app then
+    Error
+      (`Invalid
+         (Printf.sprintf
+            "%S is the application's own history, and no library's name" name))
+  else if not (source_name name) then
+    Error
+      (`Invalid
+         (Printf.sprintf
+            "%S is not a source's name: lower-case letters, digits, hyphens \
+             and underscores, starting with a letter, as a package's is"
+            name))
+  else Ok { name; migrations }
+
+let of_package ~prefix package =
+  if not (source_name package) then
+    Error (`Invalid (Printf.sprintf "%S is not a package's name" package))
+  else
+    of_directory
+      (List.fold_left Filename.concat prefix [ "share"; package; "migrations" ])
+
 let stamp now =
   let (year, month, day), ((hour, minute, second), _) =
     Ptime.to_date_time now
@@ -243,10 +282,7 @@ let new_migration ~dir ~now name =
       match
         Out_channel.with_open_bin path (fun oc ->
             Out_channel.output_string oc
-              ("-- " ^ name
-             ^ ": what this changes, and why.\n\
-                -- Forward only: once it has run anywhere, it is never edited.\n\n"
-              ))
+              ("-- " ^ name ^ ": what this changes, and why.\n\n"))
       with
       | () -> Ok path
       | exception Sys_error m -> Error (`Files m)
@@ -281,32 +317,63 @@ let table_name t =
                schema and a dot if it names one"
               t))
 
-(* The table and its checksum column, which a database migrated before
-   there was one gains here; its rows' sums are recorded on first sight. *)
-let applied ~table conn =
+(* The table, made with every column it has today, and a table made before
+   brought up to it: the checksum, whose rows' sums are recorded on first
+   sight, and the source, whose rows are the application's -- the only
+   history there was -- and which joins the version in the key, since a
+   version is unique within its source. Made under the run's lock, so two
+   processes never both bring one table up. *)
+let prepare ~table conn =
   let* () =
     Pg.exec_raw conn
       (Printf.sprintf
          {|create table if not exists %s (
-             version bigint primary key,
+             source text not null default '%s',
+             version bigint not null,
              name text not null,
-             applied_at timestamptz not null default now());
+             applied_at timestamptz not null default now(),
+             checksum text,
+             primary key (source, version));
            alter table %s
-             add column if not exists checksum text|}
-         table table)
+             add column if not exists checksum text;
+           alter table %s
+             add column if not exists source text not null default '%s'|}
+         table app table table app)
   in
-  Pg.run conn
-    (S.list ~params:S.unit
-       ~row:(S.t2 S.int (S.opt S.text))
-       (Printf.sprintf "select version, checksum from %s order by version" table))
-    ()
+  let* key =
+    Pg.run conn
+      (S.find_opt ~params:S.text ~row:(S.t2 S.text S.int)
+         "select conname::text, cardinality(conkey) from pg_constraint where \
+          conrelid = to_regclass($1) and contype = 'p'")
+      table
+  in
+  match key with
+  | Some (name, 1) ->
+      Pg.exec_raw conn
+        (Printf.sprintf
+           "alter table %s drop constraint \"%s\", add primary key (source, \
+            version)"
+           table name)
+  | Some _ | None -> Ok ()
 
-let record ~table conn m =
+let applied ~table ~source conn =
   Pg.run conn
-    (S.exec ~params:(S.t3 S.int S.text S.text)
+    (S.list ~params:S.text
+       ~row:(S.t2 S.int (S.opt S.text))
        (Printf.sprintf
-          "insert into %s (version, name, checksum) values ($1, $2, $3)" table))
-    (m.version, m.name, sum m)
+          "select version, checksum from %s where source = $1 order by version"
+          table))
+    source
+
+let record ~table ~source conn m =
+  Pg.run conn
+    (S.exec
+       ~params:(S.t4 S.text S.int S.text S.text)
+       (Printf.sprintf
+          "insert into %s (source, version, name, checksum) values ($1, $2, \
+           $3, $4)"
+          table))
+    (source, m.version, m.name, sum m)
 
 let failed m = function Ok v -> Ok v | Error e -> Error (`Failed (m, e))
 
@@ -323,7 +390,7 @@ let failed m = function Ok v -> Ok v | Error e -> Error (`Failed (m, e))
    concurrently, a VACUUM -- runs on its own, and its row is written after
    it: a run cut off between the two runs it again, which is why such a file
    has to be one that can run twice. *)
-let apply ~table conn m =
+let apply ~table ~source conn m =
   let ended =
     "it ends the transaction it runs in, so it was not applied as one: its \
      record is removed, and what ran before that end stays as the end left it. \
@@ -332,16 +399,18 @@ let apply ~table conn m =
   in
   let recorded () =
     Pg.run conn
-      (S.find ~params:S.int ~row:S.bool
-         (Printf.sprintf "select exists (select from %s where version = $1)"
+      (S.find ~params:(S.t2 S.text S.int) ~row:S.bool
+         (Printf.sprintf
+            "select exists (select from %s where source = $1 and version = $2)"
             table))
-      m.version
+      (source, m.version)
   in
   let unrecord () =
     Pg.run conn
-      (S.exec ~params:S.int
-         (Printf.sprintf "delete from %s where version = $1" table))
-      m.version
+      (S.exec ~params:(S.t2 S.text S.int)
+         (Printf.sprintf "delete from %s where source = $1 and version = $2"
+            table))
+      (source, m.version)
   in
   (* The row first, since in one transaction the order is not seen, and a
      migration that moves the search path -- a baseline does -- would
@@ -349,7 +418,7 @@ let apply ~table conn m =
   let in_transaction () =
     match
       Pg.Transaction.within conn (fun conn ->
-          let* () = record ~table conn m in
+          let* () = record ~table ~source conn m in
           let* id =
             Pg.run conn
               (S.find ~params:S.unit ~row:S.int "select txid_current()")
@@ -392,7 +461,7 @@ let apply ~table conn m =
   | No_transaction ->
       failed m
         (let* () = Pg.exec_raw conn m.sql in
-         record ~table conn m)
+         record ~table ~source conn m)
 
 (* What a list and a database's record come to: the migrations to apply,
    in order, and the four ways the two can disagree. *)
@@ -474,9 +543,12 @@ let refusal r =
   | None, [], [], m :: _ -> Some (`Late m)
   | None, [], [], [] -> None
 
-let pending ~table conn migrations =
+(* One source's migrations against its own rows of the record: every check
+   is made within the source, so a library's migration is never late beside
+   an application's. *)
+let pending ~table ~source conn migrations =
   let* () = listed migrations in
-  let* recorded = applied ~table conn in
+  let* recorded = applied ~table ~source conn in
   let r = read migrations recorded in
   match refusal r with
   | Some refused -> Error refused
@@ -486,16 +558,18 @@ let pending ~table conn migrations =
           (fun acc m ->
             let* () = acc in
             Pg.run conn
-              (S.exec ~params:(S.t2 S.text S.int)
+              (S.exec ~params:(S.t3 S.text S.text S.int)
                  (Printf.sprintf
-                    "update %s set checksum = $1 where version = $2" table))
-              (sum m, m.version))
+                    "update %s set checksum = $1 where source = $2 and version \
+                     = $3"
+                    table))
+              (sum m, source, m.version))
           (Ok ()) r.unsummed
       in
       List.fold_left
         (fun acc m ->
           let* () = acc in
-          apply ~table conn m)
+          apply ~table ~source conn m)
         (Ok ()) r.to_apply
 
 (* Any fixed number, the same in every process that migrates one database:
@@ -509,8 +583,27 @@ let default_lock = 7_265_756_171
    connection was opened with, and the read bound is put back as it was,
    whatever the run ends in. A migration's failure is the answer over the
    release's, which a lost connection has already made. *)
-let run ?(lock = default_lock) ?(table = default_table) conn migrations =
+(* Two libraries of one name would be one history read twice. *)
+let distinct libraries =
+  let rec go seen = function
+    | [] -> Ok ()
+    | l :: rest ->
+        if List.exists (String.equal l.name) seen then
+          Error
+            (`Invalid (Printf.sprintf "the source %S is given twice" l.name))
+        else go (l.name :: seen) rest
+  in
+  go [] libraries
+
+(* The libraries in the order given, then the application, which may stand
+   on their tables. *)
+let sources libraries migrations =
+  List.map (fun l -> (l.name, l.migrations)) libraries @ [ (app, migrations) ]
+
+let run ?(lock = default_lock) ?(table = default_table) ?(libraries = []) conn
+    migrations =
   let* table = table_name table in
+  let* () = distinct libraries in
   let reads = Pg.timeout conn in
   Pg.set_timeout conn ~timeout:None;
   Fun.protect ~finally:(fun () -> Pg.set_timeout conn ~timeout:reads)
@@ -519,7 +612,15 @@ let run ?(lock = default_lock) ?(table = default_table) conn migrations =
   let* () =
     Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock
   in
-  let outcome = pending ~table conn migrations in
+  let outcome =
+    let* () = prepare ~table conn in
+    List.fold_left
+      (fun acc (source, migrations) ->
+        let* () = acc in
+        pending ~table ~source conn migrations)
+      (Ok ())
+      (sources libraries migrations)
+  in
   let released =
     let* () =
       Pg.run conn (S.exec ~params:S.int "select pg_advisory_unlock($1)") lock
@@ -530,6 +631,7 @@ let run ?(lock = default_lock) ?(table = default_table) conn migrations =
   released
 
 type status = {
+  source : string;
   applied : (version * string) list;
   pending : migration list;
   unknown : version list;
@@ -539,9 +641,9 @@ type status = {
 }
 
 (* A read, so it creates nothing: a database never migrated has no table,
-   and that is every migration pending. *)
-let reading ~table conn migrations =
-  let* table = table_name table in
+   and that is every migration pending; one from before the source column
+   holds the application's history alone. *)
+let reading ~table ~source conn migrations =
   let* () = listed migrations in
   (* Found as the statements that write it find it, through the search
      path, whether or not its name says a schema. *)
@@ -563,16 +665,37 @@ let reading ~table conn migrations =
           table
     | Some false | None -> Ok (Some false)
   in
+  let* sourced =
+    match exists with
+    | Some true ->
+        Pg.run conn
+          (S.find_opt ~params:S.text ~row:S.bool
+             "select exists (select 1 from pg_attribute where attrelid = \
+              to_regclass($1) and attname = 'source' and not attisdropped)")
+          table
+    | Some false | None -> Ok (Some false)
+  in
   let* applied =
-    match (exists, summed) with
-    | Some true, Some true ->
+    match (exists, summed, sourced) with
+    | Some true, _, Some true ->
+        Pg.run conn
+          (S.list ~params:S.text
+             ~row:(S.t3 S.int S.text (S.opt S.text))
+             (Printf.sprintf
+                "select version, name, checksum from %s where source = $1 \
+                 order by version"
+                table))
+          source
+    | Some true, _, (Some false | None) when not (String.equal source app) ->
+        Ok []
+    | Some true, Some true, (Some false | None) ->
         Pg.run conn
           (S.list ~params:S.unit
              ~row:(S.t3 S.int S.text (S.opt S.text))
              (Printf.sprintf
                 "select version, name, checksum from %s order by version" table))
           ()
-    | Some true, (Some false | None) ->
+    | Some true, (Some false | None), (Some false | None) ->
         Result.map
           (List.map (fun (v, n) -> (v, n, None)))
           (Pg.run conn
@@ -580,22 +703,32 @@ let reading ~table conn migrations =
                 (Printf.sprintf "select version, name from %s order by version"
                    table))
              ())
-    | (Some false | None), _ -> Ok []
+    | (Some false | None), _, _ -> Ok []
   in
   Ok (applied, read migrations (List.map (fun (v, _, s) -> (v, s)) applied))
 
-let status ?(table = default_table) conn migrations =
-  let* applied, r = reading ~table conn migrations in
+let status ?(table = default_table) ?(libraries = []) conn migrations =
+  let* table = table_name table in
+  let* () = distinct libraries in
   let versions = List.map (fun m -> m.version) in
-  Ok
-    {
-      applied = List.map (fun (v, n, _) -> (v, n)) applied;
-      pending = r.to_apply;
-      unknown = r.unknown;
-      edited = versions r.edited;
-      late = versions r.late;
-      behind = Option.map (fun m -> m.version) r.behind;
-    }
+  List.fold_left
+    (fun acc (source, migrations) ->
+      let* acc = acc in
+      let* applied, r = reading ~table ~source conn migrations in
+      Ok
+        ({
+           source;
+           applied = List.map (fun (v, n, _) -> (v, n)) applied;
+           pending = r.to_apply;
+           unknown = r.unknown;
+           edited = versions r.edited;
+           late = versions r.late;
+           behind = Option.map (fun m -> m.version) r.behind;
+         }
+        :: acc))
+    (Ok [])
+    (sources libraries migrations)
+  |> Result.map List.rev
 
 (* ------------------------------------------------------------------ *)
 (* The schema, as one file *)
@@ -761,8 +894,43 @@ let drop ~sw ~net ~mono_clock url =
 (* A database of its own, made empty, migrated, dumped, and dropped however
    that went -- so a schema is what the migrations make from nothing, and
    never what some database has drifted to. *)
-let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~migrations
-    url dump =
+(* What the libraries made, read from the scratch database once they have
+   run: the tables an application's baseline leaves out, since their own
+   migrations make them. Anything else a library made -- a type, a function,
+   a view -- a baseline could not tell from the application's, so squashing
+   over it is refused. *)
+let made_by_libraries conn =
+  let user = "not in ('pg_catalog', 'information_schema', 'pg_toast')" in
+  let* tables =
+    Pg.run conn
+      (S.list ~params:S.unit ~row:S.text
+         ("select format('%I.%I', schemaname, tablename) from pg_tables where \
+           schemaname " ^ user))
+      ()
+  in
+  let* others =
+    Pg.run conn
+      (S.find ~params:S.unit ~row:S.int
+         ("select (select count(*) from pg_proc p join pg_namespace n on n.oid \
+           = p.pronamespace where n.nspname " ^ user
+        ^ ")::int + (select count(*) from pg_type t join pg_namespace n on \
+           n.oid = t.typnamespace where t.typtype in ('e', 'd', 'r', 'm') and \
+           n.nspname " ^ user
+        ^ ")::int + (select count(*) from pg_class c join pg_namespace n on \
+           n.oid = c.relnamespace where c.relkind in ('v', 'm', 'f') and \
+           n.nspname " ^ user ^ ")::int"))
+      ()
+  in
+  if others > 0 then
+    Error
+      (`Invalid
+         "a library's migrations made something other than tables, which a \
+          baseline cannot tell from the application's own: squash its history \
+          without those libraries")
+  else Ok tables
+
+let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
+    ?(libraries = []) ?(apart = false) ~migrations url dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
   with_connection ~sw ~net ~mono_clock url (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
@@ -776,20 +944,28 @@ let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~migrations
                   : (unit, S.error) result)))
         (fun () ->
           let* target = Pg.on_database ~server:url scratch in
-          let* () =
+          let* theirs =
             with_connection ~sw ~net ~mono_clock target (fun conn ->
-                run ?lock ~table conn migrations)
+                let* theirs =
+                  if apart then
+                    let* () = run ?lock ~table ~libraries conn [] in
+                    made_by_libraries conn
+                  else Ok []
+                in
+                let* () = run ?lock ~table ~libraries conn migrations in
+                Ok theirs)
           in
           let* c = Pg.conninfo target in
           capture ~process_mgr
             ~secrets:(target :: Option.to_list c.password)
-            (dump ~url:target ~database:scratch)))
+            (dump ~url:target ~database:scratch
+            @ List.map (fun t -> "--exclude-table=" ^ t) theirs)))
 
 let dump ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
-    ~pg_dump ~restrict_key ~migrations url =
+    ?libraries ~pg_dump ~restrict_key ~migrations url =
   Result.map normalise_dump
-    (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~migrations
-       url
+    (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ?libraries
+       ~migrations url
        (pg_dump_argv ~template:pg_dump ~restrict_key))
 
 (* ------------------------------------------------------------------ *)
@@ -817,7 +993,7 @@ let statements dump =
   |> String.concat "\n"
 
 let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
-    ~pg_dump ~restrict_key ~through ~migrations url =
+    ?libraries ~pg_dump ~restrict_key ~through ~migrations url =
   let* table = table_name table in
   let* () = listed migrations in
   let replaced, kept =
@@ -840,13 +1016,13 @@ let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
                 through))
     | true, _ -> Ok ()
   in
-  let dumped migrations =
+  let dumped ~apart migrations =
     Result.map statements
       (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
-         ~migrations url
+         ?libraries ~apart ~migrations url
          (baseline_argv ~template:pg_dump ~restrict_key ~table))
   in
-  let* made = dumped replaced in
+  let* made = dumped ~apart:true replaced in
   let baseline =
     {
       version = through;
@@ -863,6 +1039,6 @@ let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
   in
   (* Proved before a file is touched: the baseline and what follows it make,
      row for row, the database the whole history makes. *)
-  let* whole = dumped migrations in
-  let* squashed = dumped (baseline :: kept) in
+  let* whole = dumped ~apart:false migrations in
+  let* squashed = dumped ~apart:false (baseline :: kept) in
   if String.equal whole squashed then Ok baseline else Error `Unproved

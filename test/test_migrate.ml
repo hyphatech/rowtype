@@ -5,6 +5,16 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
+(* The application's status, the last of the ones a status answers, one
+   for each source. *)
+let app_status ?table db migrations =
+  Result.map
+    (fun statuses ->
+      match List.rev statuses with
+      | st :: _ -> st
+      | [] -> Alcotest.fail "a status answered no source")
+    (Rowtype_migrate.status ?table db migrations)
+
 let words = Rowtype_migrate.error_to_string
 let span = Alcotest.testable Mtime.Span.pp Mtime.Span.equal
 
@@ -104,7 +114,7 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
       let pending_of (st : Rowtype_migrate.status) =
         List.map (fun (m : Rowtype_migrate.migration) -> m.name) st.pending
       in
-      let st = ok_s (Rowtype_migrate.status db [ second; first ]) in
+      let st = ok_s (app_status db [ second; first ]) in
       Alcotest.(check (list string))
         "all pending, in order" [ "first"; "second" ] (pending_of st);
       Alcotest.(check (option bool))
@@ -115,13 +125,13 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
                  "select to_regclass('schema_migrations') is not null")
               ()));
       ignore (ok_s (Rowtype_migrate.run db [ first ]));
-      let st = ok_s (Rowtype_migrate.status db [ first; second ]) in
+      let st = ok_s (app_status db [ first; second ]) in
       Alcotest.(check (list string)) "one left" [ "second" ] (pending_of st);
       Alcotest.(check (list (pair int string)))
         "one applied"
         [ (20260101000000, "first") ]
         (List.map (fun (v, n) -> (number v, n)) st.applied);
-      let st = ok_s (Rowtype_migrate.status db [ second ]) in
+      let st = ok_s (app_status db [ second ]) in
       Alcotest.(check (list int))
         "a version this list does not know" [ 20260101000000 ]
         (numbers st.unknown);
@@ -160,7 +170,7 @@ let test_a_migration_is_held_to_what_ran () =
         | Ok () | Error _ -> None);
       let st =
         ok_s
-          (Rowtype_migrate.status db
+          (app_status db
              [
                m 20260101000000 "first" "changed";
                m 20260102000000 "second" "select 1";
@@ -211,7 +221,7 @@ let test_a_failed_migration_stops_where_it_failed () =
           | Error (`Failed ((m : Rowtype_migrate.migration), _)) ->
               Alcotest.(check string) "named" "broken" m.name
           | Error e -> Alcotest.failf "not the migration's: %s" (words e));
-          let st = ok_s (Rowtype_migrate.status db [ first; broken; third ]) in
+          let st = ok_s (app_status db [ first; broken; third ]) in
           Alcotest.(check (list (pair int string)))
             "the one before it applied"
             [ (20260101000000, "first") ]
@@ -243,7 +253,7 @@ let test_a_failed_migration_stops_where_it_failed () =
           ok_s (Rowtype_migrate.run db fixed);
           Alcotest.(check int)
             "and the fix runs" 3
-            (List.length (ok_s (Rowtype_migrate.status db fixed)).applied)))
+            (List.length (ok_s (app_status db fixed)).applied)))
 
 (* A file that ends the transaction it runs in is refused, whether what
    follows its [commit] fails, succeeds, or begins another: its record is
@@ -279,7 +289,7 @@ let test_a_migration_that_ends_its_transaction_is_refused () =
                    (words (`Failed e))
                    "-- rowtype-migrate: no transaction")
           | Error e -> Alcotest.failf "not the migration's: %s" (words e));
-          let st = ok_s (Rowtype_migrate.status db [ first; ends ]) in
+          let st = ok_s (app_status db [ first; ends ]) in
           Alcotest.(check (list int))
             ("applied, after " ^ sql) [ 20260101000000 ]
             (List.map (fun (v, _) -> number v) st.applied);
@@ -380,7 +390,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
   on_db [] (fun db ->
       ok_s (Rowtype_migrate.run db [ a; b ]);
       ok_s (Rowtype_migrate.run db squashed);
-      let st = ok_s (Rowtype_migrate.status db squashed) in
+      let st = ok_s (app_status db squashed) in
       Alcotest.(check (pair (list int) (list int)))
         "what it replaced is history, not unknown" ([], [])
         (numbers st.unknown, numbers st.edited);
@@ -413,7 +423,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
         | Ok () | Error _ -> false);
       Alcotest.(check (option int))
         "and a status says" (Some 20260102000000)
-        (Option.map number (ok_s (Rowtype_migrate.status db squashed)).behind))
+        (Option.map number (ok_s (app_status db squashed)).behind))
 
 (* A record may be kept in a table of its own, in a schema of its own, so
    two applications can share a database; a name that would have to be
@@ -439,9 +449,7 @@ let test_a_record_can_have_a_table_of_its_own () =
       Alcotest.(check (pair bool bool))
         "kept there, and nowhere else" (true, false)
         (exists "app.migrations", exists "schema_migrations");
-      let st =
-        ok_s (Rowtype_migrate.status ~table:"app.migrations" db [ one ])
-      in
+      let st = ok_s (app_status ~table:"app.migrations" db [ one ]) in
       Alcotest.(check int) "read back from it" 1 (List.length st.applied);
       Alcotest.(check bool)
         "a name that is not a table's" true
@@ -534,6 +542,115 @@ let test_two_migrators_take_turns () =
 
 (* The pg_dump a squash runs must be the server's own version, which only
    the suite's runner can name: [make test] names the container's. *)
+(* A library's migrations, in one call. *)
+let library name migrations =
+  match Rowtype_migrate.source name migrations with
+  | Ok l -> l
+  | Error e -> Alcotest.failf "no source %s: %s" name (words e)
+
+let migration v name sql =
+  { Rowtype_migrate.version = version v; name; kind = Transaction; sql }
+
+let recorded db =
+  ok
+    (Pg.run db
+       (S.list ~params:S.unit
+          ~row:S.(t3 text int text)
+          "select source, version, name from schema_migrations order by \
+           source, version")
+       ())
+
+(* A library is a history of its own: its migration older than the
+   application's last is applied, not refused as late, and each source's rows
+   say whose they are. *)
+let test_a_library_is_a_history_of_its_own () =
+  on_db [] (fun db ->
+      let app =
+        [ migration 20260201000000 "orders" "create table orders ()" ]
+      in
+      ok_s (Rowtype_migrate.run db app);
+      let spool =
+        library "spool"
+          [ migration 20260101000000 "jobs" "create table spool_jobs ()" ]
+      in
+      ok_s (Rowtype_migrate.run ~libraries:[ spool ] db app);
+      Alcotest.(check (list (triple string int string)))
+        "each row its source's"
+        [ ("app", 20260201000000, "orders"); ("spool", 20260101000000, "jobs") ]
+        (recorded db);
+      let statuses =
+        ok_s (Rowtype_migrate.status ~libraries:[ spool ] db app)
+      in
+      Alcotest.(check (list string))
+        "a status for each, the application's last" [ "spool"; "app" ]
+        (List.map (fun (st : Rowtype_migrate.status) -> st.source) statuses))
+
+(* Within a source the checks hold as they always did: a migration older
+   than one its own source applied is late. *)
+let test_a_source_is_still_held_to_its_order () =
+  on_db [] (fun db ->
+      let later = migration 20260102000000 "later" "select 1" in
+      ok_s (Rowtype_migrate.run ~libraries:[ library "spool" [ later ] ] db []);
+      let earlier = migration 20260101000000 "earlier" "select 1" in
+      match
+        Rowtype_migrate.run
+          ~libraries:[ library "spool" [ earlier; later ] ]
+          db []
+      with
+      | Error (`Late m) ->
+          Alcotest.(check string) "the late one" "earlier" m.name
+      | Ok () -> Alcotest.fail "a late migration within a source ran"
+      | Error e -> Alcotest.failf "refused otherwise: %s" (words e))
+
+(* The libraries run first, so the application's migrations may stand on
+   their tables; and a source given twice is refused. *)
+let test_libraries_run_before_the_application () =
+  on_db [] (fun db ->
+      let spool =
+        library "spool"
+          [
+            migration 20260301000000 "jobs"
+              "create table spool_jobs (id bigint primary key)";
+          ]
+      in
+      ok_s
+        (Rowtype_migrate.run ~libraries:[ spool ] db
+           [
+             migration 20260101000000 "orders"
+               "create table orders (job bigint references spool_jobs (id))";
+           ]);
+      match Rowtype_migrate.run ~libraries:[ spool; spool ] db [] with
+      | Error (`Invalid _) -> ()
+      | Ok () | Error _ -> Alcotest.fail "a source given twice was taken")
+
+(* A record kept before sources were is given them on the next run, every
+   row the application's, and the key is the source and the version, so a
+   library may use a version the application has. *)
+let test_an_old_record_is_given_sources () =
+  on_db
+    [
+      "create table schema_migrations (version bigint primary key, name text \
+       not null, applied_at timestamptz not null default now(), checksum text)";
+    ] (fun db ->
+      let first = migration 20260101000000 "first" "create table first ()" in
+      ok
+        (Pg.run db
+           (S.exec
+              ~params:S.(t2 text text)
+              "insert into schema_migrations (version, name, checksum) values \
+               (20260101000000, $1, $2)")
+           ("first", Digest.to_hex (Digest.string first.sql)));
+      ok (Pg.exec_raw db first.sql);
+      let spool =
+        library "spool"
+          [ migration 20260101000000 "jobs" "create table spool_jobs ()" ]
+      in
+      ok_s (Rowtype_migrate.run ~libraries:[ spool ] db [ first ]);
+      Alcotest.(check (list (triple string int string)))
+        "the old row the application's, beside the library's"
+        [ ("app", 20260101000000, "first"); ("spool", 20260101000000, "jobs") ]
+        (recorded db))
+
 let pg_dump = Sys.getenv_opt "ROWTYPE_TEST_PG_DUMP"
 
 (* A dump is what the migrations make from nothing, the same on every run,
@@ -600,6 +717,45 @@ let dump_with target ~pg_dump ~migrations =
 (* A pg_dump that fails is named with what it said, and never with its
    arguments: the URL in them holds the password, which is masked even
    where the program says its arguments back. *)
+(* An application's baseline leaves out what a library's own migrations
+   make, so a database made from both never makes a library's table twice. *)
+let test_a_squash_leaves_a_library_out () =
+  match pg_dump with
+  | None ->
+      print_endline
+        "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
+      Alcotest.skip ()
+  | Some pg_dump ->
+      let spool =
+        library "spool"
+          [
+            migration 20260101000000 "jobs"
+              "create table spool_jobs (id bigint primary key)";
+          ]
+      in
+      let history =
+        [
+          migration 20260201000000 "a" "create table a (n int)";
+          migration 20260202000000 "later" "alter table a add column note text";
+        ]
+      in
+      Db_target.with_postgres (fun target ->
+          match
+            Rowtype_migrate.squash ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+              ~mono_clock:(Db_target.mono ())
+              ~process_mgr:(Db_target.process_mgr ()) ~libraries:[ spool ]
+              ~pg_dump ~restrict_key:"rowtype" ~through:(version 20260201000000)
+              ~migrations:history target
+          with
+          | Error m -> Alcotest.failf "the squash was refused: %s" (words m)
+          | Ok baseline ->
+              Alcotest.(check bool)
+                "the application's table in it" true
+                (contains baseline.sql "TABLE public.a");
+              Alcotest.(check bool)
+                "and the library's not" false
+                (contains baseline.sql "spool_jobs"))
+
 let test_a_failed_dump_names_no_password () =
   Db_target.with_postgres (fun target ->
       let password =
@@ -887,6 +1043,19 @@ let () =
             test_a_cancelled_dump_leaves_nothing;
           Alcotest.test_case "a dump cancelled in pg_dump ends" `Quick
             test_a_dump_cancelled_in_pg_dump_ends;
+        ] );
+      ( "sources",
+        [
+          Alcotest.test_case "a library is a history of its own" `Quick
+            test_a_library_is_a_history_of_its_own;
+          Alcotest.test_case "a source is still held to its order" `Quick
+            test_a_source_is_still_held_to_its_order;
+          Alcotest.test_case "libraries run before the application" `Quick
+            test_libraries_run_before_the_application;
+          Alcotest.test_case "an old record is given sources" `Quick
+            test_an_old_record_is_given_sources;
+          Alcotest.test_case "a squash leaves a library out" `Quick
+            test_a_squash_leaves_a_library_out;
         ] );
       ( "the database",
         [
