@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.5.0 (2026-10-12)
 
 - A library's migrations are a history of their own: a library ships them
   in its package, `rowtype-migrate --source <package>` (or
