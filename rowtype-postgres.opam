@@ -21,6 +21,7 @@ depends: [
   "eio_main" {with-test & >= "1.5"}
   "alcotest" {with-test & >= "1.9.1"}
   "qcheck-core" {with-test & >= "0.91"}
+  "cstruct" {with-test & >= "6.3.0"}
   "odoc" {with-doc}
 ]
 build: [

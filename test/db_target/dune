@@ -3,4 +3,13 @@
 
 (library
  (name db_target)
- (libraries rowtype rowtype-postgres ptime uuidm eio eio_main unix alcotest))
+ (libraries
+  rowtype
+  rowtype-postgres
+  ptime
+  uuidm
+  eio
+  eio.unix
+  eio_main
+  unix
+  alcotest))

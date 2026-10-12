@@ -15,6 +15,7 @@
   rowtype
   rowtype-postgres
   db_target
+  cstruct
   eio
   eio_main
   logs

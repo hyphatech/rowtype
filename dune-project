@@ -1,6 +1,8 @@
 (lang dune 3.18)
 (name rowtype)
 
+(implicit_transitive_deps false)
+
 (generate_opam_files true)
 
 (maintainers "Hypha Technologies Ltd <dev@hyphatech.io>")
@@ -88,7 +90,11 @@
   (qcheck-core
    (and
     :with-test
-    (>= 0.91)))))
+    (>= 0.91)))
+  (cstruct
+   (and
+    :with-test
+    (>= 6.3.0)))))
 
 (package
  (name rowtype-migrate)
