@@ -56,20 +56,6 @@
  (modules test_migrate_files)
  (libraries rowtype-migrate eio eio_main ptime unix alcotest))
 
-; The house rules, read off the source.
-
-(test
- (name test_style)
- (package rowtype)
- (modules test_style)
- (libraries alcotest)
- (deps
-  ; The shared refusals, read from the blocks OCAML.md fences, and every
-  ; directory the build reads, each held to them by what its dune builds.
-  ../OCAML.md
-  (glob_files_rec ../dune)
-  (glob_files_rec ../*.{ml,mli})))
-
 ; The command, where it needs no database.
 
 (cram

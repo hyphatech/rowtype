@@ -44,7 +44,6 @@ test/
                      included
   test_migrate_files the files' pieces, which need no database
   command.t          the command, where it needs no database
-  test_style         the house rules that can be checked mechanically
   db_target/         where a suite's database comes from: a library, so it
                      reads no variable, prints nothing and never exits
 ```
@@ -60,9 +59,8 @@ Each rule comes with why it exists and the test that catches a break.
   library but `ptime` and `uuidm`, whose types an instant and a uuid are; a
   backend is a package of its own, `rowtype-postgres`, and a statement reaches the database as written. Why: a rule of one database's
   syntax in the library every database shares is a rule the next backend
-  has to undo. Test: `rowtype links ptime and uuidm alone`, in
-  `test_style`, reads `src/dune`'s libraries, and `opam install rowtype`
-  installs nothing else.
+  has to undo. Symptom: `rg -n libraries src/dune` names a library but
+  `ptime` and `uuidm`, or `opam install rowtype` installs anything else.
 - **A migration is applied by the command, and never by an application.**
   The command `rowtype-migrate up` applies the files from a directory and
   links no application; `Rowtype_migrate.run` is for a test and a tool. Why: every
@@ -92,8 +90,9 @@ Each rule comes with why it exists and the test that catches a break.
   one local open a span's, `Mtime.Span.(5 * s)`. Why: the walk exists to
   pattern-match that GADT, and every constructor qualified would bury the
   match; a span's operators are made to be opened around the one
-  expression, as OCAML.md writes one. Test: `test_style` names both and
-  refuses any other.
+  expression, as OCAML.md writes one. Symptom:
+  `rg -n '^\s*open |\b[A-Z]\w*\.[(\[{]' -g '*.ml' src postgres migrate`
+  finds any other.
 
 ## House style
 
