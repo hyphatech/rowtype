@@ -94,21 +94,25 @@ type error =
     (** the migrations' files: one not named as a migration, one that cannot be
         read or written, a directive not known, a version twice, a baseline out
         of place -- in words naming it *)
-  | `Invalid of string
-    (** an argument outside its grammar -- a table's name, a migration's name --
-        or a squash through no migration it can squash: in words *)
-  | `Behind of migration
-    (** the database's record stops before the list's baseline: it is migrated
-        with a build from before the squash first *)
-  | `Unknown of version
-    (** the database records a version the list does not know: it was migrated
-        from a newer checkout *)
-  | `Edited of migration
-    (** its text is not what the database applied: edited after it ran *)
-  | `Late of migration
-    (** pending, and older than one the database applied: merged after a later
-        one ran *)
-  | `Failed of migration * Rowtype.error
+  | `Invalid_argument of string
+    (** an argument outside what it may be -- a table's, a migration's or a
+        source's name outside its grammar, a source given twice, a squash
+        through no migration it can squash: in words naming it *)
+  | `Record of
+    [ `Behind of migration
+      (** it stops before the list's baseline: it is migrated with a build from
+          before the squash first *)
+    | `Unknown of version
+      (** it holds a version the list does not know: it was migrated from a
+          newer checkout *)
+    | `Edited of migration
+      (** it holds a digest of another text: the file was edited after it ran *)
+    | `Late of migration
+      (** it holds a version later than this pending one: the file was merged
+          after a later one ran *) ]
+    (** the database's record disagrees with a source's files, so nothing of
+        that source is applied *)
+  | `Migration_failed of migration * Rowtype.error
     (** it failed, and the database is at the version before it -- or, for one
         run outside a transaction, at whatever the failure left, and for one
         that ended its own transaction, at whatever that end kept, with the
@@ -162,7 +166,7 @@ val source : string -> migration list -> (source, [> error ]) result
 (** [source name migrations], for a name of lower-case letters, digits, hyphens
     and underscores starting with a letter, as a package's is. [app] is the
     application's and refused, as is any other name outside that grammar
-    ([`Invalid]). *)
+    ([`Invalid_argument]). *)
 
 val of_package : prefix:string -> string -> (migration list, [> error ]) result
 (** [of_package ~prefix package] reads [<prefix>/share/<package>/migrations],
@@ -233,9 +237,9 @@ val run :
 
     [libraries] are applied first, in the order given, each as a history of its
     own: what follows holds within each source, never across two. A source given
-    twice is [`Invalid].
+    twice is [`Invalid_argument].
 
-    Refused, naming the migration, and nothing more applied:
+    Refused as [`Record], naming the migration, and nothing more applied:
     - [`Behind], a database whose record stops before the list's baseline, which
       has to be migrated with a build from before the squash first;
     - [`Unknown], a database that records a version the list does not know,
@@ -247,7 +251,8 @@ val run :
     - [`Late], a pending migration older than one already applied, merged after
       a later one ran, which would run out of the order it was written in.
 
-    A migration that fails is [`Failed], and the ones before it stay applied.
+    A migration that fails is [`Migration_failed], and the ones before it stay
+    applied.
 
     Each applied migration is recorded with its source and a digest of its text.
     A database migrated before the digests were kept has them recorded on its
@@ -336,12 +341,12 @@ val squash :
     It is proved before it is answered: the baseline and the migrations after it
     make a database that dumps the same, row for row, as the one the whole
     history makes, or it is [`Unproved]. Writing it and removing the files it
-    replaced is the caller's. [`Invalid]: a [through] that is no migration's
-    version, and one that is the baseline's with nothing before it.
+    replaced is the caller's. [`Invalid_argument]: a [through] that is no
+    migration's version, and one that is the baseline's with nothing before it.
 
     It squashes the application's history alone: with [libraries], they run
     first on each scratch database, and the tables they made are left out of the
     baseline, since their own migrations make them. A library that made anything
-    but tables -- a type, a function, a view -- is [`Invalid], since a baseline
-    could not tell it from the application's. A library squashes its own history
-    in its own repository, where it is the application. *)
+    but tables -- a type, a function, a view -- is [`Invalid_argument], since a
+    baseline could not tell it from the application's. A library squashes its
+    own history in its own repository, where it is the application. *)

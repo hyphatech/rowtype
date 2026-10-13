@@ -175,7 +175,7 @@ let test_a_package_is_read_from_the_switch () =
       | Ok _ -> Alcotest.fail "not the one migration it installed"
       | Error e -> Alcotest.fail (words e));
       (match C.of_package ~prefix "Spool" with
-      | Error (`Invalid _) -> ()
+      | Error (`Invalid_argument _) -> ()
       | Ok _ | Error _ -> Alcotest.fail "a name no package has was read");
       match C.of_package ~prefix "absent" with
       | Error (`Files _) -> ()
@@ -261,7 +261,7 @@ let test_a_squash_refuses_what_it_cannot_squash () =
         ~migrations "postgres://nowhere.invalid/x"
     with
     | Ok _ -> "squashed"
-    | Error (`Invalid _) -> "invalid"
+    | Error (`Invalid_argument _) -> "invalid"
     | Error (`Files _) -> "files"
     | Error e -> words e
   in

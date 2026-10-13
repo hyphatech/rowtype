@@ -6,6 +6,13 @@
   `set lock_timeout` -- ends with it: `up` resets the session after every
   migration, not only after a baseline, so a schema no longer depends on
   which migrations were applied together in one run.
+- Breaking: `Rowtype_migrate.error` groups the four ways the database's
+  record disagrees with the files under one tag, `` `Record `` --
+  `` `Record (`Behind m) ``, `` `Record (`Unknown v) ``,
+  `` `Record (`Edited m) ``, `` `Record (`Late m) `` -- so a caller handles
+  them in one arm; `` `Failed `` is `` `Migration_failed ``, and
+  `` `Invalid `` is `` `Invalid_argument ``, words no other library's
+  failure is likely to share once the variants are merged.
 
 ## 0.5.0 (2026-10-12)
 

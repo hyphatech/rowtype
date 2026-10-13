@@ -25,43 +25,44 @@ type migration = { version : version; name : string; kind : kind; sql : string }
 type error =
   [ S.error
   | `Files of string
-  | `Invalid of string
-  | `Behind of migration
-  | `Unknown of version
-  | `Edited of migration
-  | `Late of migration
-  | `Failed of migration * S.error
+  | `Invalid_argument of string
+  | `Record of
+    [ `Behind of migration
+    | `Unknown of version
+    | `Edited of migration
+    | `Late of migration ]
+  | `Migration_failed of migration * S.error
   | `No_database of string
   | `Dump of string
   | `Unproved ]
 
 let error_to_string : [< error ] -> string = function
-  | `Files m | `Invalid m | `Dump m -> m
-  | `Behind b ->
+  | `Files m | `Invalid_argument m | `Dump m -> m
+  | `Record (`Behind b) ->
       Printf.sprintf
         "the database's record stops before migration %d, the baseline that \
          replaced every migration up to it: migrate it with a build from \
          before the squash, then with this one"
         b.version
-  | `Unknown v ->
+  | `Record (`Unknown v) ->
       Printf.sprintf
         "the database has migration %d, which these files do not: it was \
          migrated from a newer checkout, and applying these would run a \
          history that is not its own"
         v
-  | `Edited m ->
+  | `Record (`Edited m) ->
       Printf.sprintf
         "migration %d_%s was edited after it ran: its text is not what the \
          database applied, and a schema that has run changes by the next \
          migration, never by rewriting one"
         m.version m.name
-  | `Late m ->
+  | `Record (`Late m) ->
       Printf.sprintf
         "migration %d_%s is older than one this database has applied: it was \
          merged after a later one ran, and would run out of the order it was \
          written in; give it a version later than every applied one"
         m.version m.name
-  | `Failed (m, e) ->
+  | `Migration_failed (m, e) ->
       Printf.sprintf "migration %d_%s failed: %s" m.version m.name
         (S.error_to_string e)
   | `No_database name ->
@@ -212,12 +213,12 @@ let source_name n =
 let source name migrations =
   if String.equal name app then
     Error
-      (`Invalid
+      (`Invalid_argument
          (Printf.sprintf
             "%S is the application's own history, and no library's name" name))
   else if not (source_name name) then
     Error
-      (`Invalid
+      (`Invalid_argument
          (Printf.sprintf
             "%S is not a source's name: lower-case letters, digits, hyphens \
              and underscores, starting with a letter, as a package's is"
@@ -226,7 +227,8 @@ let source name migrations =
 
 let of_package ~prefix package =
   if not (source_name package) then
-    Error (`Invalid (Printf.sprintf "%S is not a package's name" package))
+    Error
+      (`Invalid_argument (Printf.sprintf "%S is not a package's name" package))
   else
     of_directory
       (List.fold_left Filename.concat prefix [ "share"; package; "migrations" ])
@@ -258,7 +260,7 @@ let rec directory dir =
 let new_migration ~dir ~now name =
   if not (valid_name name) then
     Error
-      (`Invalid
+      (`Invalid_argument
          (Printf.sprintf
             "%S is not a migration name: lower-case letters, digits and \
              underscores"
@@ -310,7 +312,7 @@ let table_name t =
   | ([ _ ] | [ _; _ ]) as parts when List.for_all identifier parts -> Ok t
   | _ ->
       Error
-        (`Invalid
+        (`Invalid_argument
            (Printf.sprintf
               "%S is not a table's name: lower-case letters, digits and \
                underscores, starting with a letter or an underscore, after a \
@@ -375,7 +377,9 @@ let record ~table ~source conn m =
           table))
     (source, m.version, m.name, sum m)
 
-let failed m = function Ok v -> Ok v | Error e -> Error (`Failed (m, e))
+let failed m = function
+  | Ok v -> Ok v
+  | Error e -> Error (`Migration_failed (m, e))
 
 (* One transaction per file, with the row that records it, so a failure
    leaves the database at exactly the version before it. Run once, with no
@@ -436,8 +440,8 @@ let apply ~table ~source conn m =
     | Ok () -> Ok ()
     | Error `Ended ->
         let* () = failed m (unrecord ()) in
-        Error (`Failed (m, `Db ended))
-    | Error (`Not_committed detail) -> Error (`Failed (m, `Db detail))
+        Error (`Migration_failed (m, `Db ended))
+    | Error (`Not_committed detail) -> Error (`Migration_failed (m, `Db detail))
     | Error (#S.error as e) -> (
         (* The record outlives the rollback only where the file committed
            it before it failed. *)
@@ -445,9 +449,9 @@ let apply ~table ~source conn m =
         | Ok true ->
             let* () = failed m (unrecord ()) in
             Error
-              (`Failed
+              (`Migration_failed
                  (m, `Db (ended ^ ". It then failed: " ^ S.error_to_string e)))
-        | Ok false | Error _ -> Error (`Failed (m, e)))
+        | Ok false | Error _ -> Error (`Migration_failed (m, e)))
   in
   let applied =
     match m.kind with
@@ -555,7 +559,7 @@ let pending ~table ~source conn migrations =
   let* recorded = applied ~table ~source conn in
   let r = read migrations recorded in
   match refusal r with
-  | Some refused -> Error refused
+  | Some refused -> Error (`Record refused)
   | None ->
       let* () =
         List.fold_left
@@ -594,7 +598,8 @@ let distinct libraries =
     | l :: rest ->
         if List.exists (String.equal l.name) seen then
           Error
-            (`Invalid (Printf.sprintf "the source %S is given twice" l.name))
+            (`Invalid_argument
+               (Printf.sprintf "the source %S is given twice" l.name))
         else go (l.name :: seen) rest
   in
   go [] libraries
@@ -927,7 +932,7 @@ let made_by_libraries conn =
   in
   if others > 0 then
     Error
-      (`Invalid
+      (`Invalid_argument
          "a library's migrations made something other than tables, which a \
           baseline cannot tell from the application's own: squash its history \
           without those libraries")
@@ -1007,13 +1012,13 @@ let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
     match (List.exists (fun m -> m.version = through) migrations, replaced) with
     | false, _ ->
         Error
-          (`Invalid
+          (`Invalid_argument
              (Printf.sprintf
                 "there is no migration %d: a squash is through one of the files"
                 through))
     | true, [ m ] when is_baseline m ->
         Error
-          (`Invalid
+          (`Invalid_argument
              (Printf.sprintf
                 "migration %d is a baseline already: there is nothing before \
                  it to squash"

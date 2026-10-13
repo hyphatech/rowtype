@@ -138,7 +138,7 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
       Alcotest.(check (option int))
         "and run refuses it" (Some 20260101000000)
         (match Rowtype_migrate.run db [ second ] with
-        | Error (`Unknown v) -> Some (number v)
+        | Error (`Record (`Unknown v)) -> Some (number v)
         | Ok () | Error _ -> None))
 
 (* A migration is known by its text: one edited after it ran is refused,
@@ -158,7 +158,8 @@ let test_a_migration_is_held_to_what_ran () =
            Rowtype_migrate.run db
              [ m 20260101000000 "first" "create table a (n bigint)"; third ]
          with
-        | Error (`Edited (m : Rowtype_migrate.migration)) -> Some m.name
+        | Error (`Record (`Edited (m : Rowtype_migrate.migration))) ->
+            Some m.name
         | Ok () | Error _ -> None);
       Alcotest.(check (option string))
         "a late one" (Some "second")
@@ -166,7 +167,7 @@ let test_a_migration_is_held_to_what_ran () =
            Rowtype_migrate.run db
              [ first; m 20260102000000 "second" "select 1"; third ]
          with
-        | Error (`Late (m : Rowtype_migrate.migration)) -> Some m.name
+        | Error (`Record (`Late (m : Rowtype_migrate.migration))) -> Some m.name
         | Ok () | Error _ -> None);
       let st =
         ok_s
@@ -218,7 +219,7 @@ let test_a_failed_migration_stops_where_it_failed () =
           and third = m 20260103000000 "third" "create table c (n int)" in
           (match Rowtype_migrate.run db [ first; broken; third ] with
           | Ok () -> Alcotest.fail "a broken migration was applied"
-          | Error (`Failed ((m : Rowtype_migrate.migration), _)) ->
+          | Error (`Migration_failed ((m : Rowtype_migrate.migration), _)) ->
               Alcotest.(check string) "named" "broken" m.name
           | Error e -> Alcotest.failf "not the migration's: %s" (words e));
           let st = ok_s (app_status db [ first; broken; third ]) in
@@ -280,13 +281,13 @@ let test_a_migration_that_ends_its_transaction_is_refused () =
           in
           (match Rowtype_migrate.run db [ first; ends ] with
           | Ok () -> Alcotest.failf "applied: %s" sql
-          | Error (`Failed ((m, _) as e)) ->
+          | Error (`Migration_failed ((m, _) as e)) ->
               Alcotest.(check string) "named" "ends" m.name;
               Alcotest.(check bool)
-                ("names the directive: " ^ words (`Failed e))
+                ("names the directive: " ^ words (`Migration_failed e))
                 true
                 (contains
-                   (words (`Failed e))
+                   (words (`Migration_failed e))
                    "-- rowtype-migrate: no transaction")
           | Error e -> Alcotest.failf "not the migration's: %s" (words e));
           let st = ok_s (app_status db [ first; ends ]) in
@@ -320,7 +321,7 @@ let test_a_lost_connection_names_its_migration () =
           ]
       with
       | Ok () -> Alcotest.fail "a lost connection migrated"
-      | Error (`Failed ((m : Rowtype_migrate.migration), _)) ->
+      | Error (`Migration_failed ((m : Rowtype_migrate.migration), _)) ->
           Alcotest.(check string) "named" "lost" m.name
       | Error e -> Alcotest.failf "not the migration's: %s" (words e))
 
@@ -419,7 +420,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
       Alcotest.(check bool)
         "behind it, run refuses" true
         (match Rowtype_migrate.run db squashed with
-        | Error (`Behind _) -> true
+        | Error (`Record (`Behind _)) -> true
         | Ok () | Error _ -> false);
       Alcotest.(check (option int))
         "and a status says" (Some 20260102000000)
@@ -488,7 +489,7 @@ let test_a_record_can_have_a_table_of_its_own () =
         (match
            Rowtype_migrate.run ~table:"m; drop table app.one" db [ one ]
          with
-        | Error (`Invalid _) -> true
+        | Error (`Invalid_argument _) -> true
         | Ok () | Error _ -> false);
       Alcotest.(check (option string))
         "a name that starts with a digit, told what it lacks"
@@ -497,7 +498,7 @@ let test_a_record_can_have_a_table_of_its_own () =
             and underscores, starting with a letter or an underscore, after a \
             schema and a dot if it names one")
         (match Rowtype_migrate.run ~table:"1migrations" db [ one ] with
-        | Error (`Invalid m) -> Some m
+        | Error (`Invalid_argument m) -> Some m
         | Ok () | Error _ -> None))
 
 let on_server f url =
@@ -629,7 +630,7 @@ let test_a_source_is_still_held_to_its_order () =
           ~libraries:[ library "spool" [ earlier; later ] ]
           db []
       with
-      | Error (`Late m) ->
+      | Error (`Record (`Late m)) ->
           Alcotest.(check string) "the late one" "earlier" m.name
       | Ok () -> Alcotest.fail "a late migration within a source ran"
       | Error e -> Alcotest.failf "refused otherwise: %s" (words e))
@@ -652,7 +653,7 @@ let test_libraries_run_before_the_application () =
                "create table orders (job bigint references spool_jobs (id))";
            ]);
       match Rowtype_migrate.run ~libraries:[ spool; spool ] db [] with
-      | Error (`Invalid _) -> ()
+      | Error (`Invalid_argument _) -> ()
       | Ok () | Error _ -> Alcotest.fail "a source given twice was taken")
 
 (* A record kept before sources were is given them on the next run, every
