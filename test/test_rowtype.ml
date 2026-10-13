@@ -1249,16 +1249,11 @@ let with_commit_cut target f =
                (fun () -> to_client (buffer ()))
            with End_of_file | Eio.Io _ -> ());
           `Stop_daemon));
+  (* [to_url] always writes a query, where a later key wins over the URL's
+     host and an empty [hostaddr] unsets it. *)
   f
-    (Pg.Conninfo.to_url
-       {
-         c with
-         hosts =
-           List.map
-             (fun (e : Pg.Conninfo.endpoint) ->
-               { e with host = Tcp "127.0.0.1"; address = None; port })
-             c.hosts;
-       })
+    (Printf.sprintf "%s&host=127.0.0.1&hostaddr=&port=%d" (Pg.Conninfo.to_url c)
+       port)
 
 (* A COMMIT the server ran and whose answer was lost may have committed,
    and the transaction says so, where [`Not_committed] would be false. *)

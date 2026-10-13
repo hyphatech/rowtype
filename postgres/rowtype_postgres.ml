@@ -564,7 +564,7 @@ let conninfo target =
    or a URL's query survives. *)
 let on_database ~server name =
   Result.map
-    (fun (c : Conninfo.t) -> Conninfo.to_url { c with database = name })
+    (fun (c : Conninfo.t) -> Conninfo.to_url (Conninfo.with_database c name))
     (conninfo server)
 
 let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout ?statement_cache
@@ -804,8 +804,8 @@ module Transaction = struct
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match Pg.status db.pg with
-        | Pg.Protocol.Idle -> attempt retries
-        | Pg.Protocol.In_transaction | Pg.Protocol.Failed ->
+        | Pg.Idle -> attempt retries
+        | Pg.In_transaction | Pg.Failed ->
             not_committed "begin"
               "a transaction is already open on this connection")
 end

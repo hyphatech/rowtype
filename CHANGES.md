@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Breaking: `rowtype-postgres` needs postgres-eio 0.4.0, whose
+  `Conninfo.t`, which `Rowtype_postgres.Conninfo` is, is a private
+  record: `{ c with database = name }` is
+  `Rowtype_postgres.Conninfo.with_database c name`, and
+  `{ c with connect_timeout = Some span }` is
+  `Rowtype_postgres.Conninfo.with_connect_timeout c span`.
 - Breaking: a unique, exclusion or foreign-key constraint declared
   `DEFERRABLE` that refuses a write at `COMMIT` makes
   `Pg.Transaction.within` answer `` `Conflict `` with the constraint's

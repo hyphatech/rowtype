@@ -837,11 +837,8 @@ let connect_timeout = Mtime.Span.(10 * s)
 let connect ~sw ~net ~mono_clock url =
   let* c = Pg.conninfo url in
   let c =
-    {
-      c with
-      connect_timeout =
-        Some (Option.value c.connect_timeout ~default:connect_timeout);
-    }
+    Pg.Conninfo.with_connect_timeout c
+      (Option.value c.connect_timeout ~default:connect_timeout)
   in
   Pg.connect ~sw ~net ~mono_clock
     ~parameters:[ ("client_min_messages", "warning") ]
