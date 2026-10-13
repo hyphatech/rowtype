@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.6.0 (2026-10-13)
 
 - Breaking: `rowtype-postgres` needs postgres-eio 0.4.0, whose
   `Conninfo.t`, which `Rowtype_postgres.Conninfo` is, is a private
