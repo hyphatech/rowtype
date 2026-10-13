@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+- What a migration sets for its session -- a `set search_path`, a
+  `set lock_timeout` -- ends with it: `up` resets the session after every
+  migration, not only after a baseline, so a schema no longer depends on
+  which migrations were applied together in one run.
+
 ## 0.5.0 (2026-10-12)
 
 - A library's migrations are a history of their own: a library ships them

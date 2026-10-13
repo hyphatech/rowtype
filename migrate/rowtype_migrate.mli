@@ -255,9 +255,12 @@ val run :
     source column on its next run, every row the application's. What a baseline
     replaced is history: recorded, and compared with nothing.
 
-    A baseline is a pg_dump, which sets the session's parameters as it starts --
-    an empty search path among them -- and so the session's parameters are reset
-    after one, as a connection's own would be ([reset all]). *)
+    What a migration sets for its session -- a [set search_path], a
+    [set lock_timeout], the empty search path a baseline's pg_dump starts with
+    -- ends with it: the session's parameters are reset after each migration, as
+    a connection's own would be ([reset all]), so a migration runs in the same
+    session whether it is applied in one run with the one before it or in
+    another. *)
 
 type status = {
   source : string;  (** {!app}, or a library's name *)

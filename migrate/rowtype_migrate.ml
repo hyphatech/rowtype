@@ -449,19 +449,23 @@ let apply ~table ~source conn m =
                  (m, `Db (ended ^ ". It then failed: " ^ S.error_to_string e)))
         | Ok false | Error _ -> Error (`Failed (m, e)))
   in
-  match m.kind with
-  | Transaction -> in_transaction ()
-  | Baseline ->
-      (* A baseline is a pg_dump, which sets the session's parameters as it
-         starts -- an empty search path among them -- and never puts them
-         back, so every migration after it would run in the dump's session.
-         Put back, with the run's own unbounded statements. *)
-      let* () = in_transaction () in
-      Pg.exec_raw conn "reset all; set statement_timeout = 0"
-  | No_transaction ->
-      failed m
-        (let* () = Pg.exec_raw conn m.sql in
-         record ~table ~source conn m)
+  let applied =
+    match m.kind with
+    | Transaction | Baseline -> in_transaction ()
+    | No_transaction ->
+        failed m
+          (let* () = Pg.exec_raw conn m.sql in
+           record ~table ~source conn m)
+  in
+  (* A [set] outlives the transaction it ran in -- a pg_dump, which a
+     baseline is, sets an empty search path -- and would carry into every
+     later migration on the connection, so a schema would depend on how its
+     migrations were grouped into runs. Put back after each, with the run's
+     own unbounded statements; the migration's failure is the answer over
+     the reset's. *)
+  let reset = Pg.exec_raw conn "reset all; set statement_timeout = 0" in
+  let* () = applied in
+  reset
 
 (* What a list and a database's record come to: the migrations to apply,
    in order, and the four ways the two can disagree. *)

@@ -425,6 +425,38 @@ let test_a_baseline_stands_for_what_it_replaced () =
         "and a status says" (Some 20260102000000)
         (Option.map number (ok_s (app_status db squashed)).behind))
 
+(* What a migration sets for its session ends with it, in a transaction or
+   outside one: the schema is the same whether the next migration runs in
+   the same run or in another. *)
+let test_what_a_migration_sets_ends_with_it () =
+  let m v name kind sql =
+    { Rowtype_migrate.version = version v; name; kind; sql }
+  in
+  on_db [ "create schema other" ] (fun db ->
+      ok_s
+        (Rowtype_migrate.run ~table:"public.schema_migrations" db
+           [
+             m 20260101000000 "moves" Transaction
+               "set search_path = other; create table x (n int)";
+             m 20260102000000 "after" Transaction "create table y (n int)";
+             m 20260103000000 "moves_outside" No_transaction
+               "set search_path = other";
+             m 20260104000000 "after_outside" Transaction
+               "create table z (n int)";
+           ]);
+      let schema name =
+        ok
+          (Pg.run db
+             (S.find_opt ~params:S.text ~row:S.text
+                "select table_schema::text from information_schema.tables \
+                 where table_name = $1")
+             name)
+      in
+      Alcotest.(check (list (option string)))
+        "each where its own session puts it"
+        [ Some "other"; Some "public"; Some "public" ]
+        (List.map schema [ "x"; "y"; "z" ]))
+
 (* A record may be kept in a table of its own, in a schema of its own, so
    two applications can share a database; a name that would have to be
    quoted is refused, since it goes into the statements as it is. *)
@@ -1029,6 +1061,8 @@ let () =
             test_a_migration_can_run_outside_a_transaction;
           Alcotest.test_case "a record can have a table of its own" `Quick
             test_a_record_can_have_a_table_of_its_own;
+          Alcotest.test_case "what a migration sets ends with it" `Quick
+            test_what_a_migration_sets_ends_with_it;
           Alcotest.test_case "a baseline stands for what it replaced" `Quick
             test_a_baseline_stands_for_what_it_replaced;
           Alcotest.test_case "two migrators take turns" `Quick
