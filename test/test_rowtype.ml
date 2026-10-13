@@ -1280,13 +1280,44 @@ let test_a_lost_commit_is_lost () =
       Pg.close setup)
 
 (* A COMMIT can fail on its own: a deferred constraint is checked there.
-   The work's Ok must not survive it, because nothing it wrote did. *)
-let test_a_failed_commit_is_not_committed () =
+   A unique key refusing a duplicate at COMMIT is the conflict the same
+   insert is when checked at once, naming its constraint: the server
+   refused it, so the transaction is known rolled back. The work's Ok must
+   not survive it, because nothing it wrote did. *)
+let test_a_deferred_violation_is_a_conflict () =
   on_db
     [
       "create table t (n int, constraint u unique (n) deferrable initially \
        deferred)";
       "insert into t values (1)";
+    ] (fun db ->
+      let inserted = ref false in
+      let work db =
+        let* () = insert db 1 in
+        inserted := true;
+        Ok ()
+      in
+      (match T.within db work with
+      | Error (`Conflict name) ->
+          Alcotest.(check (option string)) "its constraint" (Some "u") name
+      | Error (`Not_committed m | `Db m | `Not_serializable m) ->
+          Alcotest.failf "not a conflict: %s" m
+      | Error ((`Connection `Closed | `Lost _) as e) ->
+          Alcotest.failf "the connection failed: %s" (S.error_to_string e)
+      | Ok () -> Alcotest.fail "a failed commit answered success");
+      Alcotest.(check bool) "the insert itself was let through" true !inserted;
+      Alcotest.(check int) "nothing was kept" 1 (committed db))
+
+(* A COMMIT refused for anything but a conflict -- a deferred trigger that
+   raises -- is not committed. *)
+let test_a_failed_commit_is_not_committed () =
+  on_db
+    [
+      "create table t (n int)";
+      "create function refuse() returns trigger language plpgsql as $$ begin \
+       raise exception 'refused'; end $$";
+      "create constraint trigger at_commit after insert on t deferrable \
+       initially deferred for each row execute function refuse()";
     ] (fun db ->
       (match T.within db (fun db -> insert db 1) with
       | Error (`Not_committed _) -> ()
@@ -1295,7 +1326,7 @@ let test_a_failed_commit_is_not_committed () =
       | Error ((`Connection `Closed | `Lost _) as e) ->
           Alcotest.failf "the connection failed: %s" (S.error_to_string e)
       | Ok () -> Alcotest.fail "a failed commit answered success");
-      Alcotest.(check int) "nothing was kept" 1 (committed db))
+      Alcotest.(check int) "nothing was kept" 0 (committed db))
 
 (* Postgres rolls an aborted transaction back without an error, so work
    that swallowed the failed statement would otherwise answer success. *)
@@ -1312,6 +1343,7 @@ let test_ok_from_an_aborted_transaction_is_not_committed () =
       | Error (`Not_committed _) -> ()
       | Error (`Not_serializable m | `Lost m) ->
           Alcotest.failf "not the commit's: %s" m
+      | Error (`Conflict _) -> Alcotest.fail "not the commit's: a conflict"
       | Ok () -> Alcotest.fail "a swallowed failure answered success")
 
 (* The warnings logged while [f] runs. *)
@@ -1735,6 +1767,8 @@ let () =
         ] );
       ( "transactions",
         [
+          Alcotest.test_case "a deferred violation is a conflict" `Quick
+            test_a_deferred_violation_is_a_conflict;
           Alcotest.test_case "a failed commit is not committed" `Quick
             test_a_failed_commit_is_not_committed;
           Alcotest.test_case "a lost commit is lost" `Quick

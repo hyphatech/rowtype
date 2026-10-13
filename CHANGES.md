@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Breaking: a unique, exclusion or foreign-key constraint declared
+  `DEFERRABLE` that refuses a write at `COMMIT` makes
+  `Pg.Transaction.within` answer `` `Conflict `` with the constraint's
+  name, as the same violation found by a statement does, where it
+  answered `` `Not_committed ``. `Pg.Transaction.failure` gains
+  `` `Conflict ``, so a match on what `within` answers handles it.
 - What a migration sets for its session -- a `set search_path`, a
   `set lock_timeout` -- ends with it: `up` resets the session after every
   migration, not only after a baseline, so a schema no longer depends on

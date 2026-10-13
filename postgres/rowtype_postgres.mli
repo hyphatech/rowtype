@@ -14,7 +14,8 @@
     from a commit. A result is read in binary wherever the driver reads its
     type, and in text on a connection that keeps no statements, which cannot be
     bound for binary. A unique, exclusion or foreign-key violation is
-    [`Conflict], with the constraint the server named.
+    [`Conflict], with the constraint the server named, whether a statement or a
+    deferred check at [COMMIT] found it.
 
     Each statement is a [debug] line on [rowtype-postgres] with how long it
     took: its first line of text, never its parameters. A statement runs on the
@@ -218,7 +219,13 @@ module Transaction : sig
     [ `Not_committed of string
       (** the transaction could not begin, its [COMMIT] failed, or the work
           answered [Ok] from a transaction a failed statement had aborted: in
-          words for the log *)
+          words for the log. Whether it committed is known: it did not. *)
+    | `Conflict of string option
+      (** its [COMMIT] found a deferred constraint refusing the write because of
+          other rows -- a unique key, an exclusion, a foreign key, declared
+          [DEFERRABLE] and checked there -- named as a statement's
+          {!Rowtype.error} names one checked at once, and the server rolled it
+          back *)
     | `Not_serializable of string
       (** its [COMMIT] found it could not be ordered with a concurrent
           transaction, as a statement's {!Rowtype.error} says when one does, and
@@ -263,18 +270,21 @@ module Transaction : sig
 
       [`Not_committed] replaces the work's answer when the transaction could not
       begin -- on a connection {!revive} could not make again, with its reason
-      --, when the server refused its [COMMIT], or when the work answered [Ok]
-      in a transaction a failed statement had already aborted -- an error the
-      work swallowed. [`Lost] replaces it when the connection failed with
-      [COMMIT] in flight, since what the server did is not known; a statement of
-      the work lost before it is the work's own answer, and did nothing, as the
-      transaction ended with its connection. A refusal from an aborted
-      transaction is the work's own answer and is kept, and a kept refusal there
-      keeps nothing it wrote, which a [warn] line says. A transaction already
-      open on the connection -- a [within] inside another -- is [`Not_committed]
-      before anything begins, since its [COMMIT] would end the outer one, and
-      the outer one goes on. Each [`Not_committed] and [`Lost] is an [error]
-      line on [rowtype-postgres]. A raise inside [work] rolls back and passes.
+      --, when the server refused its [COMMIT] for anything but a conflict, or
+      when the work answered [Ok] in a transaction a failed statement had
+      already aborted -- an error the work swallowed. [`Conflict] replaces it
+      when a deferred constraint refused the write at [COMMIT], as it would
+      answer from the statement had the constraint been checked there. [`Lost]
+      replaces it when the connection failed with [COMMIT] in flight, since what
+      the server did is not known; a statement of the work lost before it is the
+      work's own answer, and did nothing, as the transaction ended with its
+      connection. A refusal from an aborted transaction is the work's own answer
+      and is kept, and a kept refusal there keeps nothing it wrote, which a
+      [warn] line says. A transaction already open on the connection -- a
+      [within] inside another -- is [`Not_committed] before anything begins,
+      since its [COMMIT] would end the outer one, and the outer one goes on.
+      Each [`Not_committed] and [`Lost] is an [error] line on
+      [rowtype-postgres]. A raise inside [work] rolls back and passes.
 
       A fiber cancelled inside [work], at a statement or at any other effect,
       closes the connection, which ends the transaction with nothing kept, and

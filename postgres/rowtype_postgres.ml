@@ -672,7 +672,10 @@ module Transaction = struct
   type isolation = Read_committed | Repeatable_read | Serializable
 
   type failure =
-    [ `Not_committed of string | `Not_serializable of string | `Lost of string ]
+    [ `Not_committed of string
+    | `Conflict of string option
+    | `Not_serializable of string
+    | `Lost of string ]
 
   let error_to_string : [< failure | S.error ] -> string = function
     | `Not_committed m -> "the transaction was not committed: " ^ m
@@ -750,6 +753,10 @@ module Transaction = struct
                 not_committed "commit"
                   "the work answered Ok in a transaction a failed statement \
                    had aborted"
+            (* A deferred constraint is checked at COMMIT, which the server
+               refused and so rolled back: the conflict the same write is
+               when checked at once. *)
+            | Error (`Conflict name) -> Error (`Conflict name)
             | Error (`Not_serializable detail) ->
                 Error (`Not_serializable detail)
             | Error (`Lost detail) -> lost detail
@@ -768,6 +775,7 @@ module Transaction = struct
                       "a refusal that kept its write was rolled back: a \
                        statement in its transaction had failed");
                 Error e
+            | Error (`Conflict name) -> Error (`Conflict name)
             | Error (`Not_serializable detail) ->
                 Error (`Not_serializable detail)
             | Error (`Lost detail) -> lost detail

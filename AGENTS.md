@@ -86,7 +86,8 @@ Each rule comes with why it exists and the test that catches a break.
   value in a failure or a log`, in `test_errors`.
 - **A transaction's own failures are values.** One that could not begin or
   commit, or whose work answered `Ok` after a failed statement aborted it,
-  is `` `Not_committed ``, never a success. Why: Postgres rolls such a
+  is `` `Not_committed ``, never a success -- or `` `Conflict ``, named,
+  where a deferred constraint refused its `COMMIT`. Why: Postgres rolls such a
   transaction back in silence. Test: `transactions` in `test_rowtype`.
 - **The one module `open` is `open Shape` in `src/rowtype.ml`**, and the
   one local open a span's, `Mtime.Span.(5 * s)`. Why: the walk exists to

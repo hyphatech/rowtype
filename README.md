@@ -163,9 +163,11 @@ A transaction is the backend's, since each database runs one its own
 way: `rowtype` runs none, and `Pg.Transaction.within` is the Postgres
 backend's. `Ok` commits and `Error` rolls back. A transaction that could not commit is
 `` `Not_committed ``, never a silent success, and one whose `COMMIT` was
-sent with no answer back is `` `Lost ``: it may have committed. The transaction's own failures
+sent with no answer back is `` `Lost ``: it may have committed. A
+`DEFERRABLE` constraint that refuses the write at `COMMIT` is
+`` `Conflict ``, named, as it is when a statement finds it. The transaction's own failures
 are `Pg.Transaction.failure`, so a caller whose errors are an ordinary
-variant tells them from its own in one arm:
+variant tells them from its own:
 
 ```ocaml
 match
@@ -174,6 +176,7 @@ match
 with
 | Ok v -> Ok v
 | Error (`Work e) -> Error e
+| Error (`Conflict name) -> Error (Taken name)
 | Error (#Pg.Transaction.failure as f) -> Error (Unavailable f)
 ```
 
