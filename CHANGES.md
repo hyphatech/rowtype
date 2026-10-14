@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.8.0 (2026-10-14)
 
 - Breaking: `Rowtype_migrate.create`, `drop`, `dump` and `squash` take the
   capabilities they use -- `~sw`, `~net`, `~mono_clock`, and `~process_mgr`
