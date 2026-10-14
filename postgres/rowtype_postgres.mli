@@ -3,19 +3,19 @@
 
     Statements are Postgres's as written, [$1] for a shape's first value. An
     {!Rowtype.instant} is a [timestamptz], which keeps the microsecond too, sent
-    as ISO 8601 in UTC and read back whatever the session's time zone, so a
-    connection is asked for [DateStyle=ISO], and for [IntervalStyle=postgres],
-    the style an interval's text is read in. Years 1 to 9999: within a day of
-    either end, a session far from UTC prints a year that a connection reading
-    text cannot read. A value its scalar cannot hold -- infinity, a year outside
-    them, an [int8] past an [int]'s 63 bits -- is refused as what it is, saying
-    what reads it instead. A [COMMIT] of a transaction a failed statement
-    aborted is rolled back without an error, which {!Transaction.within} tells
-    from a commit. A result is read in binary wherever the driver reads its
-    type, and in text on a connection that keeps no statements, which cannot be
-    bound for binary. A unique, exclusion or foreign-key violation is
-    [`Conflict], with the constraint the server named, whether a statement or a
-    deferred check at [COMMIT] found it.
+    as ISO 8601 in UTC and read back whatever the session's time zone, which the
+    driver reads in the styles it sets on every connection ([DateStyle=ISO],
+    [IntervalStyle=postgres]). Years 1 to 9999: within a day of either end, a
+    session far from UTC prints a year that a connection reading text cannot
+    read. A value its scalar cannot hold -- infinity, a year outside them, an
+    [int8] past an [int]'s 63 bits -- is refused as what it is, saying what
+    reads it instead. A [COMMIT] of a transaction a failed statement aborted is
+    rolled back without an error, which {!Transaction.within} tells from a
+    commit. A result is read in binary wherever the driver reads its type, and
+    in text on a connection that keeps no statements, which cannot be bound for
+    binary. A unique, exclusion or foreign-key violation is [`Conflict], with
+    the constraint the server named, whether a statement or a deferred check at
+    [COMMIT] found it.
 
     Each statement is a [debug] line on [rowtype-postgres] with how long it
     took: its first line of text, never its parameters. A statement runs on the
@@ -28,7 +28,10 @@
     nobody. *)
 
 module Conninfo = Postgres_eio.Conninfo
-(** Connection strings, both forms. *)
+(** What a connection is made to: read from a connection string, either form, by
+    [Conninfo.of_string], and moved to another database by
+    [Conninfo.with_database]. Its [connect_timeout] bounds each address tried,
+    which [Conninfo.with_connect_timeout] sets. *)
 
 type conn
 (** An open connection. *)
@@ -65,14 +68,6 @@ val copy_in :
     statement. For a few rows, an [insert] of [unnest]ed arrays is one statement
     too. *)
 
-val conninfo : string -> (Conninfo.t, [> Rowtype.error ]) result
-(** A connection string read, or what in it could not be. *)
-
-val on_database : server:string -> string -> (string, [> Rowtype.error ]) result
-(** [on_database ~server name]: the connection string [server], naming the
-    database [name] instead, as a URL -- the server's own [postgres] to make or
-    drop a database, or a database of a test's own. *)
-
 val connect :
   sw:Eio.Switch.t ->
   net:_ Eio.Net.t ->
@@ -84,10 +79,10 @@ val connect :
   Conninfo.t ->
   (conn, [> Rowtype.error ]) result
 (** One connection, as [Postgres_eio.connect] makes it, every option passed
-    through but two of [parameters]: [DateStyle] is always [ISO] and
-    [IntervalStyle] [postgres], whatever is given, since they are how a date and
-    an interval read in text. [observe] is around each statement it runs, a
-    transaction's [begin] and [commit] among them, and nothing unless given. *)
+    through: a parameter setting one of the styles the driver reads text in
+    another way is refused, as the driver refuses it. [observe] is around each
+    statement it runs, a transaction's [begin] and [commit] among them, and
+    nothing unless given. *)
 
 val close : conn -> unit
 (** Close it for good, telling the server; its next statement says so, and
@@ -128,9 +123,8 @@ module Pool : sig
     ?observe:observer ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
-  (** As [Postgres_eio.Pool.create], every option passed through but the two
-      output styles {!connect} keeps; [observe] is {!connect}'s, for every
-      connection it lends. *)
+  (** As [Postgres_eio.Pool.create], every option passed through; [observe] is
+      {!connect}'s, for every connection it lends. *)
 
   type error =
     [ `Pool of
@@ -142,9 +136,6 @@ module Pool : sig
   (** As [Postgres_eio.Pool.use]: [`Pool `Busy] if no connection came free
       within the wait, and [`Pool `Closed] at once if the pool is closed, or
       closes while the borrow waits. *)
-
-  val error_to_string : [< error ] -> string
-  (** An {!error} in words for a log. *)
 
   type stats = Postgres_eio.Pool.stats = {
     size : int;
@@ -178,11 +169,11 @@ module Listener : sig
     mono_clock:_ Eio.Time.Mono.t ->
     ?parameters:(string * string) list ->
     ?timeout:Mtime.Span.t ->
-    ?heartbeat:Mtime.Span.t ->
+    ?keep_alive:Mtime.Span.t ->
     Conninfo.t ->
     (t, [> Rowtype.error ]) result
   (** A connection that only listens, made as [Postgres_eio.Listener.connect]
-      makes one, [parameters] and [timeout] passed through; [heartbeat] is how
+      makes one, [parameters] and [timeout] passed through; [keep_alive] is how
       long {!next} waits in silence before it pings the server, 10 s unless
       given. *)
 
@@ -233,15 +224,14 @@ module Transaction : sig
     | `Lost of string
       (** its [COMMIT] was sent and the connection failed before the answer
           came: it may have committed, as a statement's {!Rowtype.error} says of
-          a write lost in flight *) ]
+          a write lost in flight *)
+    | `Unsent of string
+      (** it never began: its connection, lost before it, could not be made
+          again -- nothing answered -- so nothing of the work was sent, and
+          running it again is safe *) ]
   (** The transaction's own failures, which {!within} adds to the work's: a
       caller tells them from its own as [#Transaction.failure], and names them
       in an error type of its own as [[ my_error | Transaction.failure ]]. *)
-
-  val error_to_string : [< failure | Rowtype.error ] -> string
-  (** In words for a log, which never hold a parameter's value: a statement's
-      failure as {!Rowtype.error_to_string} tells it, so what {!within} answers
-      of the work's statements and of its own is told in one call. *)
 
   val within :
     ?keep:('e -> bool) ->
@@ -268,23 +258,25 @@ module Transaction : sig
       does nothing but its statements: a message sent or a counter moved inside
       it happens once for every attempt.
 
-      [`Not_committed] replaces the work's answer when the transaction could not
-      begin -- on a connection {!revive} could not make again, with its reason
-      --, when the server refused its [COMMIT] for anything but a conflict, or
-      when the work answered [Ok] in a transaction a failed statement had
-      already aborted -- an error the work swallowed. [`Conflict] replaces it
-      when a deferred constraint refused the write at [COMMIT], as it would
-      answer from the statement had the constraint been checked there. [`Lost]
-      replaces it when the connection failed with [COMMIT] in flight, since what
-      the server did is not known; a statement of the work lost before it is the
-      work's own answer, and did nothing, as the transaction ended with its
-      connection. A refusal from an aborted transaction is the work's own answer
-      and is kept, and a kept refusal there keeps nothing it wrote, which a
-      [warn] line says. A transaction already open on the connection -- a
-      [within] inside another -- is [`Not_committed] before anything begins,
-      since its [COMMIT] would end the outer one, and the outer one goes on.
-      Each [`Not_committed] and [`Lost] is an [error] line on
-      [rowtype-postgres]. A raise inside [work] rolls back and passes.
+      [`Unsent] replaces the work's answer when the transaction could not begin
+      on a connection {!revive} could not reach. [`Not_committed] replaces it
+      when the transaction could not begin otherwise -- on a connection the
+      server refused to make again, with its reason --, when the server refused
+      its [COMMIT] for anything but a conflict, or when the work answered [Ok]
+      in a transaction a failed statement had already aborted -- an error the
+      work swallowed. [`Conflict] replaces it when a deferred constraint refused
+      the write at [COMMIT], as it would answer from the statement had the
+      constraint been checked there. [`Lost] replaces it when the connection
+      failed with [COMMIT] in flight, since what the server did is not known; a
+      statement of the work lost before it is the work's own answer, and did
+      nothing, as the transaction ended with its connection. A refusal from an
+      aborted transaction is the work's own answer and is kept, and a kept
+      refusal there keeps nothing it wrote, which a [warn] line says. A
+      transaction already open on the connection -- a [within] inside another --
+      is [`Not_committed] before anything begins, since its [COMMIT] would end
+      the outer one, and the outer one goes on. Each [`Not_committed] and
+      [`Lost] is an [error] line on [rowtype-postgres]. A raise inside [work]
+      rolls back and passes.
 
       A fiber cancelled inside [work], at a statement or at any other effect,
       closes the connection, which ends the transaction with nothing kept, and
@@ -321,7 +313,18 @@ val verify :
     refuse what is right. A NULL a shape does not allow fails where it is read,
     naming its column. *)
 
-val error_to_string :
-  [< `Disagreements of string list | Rowtype.error ] -> string
-(** What {!verify} answers, in words for a person: every disagreement, and a
-    statement's failure as {!Rowtype.error_to_string} tells it. *)
+type error =
+  [ Rowtype.error
+  | `Disagreements of string list
+  | Pool.error
+  | Transaction.failure ]
+(** Every failure this backend answers: a statement's, {!verify}'s, a pool's and
+    a transaction's, which join in one result -- a transaction in a borrowed
+    connection is
+    [Result.join (Pool.use pool (fun db -> Transaction.within db work))]. *)
+
+val error_to_string : [< error ] -> string
+(** In words for a person, which never hold a parameter's value: every
+    disagreement {!verify} found, a pool's state and a transaction's own
+    failure, and a statement's failure as {!Rowtype.error_to_string} tells it.
+*)

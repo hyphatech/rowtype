@@ -218,11 +218,12 @@ let array_of (Shape a) =
 let conv_of (Shape a) =
   Shape
     {
-      ty = S.conv a.ty ~of_:(fun x -> `Wrapped x) ~to_:(fun (`Wrapped x) -> x);
+      ty =
+        S.map a.ty ~parse:(fun x -> `Wrapped x) ~print:(fun (`Wrapped x) -> x);
       gen = QCheck.Gen.map (fun x -> `Wrapped x) a.gen;
       equal = (fun (`Wrapped x) (`Wrapped y) -> a.equal x y);
       print = (fun (`Wrapped x) -> "Wrapped " ^ a.print x);
-      name = Printf.sprintf "conv (%s)" a.name;
+      name = Printf.sprintf "map (%s)" a.name;
       all_null = (fun (`Wrapped x) -> a.all_null x);
     }
 
@@ -289,8 +290,10 @@ let test_an_array_of_arrays_is_refused () =
     | Error (`Db m) ->
         Alcotest.(check string)
           what "an array's element is one column and no array of its own" m
-    | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
-      ->
+    | Error
+        ( `Conflict _ | `Not_serializable _
+        | `Connection `Closed
+        | `Lost _ | `Unsent _ ) ->
         Alcotest.failf "%s: not the shape's error" what
     | Ok _ -> Alcotest.failf "%s: passed" what
   in
@@ -304,9 +307,12 @@ let test_an_array_of_arrays_is_refused () =
 let test_an_unknown_label_is_refused () =
   let refused what = function
     | Error (`Db m) ->
-        Alcotest.(check string) what "column 1: unreadable value" m
-    | Error (`Conflict _ | `Not_serializable _ | `Connection `Closed | `Lost _)
-      ->
+        Alcotest.(check string)
+          what "column 1: a label none of the values has" m
+    | Error
+        ( `Conflict _ | `Not_serializable _
+        | `Connection `Closed
+        | `Lost _ | `Unsent _ ) ->
         Alcotest.failf "%s: not the shape's error" what
     | Ok _ -> Alcotest.failf "%s: read" what
   in

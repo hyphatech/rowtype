@@ -1,5 +1,74 @@
 # Changes
 
+## Unreleased
+
+- Breaking: `rowtype-postgres` needs postgres-eio 0.5.0. `Pg.Listener.connect`'s
+  `?heartbeat` is `?keep_alive`, the word the driver uses. The driver now
+  sets `DateStyle`, `IntervalStyle`, `client_encoding` and
+  `extra_float_digits` on every connection itself, so `Pg.connect`,
+  `Pg.Pool.create` and `Pg.Listener.connect` refuse, as `` `Db ``, a
+  parameter giving one of them another value, where the two styles were
+  silently overridden; the other two were not set at all, so text in a
+  database whose encoding is not UTF-8 was misread, and a float read in
+  text from a server set to `extra_float_digits=0` came back rounded.
+- A statement whose fiber is cancelled is cancelled at the server once:
+  the driver asks, and the second request this library sent on top of it
+  is gone.
+- Breaking: a connection target is a `Pg.Conninfo.t` everywhere, and is
+  read by `Pg.Conninfo.of_string` alone. `Rowtype_postgres.conninfo`, a
+  second reading of a connection string, and `on_database`, which wrote
+  one naming another database, are gone: `Pg.Conninfo.of_string` and
+  `Pg.Conninfo.with_database` do both. `Rowtype_migrate`'s `run`,
+  `create`, `drop`, `dump` and `squash` take a `Pg.Conninfo.t` where they
+  took a URL, which the command reads once.
+- `Rowtype_migrate.apply` stops with the new `` `Lock `Lost `` where its
+  connection was lost between two migrations, where it went on applying
+  them on a connection made again that no longer held the advisory lock,
+  beside any other process migrating, and answered `Ok`.
+- Breaking: a database made from a baseline holds the baseline to its
+  text, as any migration: an edited baseline is refused as
+  `` `Record (`Edited _) `` where it was accepted, its version taken for
+  history. A database that recorded the migration the baseline replaced
+  still compares nothing up to it.
+- `Rowtype_migrate.run`, and so every command, bounds the connect and
+  nothing after it, as it says: a statement ran into the driver's 30 s
+  bound on every read, so a `create database` that took longer, or any
+  statement outside `apply`, which lifts it, was cut off.
+- Breaking: one word for one thing across the libraries.
+  `Rowtype_migrate.run`, which applies migrations, is
+  `Rowtype_migrate.apply`, and `run` is the bracket that was
+  `with_connection`, as spindle's `run` is: `run env target f` makes a
+  connection on a switch of its own, the network and the monotonic clock
+  taken from `env`, and closes it when `f` returns. `create`, `drop`,
+  `dump` and `squash` take `env` the same way, where they took `~sw`,
+  `~net`, `~mono_clock` and `~process_mgr`, and own the switch their
+  connections live on: `Rowtype_migrate.dump env ~pg_dump ~restrict_key
+  ~migrations target`.
+- Breaking: `Rowtype_postgres.error` names every failure the backend
+  answers -- a statement's, `verify`'s `` `Disagreements ``, a pool's
+  and a transaction's own -- and `Rowtype_postgres.error_to_string` tells
+  all of them, so a transaction in a borrowed connection, joined into one
+  result, is told in one call. `Pg.Pool.error_to_string` and
+  `Pg.Transaction.error_to_string`, which each told a part, are gone.
+- Breaking: a shape over a type of your own is spelt as wiretype spells
+  one: `S.conv ty ~of_ ~to_` is `S.map ty ~parse ~print`, and
+  `S.parse ty ~of_ ~to_` is `S.parse ty ~parse ~print`, whose `~parse`
+  answers `(_, string) result` where it answered an option. A value it
+  refuses is the row's `` `Db `` error naming the column, followed by
+  `~parse`'s sentence, where it said only "unreadable value".
+- Breaking: `Rowtype.error` gains `` `Unsent of string ``, the word every
+  Hypha library uses for work that never went out, so trying again is
+  safe. A connection that could not be made -- by `Pg.connect`,
+  `Pg.Pool.create`, `Pg.Listener.connect`, or `Pg.revive` and the revival
+  `Pg.Transaction.within` makes before it begins -- because nothing
+  answered is `` `Unsent ``, where it was `` `Db ``, and
+  `Pg.Transaction.failure` gains it, where `within` answered
+  `` `Not_committed ``. A server that refused the connection is still
+  `` `Db ``, and `within` on it `` `Not_committed ``.
+- A listener's `listen`, `unlisten` or `next` sent with no answer back --
+  a timeout, a broken socket -- is `` `Lost ``, as a statement's is, where
+  it was `` `Db ``.
+
 ## 0.6.0 (2026-10-13)
 
 - Breaking: `rowtype-postgres` needs postgres-eio 0.4.0, whose

@@ -5,6 +5,7 @@ type error =
   | `Not_serializable of string
   | `Connection of [ `Closed ]
   | `Lost of string
+  | `Unsent of string
   | `Db of string ]
 
 let error_to_string : [< error ] -> string = function
@@ -12,7 +13,7 @@ let error_to_string : [< error ] -> string = function
   | `Conflict None -> "a constraint refused it"
   | `Not_serializable m -> m
   | `Connection `Closed -> "the connection is closed"
-  | `Lost m -> m
+  | `Lost m | `Unsent m -> m
   | `Db m -> m
 
 (* ------------------------------------------------------------------ *)
@@ -67,7 +68,7 @@ let t8 = Shape.t8
 let t9 = Shape.t9
 let t10 = Shape.t10
 let t11 = Shape.t11
-let conv = Shape.conv
+let map = Shape.map
 let parse = Shape.parse
 let enum = Shape.enum
 let arity = Shape.arity
@@ -148,7 +149,7 @@ let rec holds_array : type a. a ty -> bool = function
   | Array _ -> true
   | Opt t -> holds_array t
   | Pair (a, b) -> holds_array a || holds_array b
-  | Conv (t, _, _) -> holds_array t
+  | Map (t, _, _) -> holds_array t
   | Parse (t, _, _) -> holds_array t
 
 (* An array's element is one column and no array of its own: a list of
@@ -176,8 +177,8 @@ module Make (B : Backend) = struct
         let* xs = encode a x in
         let* ys = encode b y in
         Ok (xs @ ys)
-    | Conv (t, _, to_), x -> encode t (to_ x)
-    | Parse (t, _, to_), x -> encode t (to_ x)
+    | Map (t, _, print), x -> encode t (print x)
+    | Parse (t, _, print), x -> encode t (print x)
     | Array t, xs ->
         if not (element t) then Error not_element
         else
@@ -252,14 +253,12 @@ module Make (B : Backend) = struct
         let* x, j = decode ~name a cells i in
         let* y, k = decode ~name b cells j in
         Ok ((x, y), k)
-    | Conv (t, of_, _) ->
+    | Map (t, parse, _) ->
         let* x, j = decode ~name t cells i in
-        Ok (of_ x, j)
-    | Parse (t, of_, _) -> (
+        Ok (parse x, j)
+    | Parse (t, parse, _) -> (
         let* x, j = decode ~name t cells i in
-        match of_ x with
-        | Some y -> Ok (y, j)
-        | None -> refused ~name i "unreadable value")
+        match parse x with Ok y -> Ok (y, j) | Error m -> refused ~name i m)
     | Array t -> (
         let* c = non_null ~name cells i in
         if not (element t) then Error not_element
@@ -406,7 +405,7 @@ let rec columns : type a. a ty -> column list = function
   | Scalar s -> [ Column s ]
   | Opt t -> columns t
   | Pair (a, b) -> columns a @ columns b
-  | Conv (t, _, _) -> columns t
+  | Map (t, _, _) -> columns t
   | Parse (t, _, _) -> columns t
   | Array t -> [ Array_of (columns t) ]
 

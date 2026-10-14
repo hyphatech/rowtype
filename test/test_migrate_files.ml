@@ -2,6 +2,7 @@
    new one, and what a squash refuses before it connects. *)
 
 module C = Rowtype_migrate
+module Conninfo = Rowtype_postgres.Conninfo
 
 let check_string = Alcotest.(check string)
 let words = C.error_to_string
@@ -251,14 +252,13 @@ let test_a_version_is_fourteen_digits () =
    why the URL names no server. *)
 let test_a_squash_refuses_what_it_cannot_squash () =
   Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   let squash ~through migrations =
     match
-      C.squash ~sw ~net:(Eio.Stdenv.net env)
-        ~mono_clock:(Eio.Stdenv.mono_clock env)
-        ~process_mgr:(Eio.Stdenv.process_mgr env)
-        ~pg_dump:"pg_dump" ~restrict_key:"rowtype" ~through:(version through)
-        ~migrations "postgres://nowhere.invalid/x"
+      C.squash env ~pg_dump:"pg_dump" ~restrict_key:"rowtype"
+        ~through:(version through) ~migrations
+        (match Conninfo.of_string "postgres://u@nowhere.invalid/x" with
+        | Ok c -> c
+        | Error m -> Alcotest.fail m)
     with
     | Ok _ -> "squashed"
     | Error (`Invalid_argument _) -> "invalid"

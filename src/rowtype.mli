@@ -56,6 +56,10 @@ type error =
         known or doing it twice is harmless. Inside a transaction, a statement
         lost before its [COMMIT] did nothing, since an open transaction ends
         with its connection; only a lost [COMMIT] may have committed. *)
+  | `Unsent of string
+    (** the work never went out -- a connection that could not be made, or made
+        again, before it was sent -- in words for a log: nothing was done, so
+        trying again is safe *)
   | `Db of string  (** anything else, in words for a log *) ]
 (** A polymorphic variant, so a statement's failures join the ones a caller adds
     around it -- a pool's, a transaction's, the work's own -- in one result:
@@ -126,12 +130,12 @@ val opt : 'a ty -> 'a option ty
 val array : 'a ty -> 'a list ty
 (** One column holding a list, each value of the element's shape: [array int]
     for a [smallint[]], [array (opt float)] for a [real[]] that holds NULLs,
-    [array key] for keys read through their own parse. An element is one column
-    and no array of its own -- one dimension, as a list has -- and any other is
-    the statement's [`Db] error, which a backend's check of statements names
-    before any runs. A list has no first index: an array is read in order from
-    wherever the database starts it, and one written starts where the database
-    starts a new one. *)
+    [array key] for keys read through their own {!parse}. An element is one
+    column and no array of its own -- one dimension, as a list has -- and any
+    other is the statement's [`Db] error, which a backend's check of statements
+    names before any runs. A list has no first index: an array is read in order
+    from wherever the database starts it, and one written starts where the
+    database starts a new one. *)
 
 val t2 : 'a ty -> 'b ty -> ('a * 'b) ty
 val t3 : 'a ty -> 'b ty -> 'c ty -> ('a * 'b * 'c) ty
@@ -209,14 +213,19 @@ val t11 :
   'k ty ->
   ('a * 'b * 'c * 'd * 'e * 'f * 'g * 'h * 'i * 'j * 'k) ty
 
-val conv : 'a ty -> of_:('a -> 'b) -> to_:('b -> 'a) -> 'b ty
-(** Map a shape onto a record or variant, so a row decodes straight into the
-    type the rest of the code wants. *)
+val map : 'a ty -> parse:('a -> 'b) -> print:('b -> 'a) -> 'b ty
+(** [map ty ~parse ~print]: a shape over a type of the program's own -- a
+    record, a variant -- read from what [ty] reads by [parse] and written back
+    by [print], so a row decodes straight into the type the rest of the code
+    wants. *)
 
-val parse : 'a ty -> of_:('a -> 'b option) -> to_:('b -> 'a) -> 'b ty
-(** As {!conv}, for a value the database may hold and this program may not be
-    able to read -- a key, a code. A row whose value [of_] refuses is a decode
-    error naming the column, exactly as a type mismatch is. *)
+val parse :
+  'a ty -> parse:('a -> ('b, string) result) -> print:('b -> 'a) -> 'b ty
+(** As {!map}, for a value the database may hold and this program may not be
+    able to read -- a key, a code. A row whose value [parse] refuses is a decode
+    error naming the column, exactly as a type mismatch is, followed by
+    [parse]'s sentence, which says what the value is not and never the value,
+    since a failure reaches a log. *)
 
 val enum : ('a -> string) -> 'a list -> 'a ty
 (** [enum label values]: a column of a type with a closed set of labels -- an
@@ -355,8 +364,9 @@ module type Backend = sig
   (** The failure told as {!type-error}: a constraint refusing the write because
       of other rows is [`Conflict], naming the constraint where the database
       does; a connection closed before the statement was sent is
-      [`Connection `Closed], and one that failed with it in flight [`Lost]; and
-      anything else is [`Db] in words for a log -- never a parameter's value. *)
+      [`Connection `Closed], one that could not be made, so nothing was sent,
+      [`Unsent], and one that failed with it in flight [`Lost]; and anything
+      else is [`Db] in words for a log -- never a parameter's value. *)
 end
 
 (** What {!Make} gives: statements run on a backend's connection. *)

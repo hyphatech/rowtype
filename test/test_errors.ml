@@ -21,7 +21,13 @@ let exec db sql = Pg.run db (S.exec ~params:S.unit sql) ()
 
 (* A failure as the test reads it: which variant, and for a conflict the
    constraint. *)
-type told = Conflict of string option | Not_serializable | Closed | Lost | Db
+type told =
+  | Conflict of string option
+  | Not_serializable
+  | Closed
+  | Lost
+  | Unsent
+  | Db
 
 let told = function
   | Ok () -> Alcotest.fail "the statement succeeded"
@@ -29,6 +35,7 @@ let told = function
   | Error (`Not_serializable _) -> Not_serializable
   | Error (`Connection `Closed) -> Closed
   | Error (`Lost _) -> Lost
+  | Error (`Unsent _) -> Unsent
   | Error (`Db _) -> Db
 
 let print_told = function
@@ -37,14 +44,19 @@ let print_told = function
   | Not_serializable -> "Not_serializable"
   | Closed -> "Closed"
   | Lost -> "Lost"
+  | Unsent -> "Unsent"
   | Db -> "Db"
 
 let equal_told a b =
   match (a, b) with
   | Conflict x, Conflict y -> Option.equal String.equal x y
-  | Not_serializable, Not_serializable | Closed, Closed | Lost, Lost | Db, Db ->
+  | Not_serializable, Not_serializable
+  | Closed, Closed
+  | Lost, Lost
+  | Unsent, Unsent
+  | Db, Db ->
       true
-  | (Conflict _ | Not_serializable | Closed | Lost | Db), _ -> false
+  | (Conflict _ | Not_serializable | Closed | Lost | Unsent | Db), _ -> false
 
 let told_t =
   Alcotest.testable
@@ -238,23 +250,21 @@ let test_every_failure_has_its_words () =
       `Not_serializable "could not serialize access";
       `Connection `Closed;
       `Lost "the connection timed out";
+      `Unsent "no address answered";
       `Db "relation \"users\" does not exist";
     ]
   in
   List.iter
     (fun e ->
-      let words = S.error_to_string e in
-      told "a statement's failure, in a transaction" words
-        (Pg.Transaction.error_to_string e);
-      told "a statement's failure, from verify" words (Pg.error_to_string e))
+      told "a statement's failure, as the backend tells it"
+        (S.error_to_string e) (Pg.error_to_string e))
     statements;
   told "not committed"
     "the transaction was not committed: commit: the server refused it"
-    (Pg.Transaction.error_to_string
-       (`Not_committed "commit: the server refused it"));
+    (Pg.error_to_string (`Not_committed "commit: the server refused it"));
   told "busy" "no connection came free within the pool's wait"
-    (Pg.Pool.error_to_string (`Pool `Busy));
-  told "closed" "the pool is closed" (Pg.Pool.error_to_string (`Pool `Closed));
+    (Pg.error_to_string (`Pool `Busy));
+  told "closed" "the pool is closed" (Pg.error_to_string (`Pool `Closed));
   told "connection closed" "the connection is closed"
     (S.error_to_string (`Connection `Closed));
   told "disagreements"

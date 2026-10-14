@@ -21,8 +21,7 @@ type ownership = Kept | Closed_by_owner
 
 (* A connection, what watches the statements it runs, which a pool hands
    to every connection it lends, and the monotonic clock a statement is
-   timed on and a cancelled one's request bounded by, which a wall clock
-   that jumps cannot move. *)
+   timed on, which a wall clock that jumps cannot move. *)
 type conn = {
   pg : Pg.t;
   observe : observer;
@@ -59,15 +58,24 @@ let timed t sql f =
    value it refused -- [invalid input syntax for type integer: "..."] --
    and a value may be a token, so its words are the code's, not the
    server's. *)
-let db_error = function
-  | Pg.Server e
-    when String.starts_with ~prefix:"22" (Pg.Server_error.sqlstate e) ->
-      `Db
-        (Printf.sprintf
-           "ERROR %s: a value the database could not take (its words are left \
-            out, since they quote the value)"
-           (Pg.Server_error.sqlstate e))
-  | e -> `Db (Pg.error_to_string e)
+let words : [< Pg.error ] -> string = function
+  | `Server e when String.starts_with ~prefix:"22" (Pg.Server_error.sqlstate e)
+    ->
+      Printf.sprintf
+        "ERROR %s: a value the database could not take (its words are left \
+         out, since they quote the value)"
+        (Pg.Server_error.sqlstate e)
+  | e -> Pg.error_to_string e
+
+(* The driver's failure as a statement's, where nothing more is known of
+   it: the driver already tells work lost in flight from work never sent
+   -- a connection closed, or one that could not be made -- in the words
+   this library uses, and anything else is [`Db]. *)
+let db_error : Pg.error -> [> S.error ] = function
+  | `Lost m -> `Lost m
+  | `Unsent m -> `Unsent m
+  | `Connection `Closed -> `Connection `Closed
+  | (`Server _ | `Refused _) as e -> `Db (words e)
 
 (* The built-in types by their oids in pg_type, which are fixed: what the
    server writes for a column's type in a description. *)
@@ -164,35 +172,6 @@ let beyond : type a. a S.scalar -> string option =
     ->
       None
 
-(* A statement on a connection already closed is never sent, which is what
-   tells a failure that did nothing from one whose statement was in flight.
-   The driver answers [Closed] to both, and a connection is one fiber's, so
-   asking first cannot race. *)
-type failure = Unsent | Failed of Pg.error
-
-(* How long a cancelled fiber waits for the server to take its cancel
-   request, a new connection's worth of round trips: past it the fiber
-   goes, and the statement runs on as it would have without asking. *)
-let cancel_request = Mtime.Span.(5 * s)
-
-(* A fiber cancelled with its statement in flight leaves the statement
-   running: the driver closes the socket, and the server notices only when
-   it next writes. So the server is asked to cancel it, over a connection
-   of its own, as a pool does for a borrower cancelled; with nothing
-   running the request does nothing. *)
-let send t f =
-  if Pg.closed t.pg then Error Unsent
-  else
-    match f t.pg with
-    | answer -> Result.map_error (fun e -> Failed e) answer
-    | exception (Eio.Cancel.Cancelled _ as ex) ->
-        let trace = Printexc.get_raw_backtrace () in
-        Eio.Cancel.protect (fun () ->
-            Eio.Fiber.first
-              (fun () -> ignore (Pg.cancel t.pg : (unit, Pg.error) result))
-              (fun () -> Eio.Time.Mono.sleep_span t.clock cancel_request));
-        Printexc.raise_with_backtrace ex trace
-
 (* A FATAL or a PANIC ends the session, and the server sends it in place
    of the statement's answer. *)
 let ends_session e =
@@ -216,7 +195,7 @@ module Backend = struct
     | Element of Pg.Column.t * string * Pg.Oid.t
     | Undescribed
 
-  type nonrec failure = failure
+  type failure = Pg.error
 
   let null = None
 
@@ -323,20 +302,18 @@ module Backend = struct
       (* A Bind names each column's format, which only a statement the
          connection described and kept can say: a connection that keeps
          none, behind a pooler that cannot carry them, reads text. *)
-      ( send t @@ fun pg ->
-        Pg.query pg sql ~params
-          ~binary:(Pg.statement_cache pg > 0)
-          ~columns:(fun described -> columns := described)
-          ~init
-          ~row:(fun acc cells ->
-            row acc (Array.mapi (fun i c -> Option.map (cell i) c) cells)) )
+      (Pg.query t.pg sql ~params
+         ~binary:(Pg.statement_cache t.pg > 0)
+         ~columns:(fun described -> columns := described)
+         ~init
+         ~row:(fun acc cells ->
+           row acc (Array.mapi (fun i c -> Option.map (cell i) c) cells)))
 
   let batch t sql params =
     timed t sql @@ fun () ->
-    Result.map ignore (send t (fun pg -> Pg.execute_many pg sql ~params))
+    Result.map ignore (Pg.execute_many t.pg sql ~params)
 
-  let script t sql =
-    timed t sql @@ fun () -> send t (fun pg -> Pg.script pg sql)
+  let script t sql = timed t sql @@ fun () -> Pg.script t.pg sql
 
   (* Every element quoted, a quote and a backslash in it escaped, so no text
      can end it early; a NULL unquoted, which is what makes it one. *)
@@ -477,25 +454,19 @@ module Backend = struct
      has two. *)
   let other_rows = [ "23505"; "23P01"; "23503"; "23001" ]
 
-  (* A statement sent and no answer back is [`Lost]: the driver timed out
-     or the socket broke, or the server ended the session -- a FATAL or a
-     PANIC, which it sends instead of the statement's answer. Whether the
-     statement ran is not known. *)
-  let error = function
-    | Unsent -> `Connection `Closed
-    | Failed (Pg.Server e as failure) when ends_session e ->
-        `Lost (Pg.error_to_string failure)
-    | Failed (Pg.Server e) when List.mem (Pg.Server_error.sqlstate e) other_rows
-      ->
+  (* The server ends the session with a FATAL or a PANIC, which it sends
+     instead of the statement's answer: sent, and no answer back, as the
+     driver's own [`Lost] is. Whether the statement ran is not known. *)
+  let error : failure -> [> S.error ] = function
+    | `Server e when ends_session e -> `Lost (Pg.error_to_string (`Server e))
+    | `Server e when List.mem (Pg.Server_error.sqlstate e) other_rows ->
         `Conflict (Pg.Server_error.constraint_name e)
     (* 40001 is SQL's serialization failure and 40P01 Postgres's deadlock:
        the two a transaction run again may get past. *)
-    | Failed (Pg.Server e as failure)
-      when List.mem (Pg.Server_error.sqlstate e) [ "40001"; "40P01" ] ->
-        `Not_serializable (Pg.error_to_string failure)
-    | Failed ((Pg.Timeout | Pg.Closed | Pg.Io _ | Pg.Protocol _) as e) ->
-        `Lost (Pg.error_to_string e)
-    | Failed ((Pg.Server _ | Pg.Refused _) as e) -> db_error e
+    | `Server e when List.mem (Pg.Server_error.sqlstate e) [ "40001"; "40P01" ]
+      ->
+        `Not_serializable (Pg.error_to_string (`Server e))
+    | e -> db_error e
 end
 
 module Run = Rowtype.Make (Backend)
@@ -533,8 +504,7 @@ let copy_in t ?schema ~table ~columns row rows =
     in
     match
       timed t sql @@ fun () ->
-      send t @@ fun pg ->
-      Pg.copy_in_rows pg ?schema ~table ~columns (Seq.map cells rows)
+      Pg.copy_in_rows t.pg ?schema ~table ~columns (Seq.map cells rows)
     with
     | Ok tag -> Ok (Option.value (Pg.Tag.rows tag) ~default:0)
     | Error f -> Error (Backend.error f)
@@ -543,39 +513,18 @@ let copy_in t ?schema ~table ~columns row rows =
 (* ------------------------------------------------------------------ *)
 (* Connections *)
 
-(* The driver reads a date or an instant in text only as [DateStyle=ISO]
-   writes it, and an interval only as [IntervalStyle=postgres] does, and a
-   connection that keeps no statements reads every cell in text, so every
-   connection asks for both, over any style the caller named. *)
-let with_output_styles given =
-  ("DateStyle", "ISO")
-  :: ("IntervalStyle", "postgres")
-  :: List.filter
-       (fun (name, _) ->
-         match String.lowercase_ascii name with
-         | "datestyle" | "intervalstyle" -> false
-         | _ -> true)
-       (Option.value given ~default:[])
-
-let conninfo target =
-  Result.map_error (fun m -> `Db m) (Conninfo.of_string target)
-
-(* Through the connection string's own reading of itself, so a quoted value
-   or a URL's query survives. *)
-let on_database ~server name =
-  Result.map
-    (fun (c : Conninfo.t) -> Conninfo.to_url (Conninfo.with_database c name))
-    (conninfo server)
-
-let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout ?statement_cache
+let connect ~sw ~net ~mono_clock ?parameters ?timeout ?statement_cache
     ?(observe = unobserved) c =
   Result.map
     (fun pg ->
-      { pg; observe; clock :> Eio.Time.Mono.ty Eio.Std.r; ownership = Kept })
+      {
+        pg;
+        observe;
+        clock = (mono_clock :> Eio.Time.Mono.ty Eio.Std.r);
+        ownership = Kept;
+      })
     (Result.map_error db_error
-       (Pg.connect ~sw ~net ~clock
-          ~parameters:(with_output_styles parameters)
-          ?timeout ?statement_cache c))
+       (Pg.connect ~sw ~net ~mono_clock ?parameters ?timeout ?statement_cache c))
 
 let close t =
   t.ownership <- Closed_by_owner;
@@ -589,7 +538,7 @@ let revive t =
   match t.ownership with
   | Closed_by_owner -> Error (`Connection `Closed)
   | Kept ->
-      if Pg.closed t.pg then Result.map_error db_error (Pg.reset t.pg)
+      if Pg.closed t.pg then Result.map_error db_error (Pg.revive t.pg)
       else Ok ()
 
 let timeout t = Pg.timeout t.pg
@@ -602,24 +551,20 @@ module Pool = struct
     clock : Eio.Time.Mono.ty Eio.Std.r;
   }
 
-  let create ~sw ~net ~mono_clock:clock ?parameters ?timeout ?statement_cache
-      ?size ?wait ?reset ?max_lifetime ?idle_check ?(observe = unobserved) c =
+  let create ~sw ~net ~mono_clock ?parameters ?timeout ?statement_cache ?size
+      ?wait ?reset ?max_lifetime ?idle_check ?(observe = unobserved) c =
     Result.map
-      (fun pool -> { pool; observe; clock :> Eio.Time.Mono.ty Eio.Std.r })
+      (fun pool ->
+        { pool; observe; clock = (mono_clock :> Eio.Time.Mono.ty Eio.Std.r) })
       (Result.map_error db_error
-         (Pg.Pool.create ~sw ~net ~clock
-            ~parameters:(with_output_styles parameters)
-            ?timeout ?statement_cache ?size ?wait ?reset ?max_lifetime
-            ?idle_check c))
+         (Pg.Pool.create ~sw ~net ~mono_clock ?parameters ?timeout
+            ?statement_cache ?size ?wait ?reset ?max_lifetime ?idle_check c))
 
   type error = [ `Pool of [ `Busy | `Closed ] ]
 
   let use ?wait t f =
     Pg.Pool.use ?wait t.pool (fun pg ->
         f { pg; observe = t.observe; clock = t.clock; ownership = Kept })
-
-  let error_to_string (e : [< error ]) =
-    Pg.Pool.error_to_string (e :> Pg.Pool.error)
 
   type stats = Pg.Pool.stats = {
     size : int;
@@ -644,23 +589,23 @@ module Listener = struct
     | Notification of { channel : string; payload : string }
     | Reconnected
 
-  let connect ~sw ~net ~mono_clock:clock ?parameters ?timeout ?heartbeat c =
+  let connect ~sw ~net ~mono_clock ?parameters ?timeout ?keep_alive c =
     Result.map_error db_error
-      (Pg.Listener.connect ~sw ~net ~clock ?parameters ?timeout ?heartbeat c)
+      (Pg.Listener.connect ~sw ~net ~mono_clock ?parameters ?timeout ?keep_alive
+         c)
 
-  (* A listener closed hears nothing more, and sends nothing. *)
-  let error = function Pg.Closed -> `Connection `Closed | e -> db_error e
-  let listen t channel = Result.map_error error (Pg.Listener.listen t channel)
+  let listen t channel =
+    Result.map_error db_error (Pg.Listener.listen t channel)
 
   let unlisten t channel =
-    Result.map_error error (Pg.Listener.unlisten t channel)
+    Result.map_error db_error (Pg.Listener.unlisten t channel)
 
   let next t =
     match Pg.Listener.next t with
     | Ok (Pg.Listener.Notification n) ->
         Ok (Notification { channel = n.channel; payload = n.payload })
     | Ok Pg.Listener.Reconnected -> Ok Reconnected
-    | Error e -> Error (error e)
+    | Error e -> Error (db_error e)
 
   let close = Pg.Listener.close
 end
@@ -675,11 +620,8 @@ module Transaction = struct
     [ `Not_committed of string
     | `Conflict of string option
     | `Not_serializable of string
-    | `Lost of string ]
-
-  let error_to_string : [< failure | S.error ] -> string = function
-    | `Not_committed m -> "the transaction was not committed: " ^ m
-    | #S.error as e -> S.error_to_string e
+    | `Lost of string
+    | `Unsent of string ]
 
   (* No level named is the database's own default, so a plain [begin]. *)
   let begin_statement = function
@@ -694,7 +636,7 @@ module Transaction = struct
      the server rolls it back and says so in the command tag. *)
   let commit db =
     timed db "commit" @@ fun () ->
-    match send db (fun pg -> Pg.execute pg "commit" ~params:[]) with
+    match Pg.execute db.pg "commit" ~params:[] with
     | Ok tag when String.equal (Pg.Tag.command tag) "ROLLBACK" -> Ok Rolled_back
     | Ok _ -> Ok Committed
     | Error f -> Error (Backend.error f)
@@ -730,6 +672,7 @@ module Transaction = struct
       let* () = revive db in
       begin_ db (begin_statement isolation)
     with
+    | Error (`Unsent m) -> Error (`Unsent m)
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match work db with
@@ -801,6 +744,7 @@ module Transaction = struct
       | answer -> answer
     in
     match revive db with
+    | Error (`Unsent m) -> Error (`Unsent m)
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match Pg.status db.pg with
@@ -982,9 +926,9 @@ let mismatches db use declared actual =
 (* One statement's problems; [Error] where the check could not ask: a
    server's refusal is the statement's, any other failure the connection's. *)
 let problems db (declared : S.declared) =
-  match send db (fun pg -> Pg.describe pg declared.sql) with
-  | Error (Failed (Pg.Server e as failure)) when not (ends_session e) ->
-      Ok [ "the database refuses it: " ^ Pg.error_to_string failure ]
+  match Pg.describe db.pg declared.sql with
+  | Error (`Server e) when not (ends_session e) ->
+      Ok [ "the database refuses it: " ^ Pg.error_to_string (`Server e) ]
   | Error f -> Error (Backend.error f)
   | Ok d ->
       let* parameters =
@@ -1023,8 +967,12 @@ let verify db statements =
   in
   each [] statements
 
-let error_to_string : [< `Disagreements of string list | S.error ] -> string =
-  function
+type error =
+  [ S.error | `Disagreements of string list | Pool.error | Transaction.failure ]
+
+let error_to_string : [< error ] -> string = function
   | `Disagreements problems ->
       "the database disagrees: " ^ String.concat "; " problems
+  | `Pool _ as e -> Pg.Pool.error_to_string e
+  | `Not_committed m -> "the transaction was not committed: " ^ m
   | #S.error as e -> S.error_to_string e

@@ -9,20 +9,18 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
-let conninfo target = ok (Pg.conninfo target)
-
 let with_pool ?(size = 4) ?wait target f =
   let pool =
     ok
       (Pg.Pool.create ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ~size ?wait (conninfo target))
+         ~mono_clock:(Db_target.mono ()) ~size ?wait target)
   in
   Fun.protect ~finally:(fun () -> Pg.Pool.close pool) (fun () -> f pool)
 
 let lent pool f =
   match Pg.Pool.use pool f with
   | Ok v -> v
-  | Error (`Pool _ as e) -> Alcotest.fail (Pg.Pool.error_to_string e)
+  | Error (`Pool _ as e) -> Alcotest.fail (Pg.error_to_string e)
 
 let echo = S.find ~params:S.int ~row:S.int "select $1::int"
 
@@ -46,6 +44,28 @@ let test_more_fibers_than_connections () =
           let stats = Pg.Pool.stats pool in
           Alcotest.(check int) "every connection back" 4 stats.idle;
           Alcotest.(check int) "nobody waiting" 0 stats.waiting))
+
+(* A transaction in a borrowed connection answers the pool's failures, the
+   transaction's and its statements' in one result, which one printer
+   tells. *)
+let test_a_pooled_transaction_is_one_result () =
+  Db_target.with_postgres (fun target ->
+      with_pool ~size:1 target (fun pool ->
+          let echoed () : (int, Pg.error) result =
+            Result.join
+              (Pg.Pool.use pool (fun db ->
+                   Pg.Transaction.within db (fun db -> Pg.run db echo 7)))
+          in
+          (match echoed () with
+          | Ok n -> Alcotest.(check int) "the work's answer" 7 n
+          | Error e -> Alcotest.fail (Pg.error_to_string e));
+          Pg.Pool.close pool;
+          match echoed () with
+          | Error e ->
+              Alcotest.(check string)
+                "the pool's failure, told" "the pool is closed"
+                (Pg.error_to_string e)
+          | Ok _ -> Alcotest.fail "a closed pool lent a connection"))
 
 (* What one borrower leaves in its session -- a setting, a temporary table
    -- the next borrower of the same connection does not see. *)
@@ -108,11 +128,11 @@ let test_a_closed_pool_answers_closed () =
 (* ------------------------------------------------------------------ *)
 (* Notifications *)
 
-let with_listener ?heartbeat target f =
+let with_listener ?keep_alive target f =
   let l =
     ok
       (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ?heartbeat (conninfo target))
+         ~mono_clock:(Db_target.mono ()) ?keep_alive target)
   in
   Fun.protect ~finally:(fun () -> Pg.Listener.close l) (fun () -> f l)
 
@@ -159,7 +179,7 @@ let test_a_listener_survives_a_lost_connection () =
         ~finally:(fun () -> Pg.close db)
         (fun () ->
           with_listener
-            ~heartbeat:Mtime.Span.(100 * ms)
+            ~keep_alive:Mtime.Span.(100 * ms)
             target
             (fun l ->
               ok (Pg.Listener.listen l "jobs");
@@ -208,7 +228,7 @@ let test_a_listener_takes_parameters () =
               (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
                  ~mono_clock:(Db_target.mono ())
                  ~parameters:[ ("application_name", "a listener") ]
-                 (conninfo target))
+                 target)
           in
           Fun.protect
             ~finally:(fun () -> Pg.Listener.close l)
@@ -230,7 +250,9 @@ let test_a_closed_listener_hears_nothing () =
           Pg.Listener.close l;
           match Pg.Listener.next l with
           | Error (`Connection `Closed) -> ()
-          | Error (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _) ->
+          | Error
+              (`Db _ | `Conflict _ | `Not_serializable _ | `Lost _ | `Unsent _)
+            ->
               Alcotest.fail "not the closed connection's failure"
           | Ok _ -> Alcotest.fail "a closed listener heard something"))
 
@@ -253,6 +275,8 @@ let () =
         [
           Alcotest.test_case "more fibers than connections" `Quick
             test_more_fibers_than_connections;
+          Alcotest.test_case "a pooled transaction is one result" `Quick
+            test_a_pooled_transaction_is_one_result;
           Alcotest.test_case "a borrower leaves nothing behind" `Quick
             test_a_borrower_leaves_nothing_behind;
           Alcotest.test_case "a borrow past its wait is busy" `Quick

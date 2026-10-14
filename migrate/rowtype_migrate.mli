@@ -33,8 +33,8 @@
 
     An application never migrates, and knows nothing of its migrations: they are
     applied as a step of their own before it starts, and [status --check] is how
-    a script asks whether every one is. {!run} is for a test and a tool. The way
-    back from a bad migration is the next one.
+    a script asks whether every one is. {!apply} is for a test and a tool. The
+    way back from a bad migration is the next one.
 
     A file runs in a transaction with the row that records it, unless its first
     line is the directive
@@ -56,10 +56,11 @@
     {!squash} replaces every file through a version with one baseline, whose
     first line is [-- rowtype-migrate: baseline] and whose version is the last
     one it replaced. A database that recorded that version has the baseline
-    already, and what it recorded up to it is history: accepted, and compared
-    with nothing. A database made afterwards runs the baseline. One whose record
-    stops before it is refused: it is migrated with a build from before the
-    squash first. *)
+    already, and what it recorded below it is history: accepted, and compared
+    with nothing, as is the migration at that version the baseline replaced. A
+    database made afterwards runs the baseline, and is held to its text as to
+    any migration's. One whose record stops before it is refused: it is migrated
+    with a build from before the squash first. *)
 
 (** How a migration is applied. *)
 type kind =
@@ -125,7 +126,12 @@ type error =
         what it wrote as errors, never its arguments, which hold the URL, and
         with the URL and its password masked wherever it said them back *)
   | `Unproved  (** a squash's baseline does not make what the history makes *)
-  ]
+  | `Lock of
+    [ `Lost
+      (** the connection was lost between two migrations and made again, holding
+          the advisory lock no more, so the run stopped: what was applied before
+          stays applied, and nothing more was *) ]
+    (** what became of the advisory lock {!apply} migrates under *) ]
 (** Every way migrating fails: a polymorphic variant, as a statement's failures
     are, so it joins a caller's own. *)
 
@@ -176,41 +182,44 @@ val of_package : prefix:string -> string -> (migration list, [> error ]) result
 
 (** {1 A database} *)
 
-val with_connection :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  string ->
+val run :
+  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
+  Rowtype_postgres.Conninfo.t ->
   (Rowtype_postgres.conn -> ('a, ([> error ] as 'e)) result) ->
   ('a, 'e) result
-(** A connection to the database the URL names, as the commands make one, for
-    the length of the function: its connect bounded at ten seconds unless the
-    URL says [connect_timeout], and nothing after that, since an administrator's
+(** [run env target f]: a connection to the database, as the commands make one,
+    on a switch of its own and with the network and the monotonic clock taken
+    from [env], handed to [f] and closed when [f] returns or raises:
+
+    {[
+    Rowtype_migrate.run env target @@ fun db ->
+    Rowtype_migrate.apply db migrations
+    ]}
+
+    Its connect bounded at ten seconds unless the target sets its
+    [connect_timeout], and nothing after that, since an administrator's
     statement runs as long as it takes; notices off, since
     [create table if not exists] is one on every run. A database the server does
     not have is [`No_database]; any other failure to connect is the driver's. *)
 
 val create :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  string ->
+  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
+  Rowtype_postgres.Conninfo.t ->
   (unit, [> error ]) result
-(** Make the database the URL names, from the server's own [postgres]; one that
-    exists is refused, as Postgres refuses it. *)
+(** [create env target]: make the database the target names, as {!run} connects,
+    from the server's own [postgres]; one that exists is refused, as Postgres
+    refuses it. *)
 
 val drop :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  string ->
+  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
+  Rowtype_postgres.Conninfo.t ->
   (unit, [> error ]) result
-(** Drop the database the URL names, if it is there. Refused while anybody is
-    connected to it, as Postgres refuses it: the one guard there is against the
-    wrong URL. *)
+(** [drop env target]: drop the database the target names, if it is there, as
+    {!run} connects. Refused while anybody is connected to it, as Postgres
+    refuses it: the one guard there is against the wrong URL. *)
 
 val default_lock : int
-(** The advisory lock {!run} takes unless told another, so any two processes
+(** The advisory lock {!apply} takes unless told another, so any two processes
     migrating one database take turns. *)
 
 val default_table : string
@@ -222,7 +231,7 @@ val default_table : string
     applications can keep two records in one database. A name outside that
     grammar is refused, since a table's name cannot be a parameter. *)
 
-val run :
+val apply :
   ?lock:int ->
   ?table:string ->
   ?libraries:source list ->
@@ -253,6 +262,11 @@ val run :
 
     A migration that fails is [`Migration_failed], and the ones before it stay
     applied.
+
+    The lock is the session's, so a migration runs only on the backend that took
+    it: a connection lost between two migrations, which a transaction would make
+    again on a new backend holding no lock, stops the run as [`Lock `Lost], the
+    ones before it applied and nothing more.
 
     Each applied migration is recorded with its source and a digest of its text.
     A database migrated before the digests were kept has them recorded on its
@@ -285,44 +299,45 @@ val status :
   Rowtype_postgres.conn ->
   migration list ->
   (status list, [> error ]) result
-(** What {!run} would do, without doing it, one status for each source in the
-    order {!run} takes them, the application's last; it writes nothing, not even
-    the table that records migrations. *)
+(** What {!apply} would do, without doing it, one status for each source in the
+    order {!apply} takes them, the application's last; it writes nothing, not
+    even the table that records migrations. *)
 
 (** {1 The schema, as one file} *)
 
 val dump :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  process_mgr:_ Eio.Process.mgr ->
+  < net : _ Eio.Net.t
+  ; mono_clock : _ Eio.Time.Mono.t
+  ; process_mgr : _ Eio.Process.mgr
+  ; .. > ->
   ?lock:int ->
   ?table:string ->
   ?libraries:source list ->
   pg_dump:string ->
   restrict_key:string ->
   migrations:migration list ->
-  string ->
+  Rowtype_postgres.Conninfo.t ->
   (string, [> error ]) result
 (** What the migrations add up to from nothing, the libraries' with the
-    application's: a database of its own on the server the URL names, migrated,
-    dumped, and dropped however that went -- never what some database has
-    drifted to.
+    application's: a database of its own on the server the target names,
+    migrated, dumped, and dropped however that went -- never what some database
+    has drifted to.
 
     [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
     replaced in each word by the scratch database's; it is not given to a shell,
-    so a word cannot hold a space. It runs through [process_mgr], so a cancelled
-    dump kills it, and what it writes as errors is [`Dump]'s words rather than
-    lines on the caller's terminal. It dumps the schema alone, with
-    [restrict_key] as the key a dump otherwise makes up afresh each time, and
-    the lines naming the versions of the server and of [pg_dump] are removed, so
-    the file changes only when the schema does. *)
+    so a word cannot hold a space. It runs through [env]'s [process_mgr], so a
+    cancelled dump kills it, and what it writes as errors is [`Dump]'s words
+    rather than lines on the caller's terminal. Its connections are made as
+    {!run} makes one. It dumps the schema alone, with [restrict_key] as the key
+    a dump otherwise makes up afresh each time, and the lines naming the
+    versions of the server and of [pg_dump] are removed, so the file changes
+    only when the schema does. *)
 
 val squash :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  process_mgr:_ Eio.Process.mgr ->
+  < net : _ Eio.Net.t
+  ; mono_clock : _ Eio.Time.Mono.t
+  ; process_mgr : _ Eio.Process.mgr
+  ; .. > ->
   ?lock:int ->
   ?table:string ->
   ?libraries:source list ->
@@ -330,10 +345,10 @@ val squash :
   restrict_key:string ->
   through:version ->
   migrations:migration list ->
-  string ->
+  Rowtype_postgres.Conninfo.t ->
   (migration, [> error ]) result
 (** Every migration through the version [through] names, as one baseline: a
-    database of its own on the server the URL names, migrated through it and
+    database of its own on the server the target names, migrated through it and
     dumped -- the schema and the rows the migrations wrote, as statements, and
     never the record -- by [pg_dump], as {!dump}'s is. Its version is [through],
     its name [baseline].

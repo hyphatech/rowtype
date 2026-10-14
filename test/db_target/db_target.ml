@@ -38,32 +38,32 @@ let env () =
 
 let net () = Eio.Stdenv.net (env ())
 let mono () = Eio.Stdenv.mono_clock (env ())
-let process_mgr () = Eio.Stdenv.process_mgr (env ())
 
 let server () =
   let _, _, server = io () in
   server
 
-(* The server a URL names, with the database path replaced. *)
+let conninfo url =
+  match Rowtype_postgres.Conninfo.of_string url with
+  | Ok c -> c
+  | Error m -> Alcotest.failf "%s: %s" variable m
+
+(* The server the suite was given, naming another database. *)
 let on_database name =
-  match Rowtype_postgres.on_database ~server:(server ()) name with
-  | Ok url -> url
-  | Error e -> Alcotest.failf "%s: %s" variable (Rowtype.error_to_string e)
+  Rowtype_postgres.Conninfo.with_database (conninfo (server ())) name
 
 (* [statement_cache:0] is a connection that keeps no statements, whose
    results all arrive as text: the other way every cell is read. *)
-let connect ?statement_cache url =
+let connect ?statement_cache target =
   match
-    Result.bind
-      (Rowtype_postgres.conninfo url)
-      (Rowtype_postgres.connect ~sw:(sw ()) ~net:(net ()) ~mono_clock:(mono ())
-         ?statement_cache)
+    Rowtype_postgres.connect ~sw:(sw ()) ~net:(net ()) ~mono_clock:(mono ())
+      ?statement_cache target
   with
   | Ok db -> db
   | Error e -> Alcotest.failf "cannot connect: %s" (Rowtype.error_to_string e)
 
 let admin f =
-  let db = connect (server ()) in
+  let db = connect (conninfo (server ())) in
   Fun.protect ~finally:(fun () -> Rowtype_postgres.close db) (fun () -> f db)
 
 let exec db sql =
@@ -98,15 +98,15 @@ let with_postgres f =
    backend does it. *)
 let in_us ty =
   let us_per_s = 1_000_000 and ps_per_us = 1_000_000L in
-  Rowtype.conv ty
-    ~of_:(fun t ->
+  Rowtype.map ty
+    ~parse:(fun t ->
       let whole = Ptime.truncate ~frac_s:0 t in
       match Ptime.Span.to_int_s (Ptime.to_span whole) with
       | None -> Alcotest.fail "an instant past an int of seconds"
       | Some s ->
           let _, ps = Ptime.Span.to_d_ps (Ptime.frac_s t) in
           (s * us_per_s) + Int64.to_int (Int64.div ps ps_per_us))
-    ~to_:(fun us ->
+    ~print:(fun us ->
       let s = Int.div us us_per_s - if us mod us_per_s < 0 then 1 else 0 in
       let frac = us - (s * us_per_s) in
       match
@@ -123,7 +123,7 @@ let timestamp_us = in_us Rowtype.timestamp
 (* The cases write a uuid as its text; this is the uuid in that form, read
    back lowercase as Uuidm prints it. *)
 let uuid_text =
-  Rowtype.conv Rowtype.uuid ~of_:Uuidm.to_string ~to_:(fun s ->
+  Rowtype.map Rowtype.uuid ~parse:Uuidm.to_string ~print:(fun s ->
       match Uuidm.of_string s with
       | Some u -> u
       | None -> Alcotest.failf "%S is no uuid" s)

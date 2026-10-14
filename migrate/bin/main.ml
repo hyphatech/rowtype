@@ -16,14 +16,6 @@ let exits = function
       prerr_endline m;
       1
 
-(* One Eio loop per command, which every connection it makes lives in. *)
-let in_eio f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  f ~sw ~net:(Eio.Stdenv.net env)
-    ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~process_mgr:(Eio.Stdenv.process_mgr env)
-
 module Arg = Cmdliner.Arg
 module Cmd = Cmdliner.Cmd
 module Term = Cmdliner.Term
@@ -77,8 +69,9 @@ let from_env_file path var =
    names another, since the command reads no variable it was not told to
    beyond the one everybody's tools read. It is read from [--env-file] when
    one is named, and from the environment when not: what the command line
-   names wins over what the shell happens to hold. *)
-let url =
+   names wins over what the shell happens to hold. It is read here, once,
+   and what the library is handed is the target it names. *)
+let target =
   let url =
     Arg.value
       (Arg.opt (Arg.some Arg.string) None
@@ -100,14 +93,17 @@ let url =
                holds them, rather than from the environment."))
   in
   Term.const (fun url var env_file ->
-      match (url, env_file) with
-      | Some u, _ -> Ok u
-      | None, Some path -> from_env_file path var
-      | None, None -> (
-          match Sys.getenv_opt var with
-          | Some u when not (String.equal (String.trim u) "") -> Ok u
-          | Some _ | None ->
-              Error (Printf.sprintf "no database: give --url, or set %s" var)))
+      let* url =
+        match (url, env_file) with
+        | Some u, _ -> Ok u
+        | None, Some path -> from_env_file path var
+        | None, None -> (
+            match Sys.getenv_opt var with
+            | Some u when not (String.equal (String.trim u) "") -> Ok u
+            | Some _ | None ->
+                Error (Printf.sprintf "no database: give --url, or set %s" var))
+      in
+      Rowtype_postgres.Conninfo.of_string url)
   $ url $ var $ env_file
 
 (* Where a package installs its migrations: the switch's [share], the
@@ -166,23 +162,21 @@ let lock =
             "The advisory lock migrating takes, the same for every process \
              that migrates one database."))
 
-let with_db url f =
-  let* url = url in
-  told
-    (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
-         M.with_connection ~sw ~net ~mono_clock url f))
+let with_db target f =
+  let* target = target in
+  told (Eio_main.run @@ fun env -> M.run env target f)
 
 let up =
   Cmd.v
     (Cmd.info "up"
        ~doc:"Apply every migration in $(b,--dir) the database has not recorded.")
-    (Term.const (fun dir url lock table sources ->
+    (Term.const (fun dir target lock table sources ->
          exits
            (let* migrations = told (M.of_directory dir) in
             let* libraries = libraries sources in
-            with_db url (fun conn ->
-                M.run ~lock ~table ~libraries conn migrations)))
-    $ dir $ url $ lock $ table $ sources)
+            with_db target (fun conn ->
+                M.apply ~lock ~table ~libraries conn migrations)))
+    $ dir $ target $ lock $ table $ sources)
 
 let status =
   let check =
@@ -251,16 +245,16 @@ let status =
 
   Cmd.v
     (Cmd.info "status" ~doc:"List the migrations applied, and those pending.")
-    (Term.const (fun dir url table check sources ->
+    (Term.const (fun dir target table check sources ->
          exits
            (let* migrations = told (M.of_directory dir) in
             let* libraries = libraries sources in
             let* statuses =
-              with_db url (fun conn ->
+              with_db target (fun conn ->
                   M.status ~table ~libraries conn migrations)
             in
             show ~check statuses))
-    $ dir $ url $ table $ check $ sources)
+    $ dir $ target $ table $ check $ sources)
 
 let new_ =
   let name =
@@ -305,15 +299,15 @@ let dump =
               "Write nothing; fail if $(b,--output) is not what the migrations \
                make."))
   in
-  let run dir url lock table output check pg_dump restrict_key sources =
+  let run dir target lock table output check pg_dump restrict_key sources =
     let* migrations = told (M.of_directory dir) in
     let* libraries = libraries sources in
-    let* url = url in
+    let* target = target in
     let* schema =
       told
-        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-               ~pg_dump ~restrict_key ~migrations url))
+        ( Eio_main.run @@ fun env ->
+          M.dump env ~lock ~table ~libraries ~pg_dump ~restrict_key ~migrations
+            target )
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -339,9 +333,9 @@ let dump =
        ~doc:
          "Write what the migrations add up to, dumped from a scratch database \
           on the server $(b,--url) names.")
-    (Term.const (fun dir url lock table output check pg_dump key sources ->
-         exits (run dir url lock table output check pg_dump key sources))
-    $ dir $ url $ lock $ table $ output $ check $ pg_dump $ restrict_key
+    (Term.const (fun dir target lock table output check pg_dump key sources ->
+         exits (run dir target lock table output check pg_dump key sources))
+    $ dir $ target $ lock $ table $ output $ check $ pg_dump $ restrict_key
     $ sources)
 
 (* The baseline is written before a file is removed, and removed only once
@@ -353,7 +347,7 @@ let squash =
     Arg.required
       (Arg.pos 0 (Arg.some Arg.int) None (Arg.info [] ~docv:"VERSION"))
   in
-  let run dir url lock table pg_dump restrict_key through sources =
+  let run dir target lock table pg_dump restrict_key through sources =
     let* through =
       Option.to_result
         ~none:
@@ -363,12 +357,12 @@ let squash =
     in
     let* migrations = told (M.of_directory dir) in
     let* libraries = libraries sources in
-    let* url = url in
+    let* target = target in
     let* baseline =
       told
-        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-               ~pg_dump ~restrict_key ~through ~migrations url))
+        ( Eio_main.run @@ fun env ->
+          M.squash env ~lock ~table ~libraries ~pg_dump ~restrict_key ~through
+            ~migrations target )
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -409,19 +403,17 @@ let squash =
          "Replace every migration through $(i,VERSION) with one baseline, \
           proved on scratch databases on the server $(b,--url) names to make \
           what they made.")
-    (Term.const (fun dir url lock table pg_dump key through sources ->
-         exits (run dir url lock table pg_dump key through sources))
-    $ dir $ url $ lock $ table $ pg_dump $ restrict_key $ through $ sources)
+    (Term.const (fun dir target lock table pg_dump key through sources ->
+         exits (run dir target lock table pg_dump key through sources))
+    $ dir $ target $ lock $ table $ pg_dump $ restrict_key $ through $ sources)
 
 let on_database name ~doc f =
   Cmd.v (Cmd.info name ~doc)
-    (Term.const (fun url ->
+    (Term.const (fun target ->
          exits
-           (let* url = url in
-            told
-              (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
-                   f ~sw ~net ~mono_clock url))))
-    $ url)
+           (let* target = target in
+            told (Eio_main.run @@ fun env -> f env target)))
+    $ target)
 
 let create =
   on_database "create" ~doc:"Make the database the URL names." M.create

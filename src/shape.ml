@@ -36,11 +36,11 @@ type _ ty =
   | Pair : 'a ty * 'b ty -> ('a * 'b) ty
   (* An isomorphism, so flat tuples and records can be expressed in terms
      of nested pairs without the call site ever seeing the nesting. *)
-  | Conv : 'a ty * ('a -> 'b) * ('b -> 'a) -> 'b ty
+  | Map : 'a ty * ('a -> 'b) * ('b -> 'a) -> 'b ty
   (* The same, for a value the database may hold and this program may not
      be able to read -- a key, a code -- so a row that does not
      decode is an error that says which column, never a raise. *)
-  | Parse : 'a ty * ('a -> 'b option) * ('b -> 'a) -> 'b ty
+  | Parse : 'a ty * ('a -> ('b, string) result) * ('b -> 'a) -> 'b ty
   (* One column holding many values, each of the element's shape -- which
      is one column itself, or the statement is refused. *)
   | Array : 'a ty -> 'a list ty
@@ -63,43 +63,43 @@ let array t = Array t
 let t2 a b = Pair (a, b)
 
 let t3 a b c =
-  Conv
+  Map
     ( Pair (a, Pair (b, c)),
       (fun (x, (y, z)) -> (x, y, z)),
       fun (x, y, z) -> (x, (y, z)) )
 
 let t4 a b c d =
-  Conv
+  Map
     ( Pair (a, Pair (b, Pair (c, d))),
       (fun (w, (x, (y, z))) -> (w, x, y, z)),
       fun (w, x, y, z) -> (w, (x, (y, z))) )
 
 let t5 a b c d e =
-  Conv
+  Map
     ( Pair (a, Pair (b, Pair (c, Pair (d, e)))),
       (fun (v, (w, (x, (y, z)))) -> (v, w, x, y, z)),
       fun (v, w, x, y, z) -> (v, (w, (x, (y, z)))) )
 
 let t6 a b c d e f =
-  Conv
+  Map
     ( Pair (a, Pair (b, Pair (c, Pair (d, Pair (e, f))))),
       (fun (u, (v, (w, (x, (y, z))))) -> (u, v, w, x, y, z)),
       fun (u, v, w, x, y, z) -> (u, (v, (w, (x, (y, z))))) )
 
 let t7 a b c d e f g =
-  Conv
+  Map
     ( Pair (a, Pair (b, Pair (c, Pair (d, Pair (e, Pair (f, g)))))),
       (fun (t, (u, (v, (w, (x, (y, z)))))) -> (t, u, v, w, x, y, z)),
       fun (t, u, v, w, x, y, z) -> (t, (u, (v, (w, (x, (y, z)))))) )
 
 let t8 a b c d e f g h =
-  Conv
+  Map
     ( Pair (a, Pair (b, Pair (c, Pair (d, Pair (e, Pair (f, Pair (g, h))))))),
       (fun (s, (t, (u, (v, (w, (x, (y, z))))))) -> (s, t, u, v, w, x, y, z)),
       fun (s, t, u, v, w, x, y, z) -> (s, (t, (u, (v, (w, (x, (y, z))))))) )
 
 let t9 a b c d e f g h i =
-  Conv
+  Map
     ( Pair
         ( a,
           Pair (b, Pair (c, Pair (d, Pair (e, Pair (f, Pair (g, Pair (h, i)))))))
@@ -110,7 +110,7 @@ let t9 a b c d e f g h i =
         (r, (s, (t, (u, (v, (w, (x, (y, z)))))))) )
 
 let t10 a b c d e f g h i j =
-  Conv
+  Map
     ( Pair
         ( a,
           Pair
@@ -125,7 +125,7 @@ let t10 a b c d e f g h i j =
         (q, (r, (s, (t, (u, (v, (w, (x, (y, z))))))))) )
 
 let t11 a b c d e f g h i j k =
-  Conv
+  Map
     ( Pair
         ( a,
           Pair
@@ -142,8 +142,8 @@ let t11 a b c d e f g h i j k =
       fun (p, q, r, s, t, u, v, w, x, y, z) ->
         (p, (q, (r, (s, (t, (u, (v, (w, (x, (y, z)))))))))) )
 
-let conv shape ~of_ ~to_ = Conv (shape, of_, to_)
-let parse shape ~of_ ~to_ = Parse (shape, of_, to_)
+let map shape ~parse ~print = Map (shape, parse, print)
+let parse shape ~parse ~print = Parse (shape, parse, print)
 
 (* Read back by its label, a string, so no two values are ever compared:
    a value may hold a function, and [=] on one raises. *)
@@ -151,7 +151,9 @@ let enum label values =
   let labelled = List.map (fun v -> (label v, v)) values in
   Parse
     ( Scalar (Enum (List.map fst labelled)),
-      (fun l -> List.assoc_opt l labelled),
+      (fun l ->
+        Option.to_result ~none:"a label none of the values has"
+          (List.assoc_opt l labelled)),
       label )
 
 let rec arity : type a. a ty -> int = function
@@ -159,6 +161,6 @@ let rec arity : type a. a ty -> int = function
   | Scalar _ -> 1
   | Opt t -> arity t
   | Pair (a, b) -> arity a + arity b
-  | Conv (t, _, _) -> arity t
+  | Map (t, _, _) -> arity t
   | Parse (t, _, _) -> arity t
   | Array _ -> 1

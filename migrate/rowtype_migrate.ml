@@ -34,7 +34,8 @@ type error =
   | `Migration_failed of migration * S.error
   | `No_database of string
   | `Dump of string
-  | `Unproved ]
+  | `Unproved
+  | `Lock of [ `Lost ] ]
 
 let error_to_string : [< error ] -> string = function
   | `Files m | `Invalid_argument m | `Dump m -> m
@@ -73,6 +74,9 @@ let error_to_string : [< error ] -> string = function
   | `Unproved ->
       "the baseline and the migrations after it do not make the database the \
        whole history makes, so nothing was squashed"
+  | `Lock `Lost ->
+      "the connection holding the migrations' lock was lost, and the lock with \
+       it: nothing more was applied, and running again applies what is left"
   | #S.error as e -> S.error_to_string e
 
 let is_baseline m =
@@ -361,9 +365,10 @@ let prepare ~table conn =
 let applied ~table ~source conn =
   Pg.run conn
     (S.list ~params:S.text
-       ~row:(S.t2 S.int (S.opt S.text))
+       ~row:(S.t3 S.int S.text (S.opt S.text))
        (Printf.sprintf
-          "select version, checksum from %s where source = $1 order by version"
+          "select version, name, checksum from %s where source = $1 order by \
+           version"
           table))
     source
 
@@ -381,6 +386,17 @@ let failed m = function
   | Ok v -> Ok v
   | Error e -> Error (`Migration_failed (m, e))
 
+let backend = S.find ~params:S.unit ~row:S.int "select pg_backend_pid()"
+
+(* The advisory lock is the session's, and ends with its backend; a
+   transaction makes a lost connection again before it begins, on a new
+   backend that holds no lock. So a migration runs only on the backend that
+   took the lock, asked first thing in its own transaction, where a [revive]
+   has already happened if it was going to. *)
+let holding ~holder conn =
+  let* pid = Pg.run conn backend () in
+  if pid = holder then Ok () else Error (`Lock `Lost)
+
 (* One transaction per file, with the row that records it, so a failure
    leaves the database at exactly the version before it. Run once, with no
    retry, since a file run twice is a schema changed twice.
@@ -394,7 +410,7 @@ let failed m = function
    concurrently, a VACUUM -- runs on its own, and its row is written after
    it: a run cut off between the two runs it again, which is why such a file
    has to be one that can run twice. *)
-let apply ~table ~source conn m =
+let apply_migration ~holder ~table ~source conn m =
   let ended =
     "it ends the transaction it runs in, so it was not applied as one: its \
      record is removed, and what ran before that end stays as the end left it. \
@@ -422,6 +438,7 @@ let apply ~table ~source conn m =
   let in_transaction () =
     match
       Pg.Transaction.within conn (fun conn ->
+          let* () = holding ~holder conn in
           let* () = record ~table ~source conn m in
           let* id =
             Pg.run conn
@@ -438,6 +455,7 @@ let apply ~table ~source conn m =
           if Option.equal Int.equal (Some id) still then Ok () else Error `Ended)
     with
     | Ok () -> Ok ()
+    | Error (`Lock `Lost) -> Error (`Lock `Lost)
     | Error `Ended ->
         let* () = failed m (unrecord ()) in
         Error (`Migration_failed (m, `Db ended))
@@ -457,6 +475,7 @@ let apply ~table ~source conn m =
     match m.kind with
     | Transaction | Baseline -> in_transaction ()
     | No_transaction ->
+        let* () = holding ~holder conn in
         failed m
           (let* () = Pg.exec_raw conn m.sql in
            record ~table ~source conn m)
@@ -491,34 +510,38 @@ let read migrations recorded =
     List.fold_left
       (fun acc m -> Versions.add m.version m acc)
       Versions.empty migrations
-  and sums =
+  and rows =
     List.fold_left
-      (fun acc (v, s) -> Versions.add v s acc)
+      (fun acc (v, name, s) -> Versions.add v (name, s) acc)
       Versions.empty recorded
   in
   let find v = Versions.find_opt v files in
-  let recorded_as v = Versions.find_opt v sums in
+  let recorded_as v = Versions.find_opt v rows in
   (* A baseline stands for every migration up to its version, whose files
-     are gone. Where the database recorded that version -- by the migration
-     the baseline replaced, or by the baseline itself -- it is applied, and
-     what is recorded up to it is history, compared with nothing; where the
-     database recorded something, but not that, it is behind the squash. *)
+     are gone. Where the database recorded that version it is applied, and
+     what is recorded below it is history, compared with nothing; where the
+     database recorded something, but not that, it is behind the squash.
+     The version itself is history where the database recorded the
+     migration the baseline replaced, known by its name, and held to its
+     text where it recorded the baseline, which is what ran there. *)
   let history, behind =
     match (List.find_opt is_baseline migrations, recorded) with
     | None, _ | Some _, [] -> ((fun _ -> false), None)
     | Some b, _ :: _ -> (
         match recorded_as b.version with
+        | Some (name, _) when String.equal name b.name ->
+            ((fun v -> v < b.version), None)
         | Some _ -> ((fun v -> v <= b.version), None)
         | None -> ((fun _ -> false), Some b))
   in
-  let highest = List.fold_left (fun h (v, _) -> max h v) 0 recorded in
+  let highest = List.fold_left (fun h (v, _, _) -> max h v) 0 recorded in
   let to_apply =
     List.filter (fun m -> Option.is_none (recorded_as m.version)) migrations
     |> List.sort (fun a b -> Int.compare a.version b.version)
   in
   let applied_with f =
     List.filter_map
-      (fun (v, s) ->
+      (fun (v, _, s) ->
         match find v with
         | Some m when (not (history v)) && f m s -> Some m
         | _ -> None)
@@ -528,7 +551,7 @@ let read migrations recorded =
     to_apply;
     unknown =
       List.filter_map
-        (fun (v, _) ->
+        (fun (v, _, _) ->
           if Option.is_none (find v) && not (history v) then Some v else None)
         recorded;
     edited =
@@ -554,7 +577,7 @@ let refusal r =
 (* One source's migrations against its own rows of the record: every check
    is made within the source, so a library's migration is never late beside
    an application's. *)
-let pending ~table ~source conn migrations =
+let pending ~holder ~table ~source conn migrations =
   let* () = listed migrations in
   let* recorded = applied ~table ~source conn in
   let r = read migrations recorded in
@@ -577,7 +600,7 @@ let pending ~table ~source conn migrations =
       List.fold_left
         (fun acc m ->
           let* () = acc in
-          apply ~table ~source conn m)
+          apply_migration ~holder ~table ~source conn m)
         (Ok ()) r.to_apply
 
 (* Any fixed number, the same in every process that migrates one database:
@@ -609,7 +632,7 @@ let distinct libraries =
 let sources libraries migrations =
   List.map (fun l -> (l.name, l.migrations)) libraries @ [ (app, migrations) ]
 
-let run ?(lock = default_lock) ?(table = default_table) ?(libraries = []) conn
+let apply ?(lock = default_lock) ?(table = default_table) ?(libraries = []) conn
     migrations =
   let* table = table_name table in
   let* () = distinct libraries in
@@ -622,11 +645,12 @@ let run ?(lock = default_lock) ?(table = default_table) ?(libraries = []) conn
     Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock
   in
   let outcome =
+    let* holder = Pg.run conn backend () in
     let* () = prepare ~table conn in
     List.fold_left
       (fun acc (source, migrations) ->
         let* () = acc in
-        pending ~table ~source conn migrations)
+        pending ~holder ~table ~source conn migrations)
       (Ok ())
       (sources libraries migrations)
   in
@@ -714,7 +738,7 @@ let reading ~table ~source conn migrations =
              ())
     | (Some false | None), _, _ -> Ok []
   in
-  Ok (applied, read migrations (List.map (fun (v, _, s) -> (v, s)) applied))
+  Ok (applied, read migrations applied)
 
 let status ?(table = default_table) ?(libraries = []) conn migrations =
   let* table = table_name table in
@@ -827,22 +851,26 @@ let capture ~process_mgr ~secrets argv =
           Error (`Dump (prog ^ ": it could not be run")))
 
 (* A connect is bounded, since a server that never answers is otherwise a
-   command that never ends; what runs on the connection is not, since an
+   command that never ends; what runs on the connection is not, the
+   driver's bound on every read lifted once it is made, since an
    administrator's statement -- a database made or dropped, a migration --
    runs as long as it takes. *)
 let connect_timeout = Mtime.Span.(10 * s)
 
 (* Quiet: [create table if not exists] is a NOTICE on every run, and a notice
    is a line in what a command prints. *)
-let connect ~sw ~net ~mono_clock url =
-  let* c = Pg.conninfo url in
+let connect ~sw ~net ~mono_clock (c : Pg.Conninfo.t) =
   let c =
     Pg.Conninfo.with_connect_timeout c
       (Option.value c.connect_timeout ~default:connect_timeout)
   in
-  Pg.connect ~sw ~net ~mono_clock
-    ~parameters:[ ("client_min_messages", "warning") ]
-    c
+  let* conn =
+    Pg.connect ~sw ~net ~mono_clock
+      ~parameters:[ ("client_min_messages", "warning") ]
+      c
+  in
+  Pg.set_timeout conn ~timeout:None;
+  Ok conn
 
 (* A finaliser runs in a fiber that may be cancelled, where any IO raises
    again: shielded, it does its work, and the cancellation goes on as itself
@@ -854,11 +882,11 @@ let closing conn f =
 
 (* A database that is not there is the one failure to connect with a next
    step to name, and the server's own database says whether it is that. *)
-let missing ~sw ~net ~mono_clock url e =
+let missing ~sw ~net ~mono_clock (c : Pg.Conninfo.t) e =
   match
-    let* c = Pg.conninfo url in
-    let* server = Pg.on_database ~server:url "postgres" in
-    let* admin = connect ~sw ~net ~mono_clock server in
+    let* admin =
+      connect ~sw ~net ~mono_clock (Pg.Conninfo.with_database c "postgres")
+    in
     closing admin (fun admin ->
         Result.map
           (fun there -> (c.database, there))
@@ -870,10 +898,16 @@ let missing ~sw ~net ~mono_clock url e =
   | Ok (name, false) -> `No_database name
   | Ok (_, true) | Error _ -> (e :> [> error ])
 
-let with_connection ~sw ~net ~mono_clock url f =
-  match connect ~sw ~net ~mono_clock url with
+let with_connection ~sw ~net ~mono_clock c f =
+  match connect ~sw ~net ~mono_clock c with
   | Ok conn -> closing conn f
-  | Error e -> Error (missing ~sw ~net ~mono_clock url e)
+  | Error e -> Error (missing ~sw ~net ~mono_clock c e)
+
+(* On a switch of its own, so the connection is gone when [f] is, and a
+   caller hands over no more than its environment. *)
+let run env c f =
+  Eio.Switch.run @@ fun sw ->
+  with_connection ~sw ~net:env#net ~mono_clock:env#mono_clock c f
 
 (* A database's name cannot be a parameter either; quoted, it is any name a
    URL can carry. *)
@@ -882,19 +916,18 @@ let quoted name =
 
 (* Made and dropped from the server's own database, [postgres], since no
    statement makes or drops the database it is connected to. *)
-let on_server ~sw ~net ~mono_clock url f =
-  let* c = Pg.conninfo url in
-  let* server = Pg.on_database ~server:url "postgres" in
-  with_connection ~sw ~net ~mono_clock server (fun admin -> f admin c.database)
+let on_server env (c : Pg.Conninfo.t) f =
+  run env (Pg.Conninfo.with_database c "postgres") (fun admin ->
+      f admin c.database)
 
-let create ~sw ~net ~mono_clock url =
-  on_server ~sw ~net ~mono_clock url (fun admin name ->
+let create env c =
+  on_server env c (fun admin name ->
       Pg.exec_raw admin ("create database " ^ quoted name))
 
 (* Not [with (force)]: Postgres refuses to drop a database somebody is
    connected to, the one guard there is against the wrong URL. *)
-let drop ~sw ~net ~mono_clock url =
-  on_server ~sw ~net ~mono_clock url (fun admin name ->
+let drop env c =
+  on_server env c (fun admin name ->
       Pg.exec_raw admin ("drop database if exists " ^ quoted name))
 
 (* A database of its own, made empty, migrated, dumped, and dropped however
@@ -935,10 +968,10 @@ let made_by_libraries conn =
           without those libraries")
   else Ok tables
 
-let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
-    ?(libraries = []) ?(apart = false) ~migrations url dump =
+let migrated_scratch env ?lock ~table ?(libraries = []) ?(apart = false)
+    ~migrations (c : Pg.Conninfo.t) dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
-  with_connection ~sw ~net ~mono_clock url (fun admin ->
+  run env c (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
       Fun.protect
         ~finally:(fun () ->
@@ -949,29 +982,28 @@ let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
                   ^ " with (force)")
                   : (unit, S.error) result)))
         (fun () ->
-          let* target = Pg.on_database ~server:url scratch in
+          let target = Pg.Conninfo.with_database c scratch in
           let* theirs =
-            with_connection ~sw ~net ~mono_clock target (fun conn ->
+            run env target (fun conn ->
                 let* theirs =
                   if apart then
-                    let* () = run ?lock ~table ~libraries conn [] in
+                    let* () = apply ?lock ~table ~libraries conn [] in
                     made_by_libraries conn
                   else Ok []
                 in
-                let* () = run ?lock ~table ~libraries conn migrations in
+                let* () = apply ?lock ~table ~libraries conn migrations in
                 Ok theirs)
           in
-          let* c = Pg.conninfo target in
-          capture ~process_mgr
-            ~secrets:(target :: Option.to_list c.password)
-            (dump ~url:target ~database:scratch
+          let url = Pg.Conninfo.to_url target in
+          capture ~process_mgr:env#process_mgr
+            ~secrets:(url :: Option.to_list target.password)
+            (dump ~url ~database:scratch
             @ List.map (fun t -> "--exclude-table=" ^ t) theirs)))
 
-let dump ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
-    ?libraries ~pg_dump ~restrict_key ~migrations url =
+let dump env ?lock ?(table = default_table) ?libraries ~pg_dump ~restrict_key
+    ~migrations c =
   Result.map normalise_dump
-    (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ?libraries
-       ~migrations url
+    (migrated_scratch env ?lock ~table ?libraries ~migrations c
        (pg_dump_argv ~template:pg_dump ~restrict_key))
 
 (* ------------------------------------------------------------------ *)
@@ -998,8 +1030,8 @@ let statements dump =
   |> List.filter (fun l -> not (String.starts_with ~prefix:"\\" l))
   |> String.concat "\n"
 
-let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
-    ?libraries ~pg_dump ~restrict_key ~through ~migrations url =
+let squash env ?lock ?(table = default_table) ?libraries ~pg_dump ~restrict_key
+    ~through ~migrations c =
   let* table = table_name table in
   let* () = listed migrations in
   let replaced, kept =
@@ -1024,8 +1056,7 @@ let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
   in
   let dumped ~apart migrations =
     Result.map statements
-      (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
-         ?libraries ~apart ~migrations url
+      (migrated_scratch env ?lock ~table ?libraries ~apart ~migrations c
          (baseline_argv ~template:pg_dump ~restrict_key ~table))
   in
   let* made = dumped ~apart:true replaced in

@@ -182,7 +182,7 @@ let test_a_read_agrees_with_the_check () =
                       | Error
                           (( `Conflict _ | `Not_serializable _
                            | `Connection `Closed
-                           | `Lost _ ) as e) ->
+                           | `Lost _ | `Unsent _ ) as e) ->
                           Alcotest.failf "the read could not run: %s"
                             (S.error_to_string e)
                     in

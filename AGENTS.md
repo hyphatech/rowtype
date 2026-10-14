@@ -63,7 +63,7 @@ Each rule comes with why it exists and the test that catches a break.
   `ptime` and `uuidm`, or `opam install rowtype` installs anything else.
 - **A migration is applied by the command, and never by an application.**
   The command `rowtype-migrate up` applies the files from a directory and
-  links no application; `Rowtype_migrate.run` is for a test and a tool. Why: every
+  links no application; `Rowtype_migrate.apply` is for a test and a tool. Why: every
   instance of an application would race to migrate, its role would have to
   own the schema, and no migration could run ahead of the code that needs
   it. Symptom: an application that migrates itself at start, every instance
@@ -89,13 +89,13 @@ Each rule comes with why it exists and the test that catches a break.
   is `` `Not_committed ``, never a success -- or `` `Conflict ``, named,
   where a deferred constraint refused its `COMMIT`. Why: Postgres rolls such a
   transaction back in silence. Test: `transactions` in `test_rowtype`.
-- **The one module `open` is `open Shape` in `src/rowtype.ml`**, and the
-  one local open a span's, `Mtime.Span.(5 * s)`. Why: the walk exists to
+- **The one module `open` is `open Shape` in `src/rowtype.ml`, and a local
+  open is a span's alone**, `Mtime.Span.(10 * s)`. Why: the walk exists to
   pattern-match that GADT, and every constructor qualified would bury the
   match; a span's operators are made to be opened around the one
   expression, as OCAML.md writes one. Symptom:
-  `rg -n '^\s*open |\b[A-Z]\w*\.[(\[{]' -g '*.ml' src postgres migrate`
-  finds any other.
+  `rg -n '^\s*open |\b[A-Z]\w*\.[(\[{]' -g '*.ml' src postgres migrate | rg -v 'Mtime\.Span\.\('`
+  finds anything but `open Shape`.
 
 ## House style
 

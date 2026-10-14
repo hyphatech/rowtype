@@ -42,9 +42,9 @@ module Pg = Rowtype_postgres
 type user = { id : int; name : string }
 
 let user =
-  S.conv (S.t2 S.int S.text)
-    ~of_:(fun (id, name) -> { id; name })
-    ~to_:(fun u -> (u.id, u.name))
+  S.map (S.t2 S.int S.text)
+    ~parse:(fun (id, name) -> { id; name })
+    ~print:(fun u -> (u.id, u.name))
 
 let add_user =
   S.find ~params:S.text ~row:S.int
@@ -57,19 +57,26 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let ( let* ) = Result.bind in
-  match
-    let* conninfo = Pg.conninfo "postgres://app@localhost/shop" in
-    let* db =
-      Pg.connect ~sw ~net:(Eio.Stdenv.net env)
-        ~mono_clock:(Eio.Stdenv.mono_clock env) conninfo
-    in
-    let* id = Pg.run db add_user "Ada" in
-    Pg.run db find_user id
-  with
-  | Ok (Some u) -> print_endline u.name
-  | Ok None -> print_endline "no such user"
-  | Error e -> prerr_endline (S.error_to_string e)
+  match Pg.Conninfo.of_string "postgres://app@localhost/shop" with
+  | Error m -> prerr_endline m
+  | Ok target -> (
+      match
+        let* db =
+          Pg.connect ~sw ~net:(Eio.Stdenv.net env)
+            ~mono_clock:(Eio.Stdenv.mono_clock env) target
+        in
+        let* id = Pg.run db add_user "Ada" in
+        Pg.run db find_user id
+      with
+      | Ok (Some u) -> print_endline u.name
+      | Ok None -> print_endline "no such user"
+      | Error e -> prerr_endline (S.error_to_string e))
 ```
+
+A connection is made to a `Pg.Conninfo.t`, read once from a connection
+string, a URL or a keyword list; `Pg.Conninfo.with_database` names another
+database on the same server, and `Pg.Conninfo.with_connect_timeout` bounds
+each address it tries.
 
 A statement says how many rows it answers:
 
@@ -120,9 +127,19 @@ cast to text and then to its type: `$1::text::numeric`, `$1::text::time`,
 `$1::text::inet`. `$1::numeric` alone makes the parameter a `numeric`, which
 `Pg.verify` refuses for a text.
 
-`S.opt` is a NULL, `S.array` a Postgres array, and `S.conv` or `S.parse` map
-a column onto your own type. A list bound as an array writes many rows in one
-statement and one round trip:
+`S.opt` is a NULL, `S.array` a Postgres array, and `S.map` or `S.parse` read
+a column as your own type: `~parse` from the column's, and `~print` back.
+`S.parse`'s `~parse` may refuse a value, answering `Error` with a sentence
+that says what it is not, which the row's error gives after the column's
+name:
+
+```ocaml
+let sku = S.parse S.text ~parse:Sku.of_string ~print:Sku.to_string
+(* Sku.of_string : string -> (Sku.t, string) result *)
+```
+
+A list bound as an array writes many rows in one statement and one round
+trip:
 
 ```ocaml
 let add_users =
@@ -149,7 +166,8 @@ transaction a concurrent one won. `` `Connection `Closed `` is a connection clos
 before the statement was sent, so nothing it would have done was done, and
 `` `Lost `` one that failed with the statement in flight -- a timeout, a
 broken socket, a server that ended the session -- so a write may have been
-applied. `` `Db `` is anything else. They are polymorphic variants, so they
+applied. `` `Unsent `` is a connection that could not be made, or made again
+-- nothing answered -- so nothing was sent and trying again is safe. `` `Db `` is anything else. They are polymorphic variants, so they
 join your own errors in one result.
 
 ```ocaml
@@ -180,9 +198,16 @@ with
 | Error (#Pg.Transaction.failure as f) -> Error (Unavailable f)
 ```
 
-`Pg.Transaction.error_to_string` tells what `within` answers, the
-transaction's own failures and its statements', in one call, and
-`Pg.Pool.error_to_string` a pool's `` `Pool `Busy `` or `` `Pool `Closed ``.
+Every failure the backend answers is a `Pg.error` -- a statement's, a
+transaction's own, a pool's `` `Pool `Busy `` or `` `Pool `Closed `` -- so a
+transaction in a borrowed connection is one result, and `Pg.error_to_string`
+tells all of it:
+
+```ocaml
+match Result.join (Pg.Pool.use pool (fun db -> Pg.Transaction.within db work)) with
+| Ok v -> ...
+| Error e -> Logs.err (fun m -> m "%s" (Pg.error_to_string e))
+```
 
 ## Checking statements
 
@@ -226,6 +251,17 @@ cut off between the two runs it again: write it to run twice
 
 `squash` proves the baseline makes the same schema as the history before it
 changes a file. The database is `--url`, or `DATABASE_URL`.
+
+A test migrates its database through the library, which the command is
+built on; every function that connects takes Eio's environment and a
+target, and closes what it opened:
+
+```ocaml
+let migrate env target =
+  let ( let* ) = Result.bind in
+  let* migrations = Rowtype_migrate.of_directory "migrations" in
+  Rowtype_migrate.run env target @@ fun db -> Rowtype_migrate.apply db migrations
+```
 
 ### A library's migrations
 

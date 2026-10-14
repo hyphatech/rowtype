@@ -32,8 +32,8 @@ type _ ty =
   | Scalar : 'a scalar -> 'a ty
   | Opt : 'a ty -> 'a option ty
   | Pair : 'a ty * 'b ty -> ('a * 'b) ty
-  | Conv : 'a ty * ('a -> 'b) * ('b -> 'a) -> 'b ty
-  | Parse : 'a ty * ('a -> 'b option) * ('b -> 'a) -> 'b ty
+  | Map : 'a ty * ('a -> 'b) * ('b -> 'a) -> 'b ty
+  | Parse : 'a ty * ('a -> ('b, string) result) * ('b -> 'a) -> 'b ty
   | Array : 'a ty -> 'a list ty
 
 val unit : unit ty
@@ -127,12 +127,13 @@ val t11 :
   'k ty ->
   ('a * 'b * 'c * 'd * 'e * 'f * 'g * 'h * 'i * 'j * 'k) ty
 
-val conv : 'a ty -> of_:('a -> 'b) -> to_:('b -> 'a) -> 'b ty
-(** Map a shape onto a record or variant, so a row decodes straight into the
-    type the rest of the code wants. *)
+val map : 'a ty -> parse:('a -> 'b) -> print:('b -> 'a) -> 'b ty
+(** A shape over a record or variant, so a row decodes straight into the type
+    the rest of the code wants. *)
 
-val parse : 'a ty -> of_:('a -> 'b option) -> to_:('b -> 'a) -> 'b ty
-(** As {!conv}, for a value a row may hold that this program cannot read. *)
+val parse :
+  'a ty -> parse:('a -> ('b, string) result) -> print:('b -> 'a) -> 'b ty
+(** As {!map}, for a value a row may hold that this program cannot read. *)
 
 val enum : ('a -> string) -> 'a list -> 'a ty
 (** A {!parse} over a column of the labels [values] have. *)
