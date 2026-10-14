@@ -7,17 +7,15 @@ it, human or agent. Users start at [README.md](README.md).
 ## Commands
 
 ```sh
-make setup   # once: dune's tools (formatter, odoc, language server, Merlin)
+make setup   # once: local opam switch in ./_opam, all dependencies
 make test    # starts the test Postgres in Docker, runs every test
 make lint    # formatting, odoc, and the release build
 make fmt     # format in place
 ```
 
-Only dune is on PATH, 3.24 or later: `dune build` builds the dependencies
-and OCaml itself as it needs them. `make test` needs `docker compose`.
-Without `ROWTYPE_TEST_PG` the suites that need a server are skipped, and
-the test output says so. CI runs `make lint` and `make test` on OCaml 5.5,
-and builds with the oldest versions the opam files allow.
+`make test` needs `docker compose`. Without
+`ROWTYPE_TEST_PG` the suites that need a server are skipped, and the test
+output says so. CI runs `make lint` and `make test` on OCaml 5.5.
 
 ## Layout
 

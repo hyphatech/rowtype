@@ -16,16 +16,6 @@
 (source
  (github hyphatech/rowtype))
 
-; postgres-eio is in no opam repository yet: dune takes it from its
-; repository at the release's tag, and opam from the pin-depends of
-; rowtype-postgres.opam.template, at the same tag.
-
-(pin
- (url "git+https://github.com/hyphatech/postgres-eio.git#0.5.0")
- (package
-  (name postgres-eio)
-  (version 0.5.0)))
-
 (package
  (name rowtype)
  (synopsis "One value describes a query's parameters and rows, for any SQL database")
@@ -49,7 +39,23 @@
   (qcheck-alcotest
    (and
     :with-test
-    (>= 0.91)))))
+    (>= 0.91)))
+  (odoc
+   (and
+    :with-dev-setup
+    (>= 3.2.1)))
+  (merlin
+   (and
+    :with-dev-setup
+    (>= 5.6-504)))
+  (ocaml-lsp-server
+   (and
+    :with-dev-setup
+    (>= 1.24.0)))
+  (ocamlformat
+   (and
+    :with-dev-setup
+    (= 0.29.0)))))
 
 (package
  (name rowtype-postgres)
