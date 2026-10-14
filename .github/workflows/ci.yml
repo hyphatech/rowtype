@@ -7,28 +7,30 @@ on:
   pull_request:
 
 jobs:
+  # The newest versions dune-project allows: dune solves, fetches and
+  # builds them, OCaml included, as it does on a contributor's machine.
   test:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        ocaml: ["5.5"]
     steps:
       - uses: actions/checkout@v5
-      - uses: ocaml/setup-ocaml@v3
+      - uses: ocaml-dune/setup-dune@v2
         with:
-          ocaml-compiler: ${{ matrix.ocaml }}
-      - run: opam install . --deps-only --with-test --with-dev-setup -y
-      # Use setup-ocaml's switch instead of the Makefile's local one.
-      - run: make lint OPAM="opam exec --"
-      - run: make test OPAM="opam exec --"
+          version: latest
+          steps: ""
+      - run: make setup
+      - run: make lint
+      - run: make test
 
-  # The oldest versions the opam file allows, as opam-repository checks.
+  # The oldest versions the opam files allow, as opam-repository checks,
+  # through opam: old releases do not yet build under dune's package
+  # management, so it is off for this job.
   lower-bounds:
     runs-on: ubuntu-24.04
     env:
       OPAMCRITERIA: +removed,+count[version-lag,solution]
       OPAMFIXUPCRITERIA: +removed,+count[version-lag,solution]
+      ROWTYPE_TEST_PG: postgres://rowtype:rowtype@localhost:5437/rowtype
+      ROWTYPE_TEST_PG_DUMP: docker compose exec -T db pg_dump -U rowtype -d {database}
     steps:
       - uses: actions/checkout@v5
       - uses: ocaml/setup-ocaml@v3
@@ -36,5 +38,6 @@ jobs:
           ocaml-compiler: "5.5"
       - run: opam install . --deps-only --with-test -y
       - run: opam list --installed --columns=name,version
-      - run: make build OPAM="opam exec --"
-      - run: make test OPAM="opam exec --"
+      - run: make db
+      - run: opam exec -- dune build --pkg disabled @all
+      - run: opam exec -- dune test --pkg disabled --force
