@@ -1,8 +1,5 @@
-# The opam switch is the checkout's (./_opam), so OCaml commands go through
-# opam exec. A worktree lives outside its checkout and uses its switch,
-# found through git.
-CHECKOUT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --git-common-dir))
-OPAM = opam exec --switch=$(CHECKOUT) --
+SWITCH ?= hypha-rowtype
+OPAM = opam exec --switch=$(SWITCH) --
 
 PG_TEST_PORT ?= 5437
 PG_TEST_URL  ?= postgres://rowtype:rowtype@localhost:$(PG_TEST_PORT)/rowtype
@@ -15,10 +12,10 @@ help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
-setup: ## create the local switch and install dependencies
+setup: ## create the switch and install dependencies
 	@docker compose version >/dev/null 2>&1 || echo "The tests need docker compose."
-	@[ -d $(CHECKOUT)/_opam ] || opam switch create $(CHECKOUT) 5.5.1 --no-install -y
-	opam install . --switch=$(CHECKOUT) --deps-only --with-test --with-dev-setup -y
+	@opam switch list --short | grep -qx $(SWITCH) || opam switch create $(SWITCH) --empty -y
+	opam install . --switch=$(SWITCH) --deps-only --with-test --with-dev-setup -y
 
 build: ## build everything
 	$(OPAM) dune build @all
