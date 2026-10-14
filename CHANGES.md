@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.7.0 (2026-10-14)
 
 - Breaking: `rowtype-postgres` needs postgres-eio 0.5.0. `Pg.Listener.connect`'s
   `?heartbeat` is `?keep_alive`, the word the driver uses. The driver now
