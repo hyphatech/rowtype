@@ -589,7 +589,12 @@ let test_a_record_can_have_a_table_of_its_own () =
         | Error (`Invalid_argument m) -> Some m
         | Ok () | Error _ -> None))
 
-let on_server f url = f (Db_target.env ()) url
+let on_server f url =
+  f ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+    ~mono_clock:(Db_target.mono ()) url
+
+(* The process manager a dump's or a squash's [pg_dump] runs through. *)
+let process_mgr () = Eio.Stdenv.process_mgr (Db_target.env ())
 
 (* A database is made and dropped by its URL, and one that is not there is
    said so, with the command that makes it. *)
@@ -797,8 +802,10 @@ let test_a_dump_is_what_the_migrations_make () =
           Pg.close db;
           let dump () =
             ok_s
-              (Rowtype_migrate.dump (Db_target.env ()) ~pg_dump
-                 ~restrict_key:"rowtype" ~migrations target)
+              (Rowtype_migrate.dump ~sw:(Db_target.sw ())
+                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                 ~process_mgr:(process_mgr ()) ~pg_dump ~restrict_key:"rowtype"
+                 ~migrations target)
           in
           let first = dump () in
           Alcotest.(check string) "the same on every run" first (dump ());
@@ -826,8 +833,9 @@ let script body =
   path
 
 let dump_with target ~pg_dump ~migrations =
-  Rowtype_migrate.dump (Db_target.env ()) ~pg_dump ~restrict_key:"rowtype"
-    ~migrations target
+  Rowtype_migrate.dump ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+    ~mono_clock:(Db_target.mono ()) ~process_mgr:(process_mgr ()) ~pg_dump
+    ~restrict_key:"rowtype" ~migrations target
 
 (* A pg_dump that fails is named with what it said, and never with its
    arguments: the URL in them holds the password, which is masked even
@@ -856,9 +864,10 @@ let test_a_squash_leaves_a_library_out () =
       in
       Db_target.with_postgres (fun target ->
           match
-            Rowtype_migrate.squash (Db_target.env ()) ~libraries:[ spool ]
-              ~pg_dump ~restrict_key:"rowtype" ~through:(version 20260201000000)
-              ~migrations:history target
+            Rowtype_migrate.squash ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+              ~mono_clock:(Db_target.mono ()) ~process_mgr:(process_mgr ())
+              ~libraries:[ spool ] ~pg_dump ~restrict_key:"rowtype"
+              ~through:(version 20260201000000) ~migrations:history target
           with
           | Error m -> Alcotest.failf "the squash was refused: %s" (words m)
           | Ok baseline ->
@@ -969,7 +978,9 @@ let test_a_cancelled_dump_leaves_nothing () =
         Eio.Fiber.first
           (fun () ->
             ignore
-              (Rowtype_migrate.dump (Db_target.env ()) ~pg_dump:"true"
+              (Rowtype_migrate.dump ~sw:(Db_target.sw ())
+                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                 ~process_mgr:(process_mgr ()) ~pg_dump:"true"
                  ~restrict_key:"rowtype" ~migrations target
                 : (string, Rowtype_migrate.error) result);
             "finished")
@@ -1013,9 +1024,10 @@ let test_a_squash_stands_for_its_history () =
       Db_target.with_postgres (fun target ->
           let baseline =
             match
-              Rowtype_migrate.squash (Db_target.env ()) ~pg_dump
-                ~restrict_key:"rowtype" ~through:(version 20260102000000)
-                ~migrations:history target
+              Rowtype_migrate.squash ~sw:(Db_target.sw ())
+                ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                ~process_mgr:(process_mgr ()) ~pg_dump ~restrict_key:"rowtype"
+                ~through:(version 20260102000000) ~migrations:history target
             with
             | Ok baseline -> baseline
             | Error m -> Alcotest.failf "the squash was refused: %s" (words m)
@@ -1063,7 +1075,9 @@ let test_a_squash_stands_for_its_history () =
                   Alcotest.failf "the history was refused: %s" (words m));
               let baseline =
                 match
-                  Rowtype_migrate.squash (Db_target.env ()) ~pg_dump
+                  Rowtype_migrate.squash ~sw:(Db_target.sw ())
+                    ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+                    ~process_mgr:(process_mgr ()) ~pg_dump
                     ~restrict_key:"rowtype" ~through:(version 20260102000000)
                     ~migrations:history target
                 with
@@ -1087,8 +1101,9 @@ let test_a_squash_stands_for_its_history () =
          two databases that cannot dump the same: nothing is squashed. *)
       Db_target.with_postgres (fun target ->
           match
-            Rowtype_migrate.squash (Db_target.env ()) ~pg_dump
-              ~restrict_key:"rowtype" ~through:(version 20260101000000)
+            Rowtype_migrate.squash ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
+              ~mono_clock:(Db_target.mono ()) ~process_mgr:(process_mgr ())
+              ~pg_dump ~restrict_key:"rowtype" ~through:(version 20260101000000)
               ~migrations:
                 [
                   m 20260101000000 "a" "create table a (n float8)";

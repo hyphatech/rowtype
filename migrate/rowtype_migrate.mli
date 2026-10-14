@@ -203,20 +203,25 @@ val run :
     not have is [`No_database]; any other failure to connect is the driver's. *)
 
 val create :
-  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  mono_clock:_ Eio.Time.Mono.t ->
   Rowtype_postgres.Conninfo.t ->
   (unit, [> error ]) result
-(** [create env target]: make the database the target names, as {!run} connects,
-    from the server's own [postgres]; one that exists is refused, as Postgres
-    refuses it. *)
+(** [create ~sw ~net ~mono_clock target]: make the database the target names,
+    connecting as {!run} does but on [sw], from the server's own [postgres]; one
+    that exists is refused, as Postgres refuses it. *)
 
 val drop :
-  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  mono_clock:_ Eio.Time.Mono.t ->
   Rowtype_postgres.Conninfo.t ->
   (unit, [> error ]) result
-(** [drop env target]: drop the database the target names, if it is there, as
-    {!run} connects. Refused while anybody is connected to it, as Postgres
-    refuses it: the one guard there is against the wrong URL. *)
+(** [drop ~sw ~net ~mono_clock target]: drop the database the target names, if
+    it is there, connecting as {!run} does but on [sw]. Refused while anybody is
+    connected to it, as Postgres refuses it: the one guard there is against the
+    wrong URL. *)
 
 val default_lock : int
 (** The advisory lock {!apply} takes unless told another, so any two processes
@@ -306,10 +311,10 @@ val status :
 (** {1 The schema, as one file} *)
 
 val dump :
-  < net : _ Eio.Net.t
-  ; mono_clock : _ Eio.Time.Mono.t
-  ; process_mgr : _ Eio.Process.mgr
-  ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  mono_clock:_ Eio.Time.Mono.t ->
+  process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
   ?libraries:source list ->
@@ -325,19 +330,19 @@ val dump :
 
     [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
     replaced in each word by the scratch database's; it is not given to a shell,
-    so a word cannot hold a space. It runs through [env]'s [process_mgr], so a
-    cancelled dump kills it, and what it writes as errors is [`Dump]'s words
-    rather than lines on the caller's terminal. Its connections are made as
-    {!run} makes one. It dumps the schema alone, with [restrict_key] as the key
-    a dump otherwise makes up afresh each time, and the lines naming the
-    versions of the server and of [pg_dump] are removed, so the file changes
-    only when the schema does. *)
+    so a word cannot hold a space. It runs through [process_mgr], so a cancelled
+    dump kills it, and what it writes as errors is [`Dump]'s words rather than
+    lines on the caller's terminal. Its connections are made as {!run} makes
+    one, on [sw]. It dumps the schema alone, with [restrict_key] as the key a
+    dump otherwise makes up afresh each time, and the lines naming the versions
+    of the server and of [pg_dump] are removed, so the file changes only when
+    the schema does. *)
 
 val squash :
-  < net : _ Eio.Net.t
-  ; mono_clock : _ Eio.Time.Mono.t
-  ; process_mgr : _ Eio.Process.mgr
-  ; .. > ->
+  sw:Eio.Switch.t ->
+  net:_ Eio.Net.t ->
+  mono_clock:_ Eio.Time.Mono.t ->
+  process_mgr:_ Eio.Process.mgr ->
   ?lock:int ->
   ?table:string ->
   ?libraries:source list ->

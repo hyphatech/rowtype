@@ -916,18 +916,18 @@ let quoted name =
 
 (* Made and dropped from the server's own database, [postgres], since no
    statement makes or drops the database it is connected to. *)
-let on_server env (c : Pg.Conninfo.t) f =
-  run env (Pg.Conninfo.with_database c "postgres") (fun admin ->
-      f admin c.database)
+let on_server ~sw ~net ~mono_clock (c : Pg.Conninfo.t) f =
+  with_connection ~sw ~net ~mono_clock (Pg.Conninfo.with_database c "postgres")
+    (fun admin -> f admin c.database)
 
-let create env c =
-  on_server env c (fun admin name ->
+let create ~sw ~net ~mono_clock c =
+  on_server ~sw ~net ~mono_clock c (fun admin name ->
       Pg.exec_raw admin ("create database " ^ quoted name))
 
 (* Not [with (force)]: Postgres refuses to drop a database somebody is
    connected to, the one guard there is against the wrong URL. *)
-let drop env c =
-  on_server env c (fun admin name ->
+let drop ~sw ~net ~mono_clock c =
+  on_server ~sw ~net ~mono_clock c (fun admin name ->
       Pg.exec_raw admin ("drop database if exists " ^ quoted name))
 
 (* A database of its own, made empty, migrated, dumped, and dropped however
@@ -968,10 +968,10 @@ let made_by_libraries conn =
           without those libraries")
   else Ok tables
 
-let migrated_scratch env ?lock ~table ?(libraries = []) ?(apart = false)
-    ~migrations (c : Pg.Conninfo.t) dump =
+let migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
+    ?(libraries = []) ?(apart = false) ~migrations (c : Pg.Conninfo.t) dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
-  run env c (fun admin ->
+  with_connection ~sw ~net ~mono_clock c (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
       Fun.protect
         ~finally:(fun () ->
@@ -984,7 +984,7 @@ let migrated_scratch env ?lock ~table ?(libraries = []) ?(apart = false)
         (fun () ->
           let target = Pg.Conninfo.with_database c scratch in
           let* theirs =
-            run env target (fun conn ->
+            with_connection ~sw ~net ~mono_clock target (fun conn ->
                 let* theirs =
                   if apart then
                     let* () = apply ?lock ~table ~libraries conn [] in
@@ -995,15 +995,16 @@ let migrated_scratch env ?lock ~table ?(libraries = []) ?(apart = false)
                 Ok theirs)
           in
           let url = Pg.Conninfo.to_url target in
-          capture ~process_mgr:env#process_mgr
+          capture ~process_mgr
             ~secrets:(url :: Option.to_list target.password)
             (dump ~url ~database:scratch
             @ List.map (fun t -> "--exclude-table=" ^ t) theirs)))
 
-let dump env ?lock ?(table = default_table) ?libraries ~pg_dump ~restrict_key
-    ~migrations c =
+let dump ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
+    ?libraries ~pg_dump ~restrict_key ~migrations c =
   Result.map normalise_dump
-    (migrated_scratch env ?lock ~table ?libraries ~migrations c
+    (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table ?libraries
+       ~migrations c
        (pg_dump_argv ~template:pg_dump ~restrict_key))
 
 (* ------------------------------------------------------------------ *)
@@ -1030,8 +1031,8 @@ let statements dump =
   |> List.filter (fun l -> not (String.starts_with ~prefix:"\\" l))
   |> String.concat "\n"
 
-let squash env ?lock ?(table = default_table) ?libraries ~pg_dump ~restrict_key
-    ~through ~migrations c =
+let squash ~sw ~net ~mono_clock ~process_mgr ?lock ?(table = default_table)
+    ?libraries ~pg_dump ~restrict_key ~through ~migrations c =
   let* table = table_name table in
   let* () = listed migrations in
   let replaced, kept =
@@ -1056,7 +1057,8 @@ let squash env ?lock ?(table = default_table) ?libraries ~pg_dump ~restrict_key
   in
   let dumped ~apart migrations =
     Result.map statements
-      (migrated_scratch env ?lock ~table ?libraries ~apart ~migrations c
+      (migrated_scratch ~sw ~net ~mono_clock ~process_mgr ?lock ~table
+         ?libraries ~apart ~migrations c
          (baseline_argv ~template:pg_dump ~restrict_key ~table))
   in
   let* made = dumped ~apart:true replaced in

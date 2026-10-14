@@ -1,5 +1,15 @@
 # Changes
 
+## Unreleased
+
+- Breaking: `Rowtype_migrate.create`, `drop`, `dump` and `squash` take the
+  capabilities they use -- `~sw`, `~net`, `~mono_clock`, and `~process_mgr`
+  for the two that run `pg_dump` -- where 0.7.0 had them take Eio's
+  environment, as Eio has a library take what it uses and a program alone
+  hand over its environment. Their connections live on `sw`.
+  `Rowtype_migrate.run env target f`, the bracket a program opens, still
+  takes the environment.
+
 ## 0.7.0 (2026-10-14)
 
 - Breaking: `rowtype-postgres` needs postgres-eio 0.5.0. `Pg.Listener.connect`'s

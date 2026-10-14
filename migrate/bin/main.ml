@@ -16,6 +16,15 @@ let exits = function
       prerr_endline m;
       1
 
+(* What the commands that make, drop or dump a database are handed: the
+   capabilities they use, on a switch the command's run owns. *)
+let in_eio f =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  f ~sw ~net:(Eio.Stdenv.net env)
+    ~mono_clock:(Eio.Stdenv.mono_clock env)
+    ~process_mgr:(Eio.Stdenv.process_mgr env)
+
 module Arg = Cmdliner.Arg
 module Cmd = Cmdliner.Cmd
 module Term = Cmdliner.Term
@@ -305,9 +314,9 @@ let dump =
     let* target = target in
     let* schema =
       told
-        ( Eio_main.run @@ fun env ->
-          M.dump env ~lock ~table ~libraries ~pg_dump ~restrict_key ~migrations
-            target )
+        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
+             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
+               ~pg_dump ~restrict_key ~migrations target))
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -360,9 +369,9 @@ let squash =
     let* target = target in
     let* baseline =
       told
-        ( Eio_main.run @@ fun env ->
-          M.squash env ~lock ~table ~libraries ~pg_dump ~restrict_key ~through
-            ~migrations target )
+        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
+             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
+               ~pg_dump ~restrict_key ~through ~migrations target))
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -412,7 +421,9 @@ let on_database name ~doc f =
     (Term.const (fun target ->
          exits
            (let* target = target in
-            told (Eio_main.run @@ fun env -> f env target)))
+            told
+              (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
+                   f ~sw ~net ~mono_clock target))))
     $ target)
 
 let create =
