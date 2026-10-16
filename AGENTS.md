@@ -115,42 +115,15 @@ with this file:
 
 @GIT.md
 
-## Changes
+## Changes and releases
 
-- A user-visible change adds a line under `## Unreleased` in
-  [CHANGES.md](CHANGES.md), in the same commit. A breaking one says so.
-- A change that makes a sentence in a document false edits that sentence in
-  the same commit.
-- A user-visible change updates the `.mli` it touches; a new supported
-  feature or a removed limitation updates the README.
+How a change reaches the library's users -- its line in `CHANGES.md`, what
+is breaking, how a release is tagged and published -- is
+[LIBRARY.md](LIBRARY.md), the same in every Hypha library and changed in
+all of them together, never in one. It is imported here, so it is read
+with this file:
 
-## Releases
+@LIBRARY.md
 
-[Semantic Versioning 2.0.0](https://semver.org). Before 1.0, a breaking
-change bumps the minor version and anything else the patch; from 1.0, a
-breaking change waits for the next major version, an addition bumps the
-minor and a fix the patch. The three packages are released together, at one
-version.
-
-Breaking means code that follows these rules may stop compiling or behave
-differently: removing or renaming anything in an `.mli`, changing a type,
-adding a required argument, or changing a default or documented behaviour.
-Adding a function, a module, an optional argument or a constructor to a
-public variant is not breaking: a variant grows in a minor version, so a
-match on one that must compile across versions ends in a catch-all arm. Nor
-is the wording of an error or a log line. A migration file's directive and
-the record's table are behaviour: changing either is breaking.
-
-The version lives only in the git tag (`0.1.0`, no `v`). A release renames
-`## Unreleased` in CHANGES.md to the version and date, and tags it. The GitHub
-release notes are that entry with each paragraph and bullet on one line,
-since GitHub keeps every line break in release notes. A release is
-pushed first and tagged only once CI is green on the commit the tag
-names: a broken build is never tagged.
-
-Publishing the GitHub release runs `.github/workflows/release.yml`, which
-uploads the source archive to it and publishes the release to Hypha's
-opam repository, `hyphatech/opam-repository`, where users install it from
-once that repository's CI has installed it. A published version never
-changes; running the workflow by hand with a tag publishes a release
-that missed it.
+Its three packages are released together. A migration file's directive
+and the record's table are behaviour: changing either is breaking.
