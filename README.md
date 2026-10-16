@@ -26,7 +26,8 @@ The rowtype library does less, Postgres on Eio only, and in return gives you:
 ## Install
 
 ```sh
-opam pin add https://github.com/hyphatech/rowtype.git
+opam repo add hypha https://github.com/hyphatech/opam-repository.git
+opam install rowtype rowtype-postgres rowtype-migrate
 ```
 
 ```lisp

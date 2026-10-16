@@ -1,5 +1,13 @@
 # Changes
 
+## Unreleased
+
+- Installs from Hypha's opam repository:
+  `opam repo add hypha https://github.com/hyphatech/opam-repository.git`,
+  then `opam install rowtype rowtype-postgres rowtype-migrate`. The
+  `pin-depends` are gone: rowtype-postgres takes postgres-eio 0.5, up to
+  its next breaking release.
+
 ## 0.8.0 (2026-10-14)
 
 - Breaking: `Rowtype_migrate.create`, `drop`, `dump` and `squash` take the
