@@ -1,8 +1,9 @@
 # AGENTS.md
 
-The rowtype library describes a query's parameters and rows once, runs it through a
-backend, and migrates a Postgres database. This file is for anyone changing
-it, human or agent. Users start at [README.md](README.md).
+rowtype is an OCaml library of Hypha Stack. It describes a query's
+parameters and rows once, runs it through a backend, and migrates a Postgres
+database. This file is for anyone changing it, human or agent. Users start
+at [README.md](README.md).
 
 ## Commands
 
@@ -97,33 +98,7 @@ Each rule comes with why it exists and the test that catches a break.
   `rg -n '^\s*open |\b[A-Z]\w*\.[(\[{]' -g '*.ml' src postgres migrate | rg -v 'Mtime\.Span\.\('`
   finds anything but `open Shape`.
 
-## House style
-
-The house style, the OCaml checklist and the OCaml tools are
-[OCAML.md](OCAML.md), the same in every Hypha OCaml repository and changed
-in all of them together, never in one. It is imported here, so it is read
-with this file:
-
-@OCAML.md
-
-## Git
-
-How work becomes a commit -- its format, where it happens, what is pushed
--- is [GIT.md](GIT.md), the same in every Hypha repository and changed in
-all of them together, never in one. It is imported here, so it is read
-with this file:
-
-@GIT.md
-
 ## Changes and releases
-
-How a change reaches the library's users -- its line in `CHANGES.md`, what
-is breaking, how a release is tagged and published -- is
-[LIBRARY.md](LIBRARY.md), the same in every Hypha library and changed in
-all of them together, never in one. It is imported here, so it is read
-with this file:
-
-@LIBRARY.md
 
 Its three packages are released together. A migration file's directive
 and the record's table are behaviour: changing either is breaking.
