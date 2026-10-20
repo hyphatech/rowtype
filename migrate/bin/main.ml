@@ -16,15 +16,6 @@ let exits = function
       prerr_endline m;
       1
 
-(* What the commands that make, drop or dump a database are handed: the
-   capabilities they use, on a switch the command's run owns. *)
-let in_eio f =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  f ~sw ~net:(Eio.Stdenv.net env)
-    ~mono_clock:(Eio.Stdenv.mono_clock env)
-    ~process_mgr:(Eio.Stdenv.process_mgr env)
-
 module Arg = Cmdliner.Arg
 module Cmd = Cmdliner.Cmd
 module Term = Cmdliner.Term
@@ -85,7 +76,9 @@ let target =
     Arg.value
       (Arg.opt (Arg.some Arg.string) None
          (Arg.info [ "url" ] ~docv:"URL"
-            ~doc:"The database, as a postgres:// URL or a keyword list."))
+            ~doc:
+              "The database: a postgres:// URL or a keyword list, or \
+               sqlite:PATH."))
   and var =
     Arg.value
       (Arg.opt Arg.string "DATABASE_URL"
@@ -112,7 +105,13 @@ let target =
             | Some _ | None ->
                 Error (Printf.sprintf "no database: give --url, or set %s" var))
       in
-      Rowtype_postgres.Conninfo.of_string url)
+      (* The dialects the command was built with, SQLite's by its URL's
+         [sqlite:] and Postgres's by anything else. *)
+      match On_sqlite.database url with
+      | Some database -> database
+      | None ->
+          Option.value (On_postgres.database url)
+            ~default:(Error "no dialect reads this URL"))
   $ url $ var $ env_file
 
 (* Where a package installs its migrations: the switch's [share], the
@@ -165,15 +164,12 @@ let table =
 
 let lock =
   Arg.value
-    (Arg.opt Arg.int M.default_lock
+    (Arg.opt (Arg.some Arg.int) None
        (Arg.info [ "lock" ] ~docv:"N"
           ~doc:
-            "The advisory lock migrating takes, the same for every process \
-             that migrates one database."))
-
-let with_db target f =
-  let* target = target in
-  told (Eio_main.run @@ fun env -> M.run env target f)
+            "The advisory lock migrating takes on Postgres, the same for every \
+             process that migrates one database; the library's own unless \
+             given."))
 
 let up =
   Cmd.v
@@ -183,8 +179,8 @@ let up =
          exits
            (let* migrations = told (M.of_directory dir) in
             let* libraries = libraries sources in
-            with_db target (fun conn ->
-                M.apply ~lock ~table ~libraries conn migrations)))
+            let* (db : Database.t) = target in
+            db.apply ~lock ~table ~libraries migrations))
     $ dir $ target $ lock $ table $ sources)
 
 let status =
@@ -258,10 +254,8 @@ let status =
          exits
            (let* migrations = told (M.of_directory dir) in
             let* libraries = libraries sources in
-            let* statuses =
-              with_db target (fun conn ->
-                  M.status ~table ~libraries conn migrations)
-            in
+            let* (db : Database.t) = target in
+            let* statuses = db.status ~table ~libraries migrations in
             show ~check statuses))
     $ dir $ target $ table $ check $ sources)
 
@@ -311,12 +305,9 @@ let dump =
   let run dir target lock table output check pg_dump restrict_key sources =
     let* migrations = told (M.of_directory dir) in
     let* libraries = libraries sources in
-    let* target = target in
+    let* (db : Database.t) = target in
     let* schema =
-      told
-        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.dump ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-               ~pg_dump ~restrict_key ~migrations target))
+      db.dump ~lock ~table ~libraries ~pg_dump ~restrict_key migrations
     in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
@@ -366,12 +357,10 @@ let squash =
     in
     let* migrations = told (M.of_directory dir) in
     let* libraries = libraries sources in
-    let* target = target in
+    let* (db : Database.t) = target in
     let* baseline =
-      told
-        (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-             M.squash ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-               ~pg_dump ~restrict_key ~through ~migrations target))
+      db.squash ~lock ~table ~libraries ~pg_dump ~restrict_key ~through
+        migrations
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -420,19 +409,19 @@ let on_database name ~doc f =
   Cmd.v (Cmd.info name ~doc)
     (Term.const (fun target ->
          exits
-           (let* target = target in
-            told
-              (in_eio (fun ~sw ~net ~mono_clock ~process_mgr:_ ->
-                   f ~sw ~net ~mono_clock target))))
+           (let* (db : Database.t) = target in
+            f db))
     $ target)
 
 let create =
-  on_database "create" ~doc:"Make the database the URL names." M.create
+  on_database "create" ~doc:"Make the database the URL names." (fun db ->
+      db.create ())
 
 let drop =
   on_database "drop"
-    ~doc:"Drop the database the URL names, which nobody may be connected to."
-    M.drop
+    ~doc:
+      "Drop the database the URL names; on Postgres, one nobody is connected \
+       to." (fun db -> db.drop ())
 
 let () =
   exit

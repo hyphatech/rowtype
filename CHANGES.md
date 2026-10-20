@@ -1,5 +1,32 @@
 # Changes
 
+## Unreleased
+
+- `rowtype-sqlite`, a backend for SQLite: the same statements and shapes,
+  run on a database file or one in memory through the `sqlite3` binding,
+  each statement on a system thread so the domain's other fibers go on.
+  Every scalar is kept as one of SQLite's kinds of value -- an instant as
+  UTC text `datetime()` reads, an array as a JSON array `json_each` reads --
+  and a placeholder is `$1` or SQLite's `?1`. `Rowtype_sqlite.Transaction`
+  begins deferred, immediate or exclusive, and rolls back a `COMMIT` SQLite
+  refused. It is the one package of rowtype that binds C, since SQLite has
+  no protocol to speak in OCaml. `Rowtype_sqlite.Pool` lends connections
+  to one file, `Rowtype_sqlite.verify` checks statements against the
+  database without running them, and `Rowtype_sqlite.copy_in` loads rows
+  from a `Seq.t`, as their Postgres namesakes do.
+- `rowtype-migrate` migrates SQLite as it does Postgres: the same files,
+  record and refusals, and the command takes `--url sqlite:PATH`. A SQLite
+  dump and squash need no server and no `pg_dump`.
+- Breaking: a database's migrations are its dialect's library.
+  `Rowtype_migrate` keeps the files, the record and its rules; Postgres's
+  `run`, `create`, `drop`, `apply`, `status`, `dump`, `squash` and
+  `default_lock` are `Rowtype_migrate_postgres`'s, in the library
+  `rowtype-migrate.postgres`, with the signatures they had, and SQLite's
+  are `Rowtype_migrate_sqlite`'s, in `rowtype-migrate.sqlite`. Each is built
+  where its backend is installed, so a program and the command link the
+  dialects it uses and no other. `dump`'s and `squash`'s `~pg_dump` and
+  `~restrict_key` are optional, with the command's defaults.
+
 ## 0.8.1 (2026-10-16)
 
 - Installs from Hypha's opam repository:

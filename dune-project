@@ -97,17 +97,50 @@
     (>= 6.3.0)))))
 
 (package
- (name rowtype-migrate)
- (synopsis
-  "Migrations for Postgres: plain SQL files, forward only, and the command that applies them")
+ (name rowtype-sqlite)
+ (synopsis "The SQLite backend for rowtype, over the sqlite3 binding")
  (description
-  "A directory of timestamped SQL files, applied in order under an advisory lock, each in one transaction with the row that records it and a digest of its text, or on its own where Postgres refuses one; a schema dump that changes only when the schema does; and a history squashed into one baseline.")
+  "Connections to a database file or one in memory and a pool of them, each statement run on a system thread so the domain's other fibers go on, transactions whose own failures are values, a load through one prepared insert, and a statement checked against the database without running it.")
  (depends
   (ocaml
    (>= 5.5))
   (rowtype
    (= :version))
-  (rowtype-postgres
+  (sqlite3
+   (>= 5.4.2))
+  (ptime
+   (>= 1.2.0))
+  (uuidm
+   (>= 0.9.10))
+  (eio
+   (>= 1.5))
+  (logs
+   (>= 0.10.0))
+  (mtime
+   (>= 2.1.0))
+  (eio_main
+   (and
+    :with-test
+    (>= 1.5)))
+  (alcotest
+   (and
+    :with-test
+    (>= 1.9.1)))
+  (qcheck-core
+   (and
+    :with-test
+    (>= 0.91)))))
+
+(package
+ (name rowtype-migrate)
+ (synopsis
+  "Migrations for Postgres and SQLite: plain SQL files, forward only, and the command that applies them")
+ (description
+  "A directory of timestamped SQL files, applied in order by one process at a time, each in one transaction with the row that records it and a digest of its text, or on its own where the database refuses one; a schema dump that changes only when the schema does; and a history squashed into one baseline. The same files, record and command for every dialect, each built where its backend is installed: rowtype-migrate.postgres with rowtype-postgres, rowtype-migrate.sqlite with rowtype-sqlite.")
+ (depends
+  (ocaml
+   (>= 5.5))
+  (rowtype
    (= :version))
   (ptime
    (>= 1.2.0))
@@ -122,4 +155,10 @@
   (alcotest
    (and
     :with-test
-    (>= 1.9.1)))))
+    (>= 1.9.1))))
+ (depopts rowtype-postgres rowtype-sqlite)
+ (conflicts
+  (rowtype-postgres
+   (<> :version))
+  (rowtype-sqlite
+   (<> :version))))

@@ -255,7 +255,7 @@ let test_a_squash_refuses_what_it_cannot_squash () =
   Eio.Switch.run @@ fun sw ->
   let squash ~through migrations =
     match
-      C.squash ~sw ~net:(Eio.Stdenv.net env)
+      Rowtype_migrate_postgres.squash ~sw ~net:(Eio.Stdenv.net env)
         ~mono_clock:(Eio.Stdenv.mono_clock env)
         ~process_mgr:(Eio.Stdenv.process_mgr env)
         ~pg_dump:"pg_dump" ~restrict_key:"rowtype" ~through:(version through)

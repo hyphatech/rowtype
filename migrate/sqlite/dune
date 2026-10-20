@@ -1,0 +1,7 @@
+; Migrations on SQLite: built only where rowtype-sqlite is installed.
+
+(library
+ (name rowtype_migrate_sqlite)
+ (public_name rowtype-migrate.sqlite)
+ (optional)
+ (libraries rowtype rowtype-migrate rowtype-sqlite eio))

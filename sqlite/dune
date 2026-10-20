@@ -1,0 +1,7 @@
+; rowtype over SQLite, through the sqlite3 binding: the one library of
+; rowtype that links C, since SQLite is a library and has no protocol.
+
+(library
+ (name rowtype_sqlite)
+ (public_name rowtype-sqlite)
+ (libraries rowtype sqlite3 ptime uuidm eio eio.unix logs mtime))

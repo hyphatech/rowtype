@@ -6,7 +6,7 @@
 ![OCaml 5.5+](https://img.shields.io/badge/OCaml-5.5%2B-EC6813?logo=ocaml&logoColor=white)
 [![Hypha Stack](https://img.shields.io/badge/Hypha-Stack-d4a820?labelColor=15120e)](https://hyphatech.io/stack/)
 
-Typed Postgres queries and migrations for OCaml 5.
+Typed SQL queries and migrations for Postgres and SQLite, on OCaml 5.
 
 You write the SQL. You declare its parameters and rows once, and that one
 declaration binds the values going in and decodes the rows coming out. No
@@ -14,21 +14,27 @@ ORM, no query DSL, no ppx.
 
 ## Why not Caqti?
 
-Caqti is the mature choice, and the right one for MariaDB, SQLite or Lwt.
-The rowtype library does less, Postgres on Eio only, and in return gives you:
+Caqti is the mature choice, and the right one for MariaDB or Lwt. The
+rowtype library does less, Postgres and SQLite on Eio only, and in return
+gives you:
 
 - a driver written for Eio, [postgres-eio](https://github.com/hyphatech/postgres-eio),
   rather than libpq bindings or a driver adapted to it;
 - every statement checked against your database, from a test, without
   running it;
-- migrations in the box.
+- migrations in the box, the same files and command for every dialect.
 
 ## Install
 
 ```sh
 opam repo add hypha https://github.com/hyphatech/opam-repository.git
-opam install rowtype rowtype-postgres rowtype-migrate
+opam install rowtype rowtype-postgres rowtype-migrate   # Postgres
+opam install rowtype rowtype-sqlite rowtype-migrate     # SQLite, through its C library
 ```
+
+`rowtype-migrate` migrates the dialects whose backend is installed beside
+it, and links no other: its libraries are `rowtype-migrate.postgres` and
+`rowtype-migrate.sqlite`, each built where its backend is.
 
 ```lisp
 (libraries rowtype rowtype-postgres eio_main)
@@ -220,6 +226,93 @@ a lost connection -- is that failure, as a statement's is;
 Run it in a test against a migrated database, and a renamed column fails the
 test instead of a request.
 
+## SQLite
+
+`rowtype-sqlite` runs the same statements on SQLite: the quick start's
+`add_user` and `find_user` run on it unchanged.
+
+```ocaml
+module Sq = Rowtype_sqlite
+
+let () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let ( let* ) = Result.bind in
+  match
+    let* db = Sq.connect ~sw ~mono_clock:(Eio.Stdenv.mono_clock env) "shop.db" in
+    let* () =
+      Sq.exec_raw db
+        "create table if not exists users (id integer primary key, name text \
+         not null) strict"
+    in
+    let* id = Sq.run db add_user "Ada" in
+    Sq.run db find_user id
+  with
+  | Ok (Some u) -> print_endline u.name
+  | Ok None -> print_endline "no such user"
+  | Error e -> prerr_endline (Sq.error_to_string e)
+```
+
+`":memory:"` is a database in memory, the connection's alone. Unlike every
+other package here, it binds C: SQLite is a library, not a server, so there
+is no protocol to speak in OCaml, and it links your system's SQLite through
+[sqlite3](https://github.com/mmottl/sqlite3-ocaml). SQLite's calls wait on
+the disk and on other connections' locks, so each statement runs on a
+system thread and the domain's other fibers go on meanwhile.
+
+A placeholder is `$1` as on Postgres, or SQLite's `?1` or `?`; one with a
+name, `:name`, is refused. SQLite keeps four kinds of value, and each column
+is kept as one:
+
+| Column | SQLite | Kept as |
+|---|---|---|
+| `S.int`, `S.int64` | integer | an `int` past 63 bits is refused |
+| `S.float` | real | an integer is read too where a float holds it exactly; a NaN is NULL |
+| `S.text`, `S.json`, `S.enum` | text | |
+| `S.bytes` | blob | |
+| `S.bool` | integer | `0` or `1` |
+| `S.instant` | text | UTC, `2026-10-20 09:24:46.621000`: what `datetime()` reads and writes, so it sorts as time and compares with `datetime('now')`; read with any zone the text gives |
+| `S.timestamp` | text | the same, and one with a zone is refused |
+| `S.date` | text | `2026-10-20` |
+| `S.interval` | text | `P14M3DT-0.000005S` |
+| `S.uuid` | text | `7c9e6679-7425-40de-944b-e07fc1f90ae7`; a blob of 16 bytes is read too |
+| `S.array` | text | a JSON array, which `json_each($1)` reads and `json_group_array` writes; `bytes` in it as hex |
+
+Make tables `strict`, or declare each column `integer`, `real`, `text` or
+`blob`. SQLite turns a value into its column's type where it can, and a
+column of a type it does not know -- `uuid`, `json`, `timestamp` -- turns
+text that looks like a number into one: a JSON document `123` comes back an
+integer, which `S.json` refuses.
+
+Each connection enforces foreign keys. A unique or primary key is
+`` `Conflict (Some "users.email") ``, named by its columns as SQLite names
+them, and a foreign key `` `Conflict None ``. A lock another connection still
+holds once the wait is over -- 5 s unless `connect` is given `~wait` -- is
+`` `Not_serializable ``: nothing was done, and trying again may succeed.
+
+```ocaml
+Sq.Transaction.within db ~behaviour:Immediate ~retries:3 (fun db ->
+    let* balance = Sq.run db balance_of account in
+    if balance < amount then Error `Insufficient
+    else Sq.run db withdraw (account, amount))
+```
+
+SQLite's transactions are serializable; what you choose is when one takes
+the write lock, `Deferred` (SQLite's own), `Immediate` or `Exclusive`. A
+transaction that reads and then writes begins `Immediate`, or its write can
+find another connection wrote since it read. A statement that fails inside
+one undoes itself alone, as SQLite does, and the transaction goes on. A
+`COMMIT` SQLite refuses is rolled back and said, as on Postgres.
+
+A connection is one fiber's at a time. `Sq.Pool.create ~sw ~mono_clock
+"shop.db"` opens connections to one file up front and `Sq.Pool.use` lends
+them, each given back with no transaction open; for readers alongside a
+writer, turn on WAL once, `pragma journal_mode = wal`, which the file keeps.
+`Sq.verify db statements` prepares every statement without running it and
+holds its parameters and columns to what you declared, a column of a table
+to its declared type. `Sq.copy_in` loads rows of any number from a `Seq.t`
+with one prepared `insert`, all or none, as `Pg.copy_in` does with `COPY`.
+
 ## Migrations
 
 Plain SQL files named `<UTC stamp>_<name>.sql`, forward only, applied by a
@@ -235,12 +328,15 @@ rowtype-migrate squash VERSION     # every migration through it, as one baseline
 rowtype-migrate drop               # drop the database, if nobody is connected
 ```
 
-`up` applies each file in its own transaction, under an advisory lock, and
-records a digest of it. A migration edited after it ran, or merged out of
+`up` applies each file in its own transaction and records a digest of it,
+so two processes migrating at once take turns: Postgres's run holds an
+advisory lock, and each of SQLite's transactions takes the write lock as it
+begins and asks the record first. A migration edited after it ran, or merged out of
 order, is refused, and so is a file that ends its transaction itself with a
-`commit` or a `rollback`. A statement Postgres refuses inside a transaction
--- `create index concurrently`, `vacuum` -- goes in a file of its own whose
-first line is
+`commit` or a `rollback`. A statement a database refuses inside a
+transaction -- Postgres's `create index concurrently` or `vacuum`, SQLite's
+`vacuum` or the `pragma foreign_keys = off` its table rebuild needs -- goes
+in a file of its own whose first line is
 
 ```sql
 -- rowtype-migrate: no transaction
@@ -251,7 +347,10 @@ cut off between the two runs it again: write it to run twice
 (`create index concurrently if not exists`).
 
 `squash` proves the baseline makes the same schema as the history before it
-changes a file. The database is `--url`, or `DATABASE_URL`.
+changes a file. The database is `--url`, or `DATABASE_URL`: a Postgres URL
+or keyword list, or `sqlite:PATH`, a file SQLite keeps. A SQLite dump and
+squash need no server and no `pg_dump`: each is migrated in memory and
+written from SQLite's own schema.
 
 A test migrates its database through the library, which the command is
 built on; every function that connects takes Eio's environment and a
@@ -261,9 +360,13 @@ target, and closes what it opened:
 let migrate env target =
   let ( let* ) = Result.bind in
   let* migrations = Rowtype_migrate.of_directory "migrations" in
-  Rowtype_migrate.run env target @@ fun db -> Rowtype_migrate.apply db migrations
+  Rowtype_migrate_postgres.run env target @@ fun db ->
+  Rowtype_migrate_postgres.apply db migrations
 ```
 
+On SQLite it is `Rowtype_migrate_sqlite`, with a file where Postgres has a
+target: `Rowtype_migrate_sqlite.run env "app.db" @@ fun db -> ...`. A
+command built without a dialect says what to install for its URL.
 ### A library's migrations
 
 A library that owns a table ships the migrations that make it, in its own
@@ -288,7 +391,8 @@ make them.
 |---|---|
 | `rowtype` | queries described once; links no database library |
 | `rowtype-postgres` | the Postgres backend, over [postgres-eio](https://github.com/hyphatech/postgres-eio) |
-| `rowtype-migrate` | the migrations, and the `rowtype-migrate` command |
+| `rowtype-sqlite` | the SQLite backend, over the [sqlite3](https://github.com/mmottl/sqlite3-ocaml) binding |
+| `rowtype-migrate` | the migrations and the `rowtype-migrate` command, for each dialect installed beside it |
 
 Each module's `.mli` is its reference.
 

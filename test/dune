@@ -23,21 +23,60 @@
   alcotest
   qcheck-core))
 
+; The SQLite backend: statements, scalars, failures and transactions, on
+; databases in memory and in files of their own, which need no server.
+
+(test
+ (name test_sqlite)
+ (package rowtype-sqlite)
+ (modules test_sqlite)
+ (libraries
+  rowtype
+  rowtype-sqlite
+  eio
+  eio_main
+  logs
+  mtime
+  ptime
+  uuidm
+  unix
+  alcotest
+  qcheck-core))
+
 ; Migrations against a real Postgres.
 
 (test
  (name test_migrate)
  (package rowtype-migrate)
+ (enabled_if %{lib-available:rowtype-migrate.postgres})
  (modules test_migrate)
  (libraries
   rowtype
   rowtype-postgres
   rowtype-migrate
+  rowtype-migrate.postgres
   db_target
   eio
   eio_main
   mtime
   unix
+  alcotest))
+
+; Migrations on SQLite: the same behaviours as on Postgres, on files of
+; their own, which need no server.
+
+(test
+ (name test_migrate_sqlite)
+ (package rowtype-migrate)
+ (enabled_if %{lib-available:rowtype-migrate.sqlite})
+ (modules test_migrate_sqlite)
+ (libraries
+  rowtype
+  rowtype-sqlite
+  rowtype-migrate
+  rowtype-migrate.sqlite
+  eio
+  eio_main
   alcotest))
 
 ; The walk of a shape, against a backend that echoes its parameters, which
@@ -54,9 +93,11 @@
 (test
  (name test_migrate_files)
  (package rowtype-migrate)
+ (enabled_if %{lib-available:rowtype-migrate.postgres})
  (modules test_migrate_files)
  (libraries
   rowtype-migrate
+  rowtype-migrate.postgres
   rowtype-postgres
   eio
   eio_main
@@ -69,4 +110,8 @@
 (cram
  (applies_to command)
  (package rowtype-migrate)
+ (enabled_if
+  (and
+   %{lib-available:rowtype-migrate.postgres}
+   %{lib-available:rowtype-migrate.sqlite}))
  (deps %{bin:rowtype-migrate}))

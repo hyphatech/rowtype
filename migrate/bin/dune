@@ -1,12 +1,24 @@
+; The command, with every dialect whose library is installed: a dialect
+; that is not is a URL the command says it needs.
+
 (executable
  (name main)
  (public_name rowtype-migrate)
  (package rowtype-migrate)
  (libraries
   rowtype-migrate
-  rowtype-postgres
   cmdliner
   eio
   eio_main
   ptime
-  ptime.clock.os))
+  ptime.clock.os
+  (select
+   on_postgres.ml
+   from
+   (rowtype-migrate.postgres rowtype-postgres -> on_postgres.available.ml)
+   (-> on_postgres.missing.ml))
+  (select
+   on_sqlite.ml
+   from
+   (rowtype-migrate.sqlite -> on_sqlite.available.ml)
+   (-> on_sqlite.missing.ml))))

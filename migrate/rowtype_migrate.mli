@@ -1,5 +1,10 @@
-(** Migrations for Postgres: plain SQL files, forward only, each applied in one
-    transaction with the row that records it unless its first line says not.
+(** Migrations as plain SQL files, forward only, each applied in one transaction
+    with the row that records it unless its first line says not: the files, the
+    record and its rules, the same for every dialect. A database's own functions
+    -- {!Rowtype_migrate_postgres}, {!Rowtype_migrate_sqlite} -- are each a
+    library of their own, [rowtype-migrate.postgres] and
+    [rowtype-migrate.sqlite], built where that dialect's backend is installed,
+    so a program links the dialects it uses and no other.
 
     A migration is a file named [<version>_<name>.sql] in one directory, the
     version a UTC timestamp of fourteen digits. They are applied by the
@@ -16,11 +21,11 @@
     rowtype-migrate drop                  drop it
     v}
 
-    The database is [--url], or else the variable [--env] names --
-    [DATABASE_URL] unless given -- read from [--env-file] if one is given and
-    from the environment if not; the files are [--dir], [migrations] unless
-    given; the record is [--table], {!default_table} unless given. Every command
-    has [--help].
+    The database is [--url] -- a Postgres URL or keyword list, or [sqlite:PATH]
+    -- or else the variable [--env] names -- [DATABASE_URL] unless given -- read
+    from [--env-file] if one is given and from the environment if not; the files
+    are [--dir], [migrations] unless given; the record is [--table],
+    {!default_table} unless given. Every command has [--help].
 
     A library that owns a table ships the migrations that make it, as files of
     its own installed with its package, in [share/<package>/migrations]; the
@@ -33,19 +38,21 @@
 
     An application never migrates, and knows nothing of its migrations: they are
     applied as a step of their own before it starts, and [status --check] is how
-    a script asks whether every one is. {!apply} is for a test and a tool. The
-    way back from a bad migration is the next one.
+    a script asks whether every one is. a dialect's [apply] is for a test and a
+    tool. The way back from a bad migration is the next one.
 
     A file runs in a transaction with the row that records it, unless its first
     line is the directive
 
     {v -- rowtype-migrate: no transaction v}
 
-    for the statements Postgres refuses inside one --
-    [create index concurrently], [vacuum]. Such a file is one statement, since
-    several sent together are a transaction of their own, and it is recorded
-    after it succeeds: a run cut off between the two runs it again, so it is
-    written to run twice ([create index concurrently if not exists]).
+    for the statements a database refuses inside one -- Postgres's
+    [create index concurrently] and [vacuum], SQLite's [vacuum] and the
+    [pragma foreign_keys = off] its table rebuild needs. Such a file is one
+    statement, since several sent together are a transaction of their own, and
+    it is recorded after it succeeds: a run cut off between the two runs it
+    again, so it is written to run twice
+    ([create index concurrently if not exists]).
 
     A file in a transaction that ends it itself -- its own [commit] or
     [rollback] -- is refused, whether or not what follows succeeds, and its
@@ -119,8 +126,8 @@ type error =
         that ended its own transaction, at whatever that end kept, with the
         migration not recorded *)
   | `No_database of string
-    (** the server has no database of this name: it is made with
-        [rowtype-migrate create] *)
+    (** the server has no database of this name, or there is no SQLite file of
+        this name: it is made with [rowtype-migrate create] *)
   | `Dump of string
     (** [pg_dump] could not run, or failed: in words naming the program, and
         what it wrote as errors, never its arguments, which hold the URL, and
@@ -131,7 +138,8 @@ type error =
       (** the connection was lost between two migrations and made again, holding
           the advisory lock no more, so the run stopped: what was applied before
           stays applied, and nothing more was *) ]
-    (** what became of the advisory lock {!apply} migrates under *) ]
+    (** what became of the advisory lock Postgres's [apply] migrates under *)
+  ]
 (** Every way migrating fails: a polymorphic variant, as a statement's failures
     are, so it joins a caller's own. *)
 
@@ -180,111 +188,21 @@ val of_package : prefix:string -> string -> (migration list, [> error ]) result
     [prefix] is the switch's: the command takes it from [OPAM_SWITCH_PREFIX], or
     else from where it is installed itself. *)
 
-(** {1 A database} *)
+(** {1 The record}
 
-val run :
-  < net : _ Eio.Net.t ; mono_clock : _ Eio.Time.Mono.t ; .. > ->
-  Rowtype_postgres.Conninfo.t ->
-  (Rowtype_postgres.conn -> ('a, ([> error ] as 'e)) result) ->
-  ('a, 'e) result
-(** [run env target f]: a connection to the database, as the commands make one,
-    on a switch of its own and with the network and the monotonic clock taken
-    from [env], handed to [f] and closed when [f] returns or raises:
-
-    {[
-    Rowtype_migrate.run env target @@ fun db ->
-    Rowtype_migrate.apply db migrations
-    ]}
-
-    Its connect bounded at ten seconds unless the target sets its
-    [connect_timeout], and nothing after that, since an administrator's
-    statement runs as long as it takes; notices off, since
-    [create table if not exists] is one on every run. A database the server does
-    not have is [`No_database]; any other failure to connect is the driver's. *)
-
-val create :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  Rowtype_postgres.Conninfo.t ->
-  (unit, [> error ]) result
-(** [create ~sw ~net ~mono_clock target]: make the database the target names,
-    connecting as {!run} does but on [sw], from the server's own [postgres]; one
-    that exists is refused, as Postgres refuses it. *)
-
-val drop :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  Rowtype_postgres.Conninfo.t ->
-  (unit, [> error ]) result
-(** [drop ~sw ~net ~mono_clock target]: drop the database the target names, if
-    it is there, connecting as {!run} does but on [sw]. Refused while anybody is
-    connected to it, as Postgres refuses it: the one guard there is against the
-    wrong URL. *)
-
-val default_lock : int
-(** The advisory lock {!apply} takes unless told another, so any two processes
-    migrating one database take turns. *)
+    What every dialect's [apply] and [status] read and write. *)
 
 val default_table : string
 (** [schema_migrations], the table the database's record is kept in unless told
     another. Every function that reads or writes the record takes [?table]: a
     name of lower-case letters, digits and underscores, starting with a letter
-    or an underscore, after a schema and a dot if it names one, found through
-    the search path as the statements that write it find it -- so two
+    or an underscore, after a schema -- on SQLite, an attached database -- and a
+    dot if it names one, found as the statements that write it find it, so two
     applications can keep two records in one database. A name outside that
     grammar is refused, since a table's name cannot be a parameter. *)
 
-val apply :
-  ?lock:int ->
-  ?table:string ->
-  ?libraries:source list ->
-  Rowtype_postgres.conn ->
-  migration list ->
-  (unit, [> error ]) result
-(** Apply every migration in the list that the database has not recorded, in
-    version order, under a Postgres advisory lock -- so two processes migrating
-    at once take turns, and the second finds nothing left to do. [lock] is any
-    number fixed for the database. The connection's bounds are lifted for the
-    run: a migration is bounded by nothing but itself.
-
-    [libraries] are applied first, in the order given, each as a history of its
-    own: what follows holds within each source, never across two. A source given
-    twice is [`Invalid_argument].
-
-    Refused as [`Record], naming the migration, and nothing more applied:
-    - [`Behind], a database whose record stops before the list's baseline, which
-      has to be migrated with a build from before the squash first;
-    - [`Unknown], a database that records a version the list does not know,
-      which was migrated from a newer checkout: applying an older one would run
-      a history that is not the database's;
-    - [`Edited], a migration whose text is not what the database applied --
-      edited after it ran, where a schema that has run changes by the next
-      migration;
-    - [`Late], a pending migration older than one already applied, merged after
-      a later one ran, which would run out of the order it was written in.
-
-    A migration that fails is [`Migration_failed], and the ones before it stay
-    applied.
-
-    The lock is the session's, so a migration runs only on the backend that took
-    it: a connection lost between two migrations, which a transaction would make
-    again on a new backend holding no lock, stops the run as [`Lock `Lost], the
-    ones before it applied and nothing more.
-
-    Each applied migration is recorded with its source and a digest of its text.
-    A database migrated before the digests were kept has them recorded on its
-    next run, and one migrated before sources were kept has its record given a
-    source column on its next run, every row the application's. What a baseline
-    replaced is history: recorded, and compared with nothing.
-
-    What a migration sets for its session -- a [set search_path], a
-    [set lock_timeout], the empty search path a baseline's pg_dump starts with
-    -- ends with it: the session's parameters are reset after each migration, as
-    a connection's own would be ([reset all]), so a migration runs in the same
-    session whether it is applied in one run with the one before it or in
-    another. *)
+val table_name : string -> (string, [> error ]) result
+(** The name, where it is one {!default_table} allows. *)
 
 type status = {
   source : string;  (** {!app}, or a library's name *)
@@ -297,76 +215,112 @@ type status = {
   behind : version option;
       (** the list's baseline, where the database's record stops before it *)
 }
+(** What a dialect's [status] says of one source. *)
 
-val status :
-  ?table:string ->
-  ?libraries:source list ->
-  Rowtype_postgres.conn ->
-  migration list ->
-  (status list, [> error ]) result
-(** What {!apply} would do, without doing it, one status for each source in the
-    order {!apply} takes them, the application's last; it writes nothing, not
-    even the table that records migrations. *)
+(** {1 A dialect}
 
-(** {1 The schema, as one file} *)
+    What a database does its own way, for a dialect's library, and nothing else:
+    the record's statements are rowtype's, [$1] on every dialect, and so is the
+    reading of a record against a list. *)
 
-val dump :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  process_mgr:_ Eio.Process.mgr ->
-  ?lock:int ->
-  ?table:string ->
-  ?libraries:source list ->
-  pg_dump:string ->
-  restrict_key:string ->
-  migrations:migration list ->
-  Rowtype_postgres.Conninfo.t ->
-  (string, [> error ]) result
-(** What the migrations add up to from nothing, the libraries' with the
-    application's: a database of its own on the server the target names,
-    migrated, dumped, and dropped however that went -- never what some database
-    has drifted to.
+type transaction_failure =
+  [ `Not_committed of string
+  | `Conflict of string option
+  | `Not_serializable of string
+  | `Lost of string
+  | `Unsent of string ]
+(** What a dialect's transaction may add to its work's failures. *)
 
-    [pg_dump] is the command, split on spaces, with [{url}] and [{database}]
-    replaced in each word by the scratch database's; it is not given to a shell,
-    so a word cannot hold a space. It runs through [process_mgr], so a cancelled
-    dump kills it, and what it writes as errors is [`Dump]'s words rather than
-    lines on the caller's terminal. Its connections are made as {!run} makes
-    one, on [sw]. It dumps the schema alone, with [restrict_key] as the key a
-    dump otherwise makes up afresh each time, and the lines naming the versions
-    of the server and of [pg_dump] are removed, so the file changes only when
-    the schema does. *)
+(** Whether a database holds the record, and which of the columns a record made
+    before them may lack it has. *)
+type record_columns = Absent | Present of { checksum : bool; source : bool }
+
+module type Dialect = sig
+  type conn
+
+  val run :
+    conn -> ('p, 'r) Rowtype.statement -> 'p -> ('r, [> Rowtype.error ]) result
+
+  val exec_raw : conn -> string -> (unit, [> Rowtype.error ]) result
+
+  val within :
+    conn ->
+    (conn -> ('a, ([> transaction_failure ] as 'e)) result) ->
+    ('a, 'e) result
+  (** One transaction, which takes the write lock as it begins where the dialect
+      lets it choose. *)
+
+  val exclusively :
+    lock:int ->
+    conn ->
+    (holding:(conn -> (unit, [ `Lock of [ `Lost ] | Rowtype.error ]) result) ->
+    (unit, error) result) ->
+    (unit, error) result
+  (** The run, under whatever lock the dialect takes over all of it, and
+      [holding], asked at the start of each migration's transaction, which says
+      whether the run still holds it. *)
+
+  val prepare_record : table:string -> conn -> (unit, [> Rowtype.error ]) result
+  (** The record's table made, and one made before brought up to it. *)
+
+  val record_columns :
+    table:string -> conn -> (record_columns, [> Rowtype.error ]) result
+  (** Read, and nothing written. *)
+
+  type mark
+
+  val mark : conn -> (mark, [> Rowtype.error ]) result
+  (** Inside a migration's transaction, before its file runs. *)
+
+  val unbroken : conn -> mark -> (bool, [> Rowtype.error ]) result
+  (** After the file ran: whether the transaction {!val-mark} was taken in is
+      still the one open, which a file that ended it -- a [commit], a [rollback]
+      -- makes false. *)
+
+  val reset : conn -> (unit, [> Rowtype.error ]) result
+  (** What a migration may set for its session put back, after each. *)
+end
+
+(** The record's rules over a dialect: what a dialect's library calls its
+    [apply] and [status]. *)
+module Make (D : Dialect) : sig
+  val apply :
+    lock:int ->
+    table:string ->
+    libraries:source list ->
+    D.conn ->
+    migration list ->
+    (unit, [> error ]) result
+  (** Every migration the database has not recorded, in version order, each in a
+      transaction of its own that first asks the record whether another process
+      applied it meanwhile, under {!Dialect.exclusively}; refused as [`Record]
+      where the record and the list disagree. *)
+
+  val status :
+    table:string ->
+    libraries:source list ->
+    D.conn ->
+    migration list ->
+    (status list, [> error ]) result
+  (** What {!apply} would do, without doing it, one status for each source in
+      the order {!apply} takes them, the application's last; it writes nothing,
+      not even the record's table. *)
+end
+
+val made_more_than_tables : [> error ]
+(** A squash's refusal of a library that made anything but tables, which a
+    baseline could not tell from the application's. *)
 
 val squash :
-  sw:Eio.Switch.t ->
-  net:_ Eio.Net.t ->
-  mono_clock:_ Eio.Time.Mono.t ->
-  process_mgr:_ Eio.Process.mgr ->
-  ?lock:int ->
-  ?table:string ->
-  ?libraries:source list ->
-  pg_dump:string ->
-  restrict_key:string ->
   through:version ->
   migrations:migration list ->
-  Rowtype_postgres.Conninfo.t ->
-  (migration, [> error ]) result
-(** Every migration through the version [through] names, as one baseline: a
-    database of its own on the server the target names, migrated through it and
-    dumped -- the schema and the rows the migrations wrote, as statements, and
-    never the record -- by [pg_dump], as {!dump}'s is. Its version is [through],
-    its name [baseline].
-
-    It is proved before it is answered: the baseline and the migrations after it
-    make a database that dumps the same, row for row, as the one the whole
-    history makes, or it is [`Unproved]. Writing it and removing the files it
-    replaced is the caller's. [`Invalid_argument]: a [through] that is no
-    migration's version, and one that is the baseline's with nothing before it.
-
-    It squashes the application's history alone: with [libraries], they run
-    first on each scratch database, and the tables they made are left out of the
-    baseline, since their own migrations make them. A library that made anything
-    but tables -- a type, a function, a view -- is [`Invalid_argument], since a
-    baseline could not tell it from the application's. A library squashes its
-    own history in its own repository, where it is the application. *)
+  dumped:(apart:bool -> migration list -> (string, ([> error ] as 'e)) result) ->
+  (migration, 'e) result
+(** Every migration through the version [through] names, as one baseline:
+    [dumped] is a dialect's database of its own, made from nothing, migrated
+    through the list it is given and written out -- the schema and the rows,
+    never the record -- with the libraries' tables left out where [apart]. The
+    baseline is proved before it is answered: it and the migrations after it
+    write out the same as the whole history, or it is [`Unproved].
+    [`Invalid_argument]: a [through] that is no migration's version, and one
+    that is the baseline's with nothing before it. *)

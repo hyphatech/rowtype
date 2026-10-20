@@ -1,0 +1,7 @@
+; Migrations on Postgres: built only where rowtype-postgres is installed.
+
+(library
+ (name rowtype_migrate_postgres)
+ (public_name rowtype-migrate.postgres)
+ (optional)
+ (libraries rowtype rowtype-migrate rowtype-postgres eio mtime unix))
