@@ -1612,14 +1612,19 @@ let test_exclusive_keeps_readers_out () =
     ~timeout:Mtime.Span.(10 * ms)
     [ "create table t (k integer)" ]
     (fun a b ->
+      let held, hold = Eio.Promise.create () in
       let release, released = Eio.Promise.create () in
       Eio.Fiber.both
         (fun () ->
           ok
             (Sq.Transaction.within ~behaviour:Exclusive a (fun a ->
+                 Eio.Promise.resolve hold ();
                  Eio.Promise.await release;
                  Sq.run a insert 1)))
         (fun () ->
+          (* Each call is on a thread of its own, so the read waits until
+             the exclusive transaction has begun, or it may go first. *)
+          Eio.Promise.await held;
           (match
              Sq.run b
                (S.find ~params:S.unit ~row:S.int "select count(*) from t")
