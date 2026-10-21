@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.9.0 (2026-10-21)
 
 - `rowtype-sqlite`, a backend for SQLite: the same statements and shapes,
   run on a database file or one in memory through the `sqlite3` binding,
