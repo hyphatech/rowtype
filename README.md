@@ -258,7 +258,9 @@ other package here, it binds C: SQLite is a library, not a server, so there
 is no protocol to speak in OCaml, and it links your system's SQLite through
 [sqlite3](https://github.com/mmottl/sqlite3-ocaml). SQLite's calls wait on
 the disk and on other connections' locks, so each statement runs on a
-system thread and the domain's other fibers go on meanwhile.
+system thread and the domain's other fibers go on meanwhile. `connect`'s
+`~timeout` is how long a statement waits for another connection's lock, 5 s
+unless given, after which it is `` `Not_serializable ``.
 
 A placeholder is `$1` as on Postgres, or SQLite's `?1` or `?`; one with a
 name, `:name`, is refused. SQLite keeps four kinds of value, and each column
@@ -330,8 +332,10 @@ rowtype-migrate drop               # drop the database, if nobody is connected
 
 `up` applies each file in its own transaction and records a digest of it,
 so two processes migrating at once take turns: Postgres's run holds an
-advisory lock, and each of SQLite's transactions takes the write lock as it
-begins and asks the record first. A migration edited after it ran, or merged out of
+advisory lock, `--lock N` naming another, and each of SQLite's transactions
+takes the write lock as it begins and asks the record first. A flag only
+Postgres reads -- `--lock`, `--pg-dump`, `--restrict-key` -- is refused for
+a `sqlite:` URL, never ignored. A migration edited after it ran, or merged out of
 order, is refused, and so is a file that ends its transaction itself with a
 `commit` or a `rollback`. A statement a database refuses inside a
 transaction -- Postgres's `create index concurrently` or `vacuum`, SQLite's
@@ -353,8 +357,10 @@ squash need no server and no `pg_dump`: each is migrated in memory and
 written from SQLite's own schema.
 
 A test migrates its database through the library, which the command is
-built on; every function that connects takes Eio's environment and a
-target, and closes what it opened:
+built on. `run` takes Eio's environment and a target, and closes what it
+opened; `create`, `drop`, `dump` and `squash` take the capabilities they
+use -- a switch, the network and the clock, and for a dump the process
+manager -- so a test hands them nothing more:
 
 ```ocaml
 let migrate env target =

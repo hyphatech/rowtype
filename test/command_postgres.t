@@ -1,0 +1,44 @@
+The command on Postgres, where it needs no server. A connection string
+here is a key the driver refuses, so the failure names which one was read.
+
+  $ unset DATABASE_URL
+  $ mkdir m
+
+The database is --url, or else DATABASE_URL, or else the variable --env
+names; from --env-file where one is given, the last line that sets it:
+
+  $ rowtype-migrate status --dir m
+  no database: give --url, or set DATABASE_URL
+  [1]
+  $ DATABASE_URL="from_environment=1" rowtype-migrate status --dir m
+  the connection string's "from_environment" is not a key this driver reads
+  [1]
+  $ OTHER="named=1" rowtype-migrate status --dir m --env OTHER
+  the connection string's "named" is not a key this driver reads
+  [1]
+  $ cat > .env <<'END'
+  > # a comment, and a blank line
+  > 
+  > export DATABASE_URL="first=1"
+  > DATABASE_URL='last=1'
+  > END
+  $ DATABASE_URL="from_environment=1" rowtype-migrate status --dir m --env-file .env
+  the connection string's "last" is not a key this driver reads
+  [1]
+  $ rowtype-migrate status --dir m --env-file .env --url "given=1"
+  the connection string's "given" is not a key this driver reads
+  [1]
+  $ rowtype-migrate status --dir m --env-file .env --env OTHER
+  .env does not set OTHER
+  [1]
+
+A password holding a space is refused, and the words after the space,
+which are the password's, are not repeated:
+
+  $ rowtype-migrate status --dir m --url "user=app password=ab12 cd34"
+  a word after the connection string's password has no =; a password holding a space is quoted: password='a b'
+  [1]
+  $ rowtype-migrate status --dir m --url "user=app password=ab12 cd34=ef"
+  a key after the connection string's password is not one this driver reads; a password holding a space is quoted: password='a b'
+  [1]
+

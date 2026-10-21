@@ -137,11 +137,10 @@ let with_listener ?keep_alive target f =
   Fun.protect ~finally:(fun () -> Pg.Listener.close l) (fun () -> f l)
 
 let notify db channel payload =
-  ignore
-    (ok
-       (Pg.run db
-          (S.exec ~params:S.(t2 text text) "select pg_notify($1, $2)")
-          (channel, payload)))
+  ok
+    (Pg.run db
+       (S.exec ~params:S.(t2 text text) "select pg_notify($1, $2)")
+       (channel, payload))
 
 let heard l =
   match ok (Pg.Listener.next l) with

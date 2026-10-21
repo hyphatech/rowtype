@@ -30,6 +30,7 @@ let version n =
 
 let number (v : Rowtype_migrate.version) = (v :> int)
 let numbers = List.map number
+let names = List.map (fun (m : Rowtype_migrate.migration) -> number m.version)
 
 (* Each case gets a database of its own. See [db_target.ml]. *)
 let on_db setup f =
@@ -123,7 +124,7 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
               (S.find_opt ~params:S.unit ~row:S.bool
                  "select to_regclass('schema_migrations') is not null")
               ()));
-      ignore (ok_s (Rowtype_migrate_postgres.apply db [ first ]));
+      ok_s (Rowtype_migrate_postgres.apply db [ first ]);
       let st = ok_s (app_status db [ first; second ]) in
       Alcotest.(check (list string)) "one left" [ "second" ] (pending_of st);
       Alcotest.(check (list (pair int string)))
@@ -150,7 +151,7 @@ let test_a_migration_is_held_to_what_ran () =
       in
       let first = m 20260101000000 "first" "create table a (n int)"
       and third = m 20260103000000 "third" "create table c (n int)" in
-      ignore (ok_s (Rowtype_migrate_postgres.apply db [ first; third ]));
+      ok_s (Rowtype_migrate_postgres.apply db [ first; third ]);
       Alcotest.(check (option string))
         "an edited one" (Some "first")
         (match
@@ -180,9 +181,9 @@ let test_a_migration_is_held_to_what_ran () =
       Alcotest.(check (pair (list int) (list int)))
         "and a status says both"
         ([ 20260101000000 ], [ 20260102000000 ])
-        (numbers st.edited, numbers st.late);
+        (names st.edited, names st.late);
       ok (Pg.exec_raw db "update schema_migrations set checksum = null");
-      ignore (ok_s (Rowtype_migrate_postgres.apply db [ first; third ]));
+      ok_s (Rowtype_migrate_postgres.apply db [ first; third ]);
       Alcotest.(check (list (option string)))
         "unrecorded sums recorded"
         [ Some (Digest.to_hex (Digest.string first.sql)) ]
@@ -469,11 +470,13 @@ let test_a_baseline_stands_for_what_it_replaced () =
       let st = ok_s (app_status db squashed) in
       Alcotest.(check (pair (list int) (list int)))
         "what it replaced is history, not unknown" ([], [])
-        (numbers st.unknown, numbers st.edited);
+        (numbers st.unknown, names st.edited);
       Alcotest.(check int) "and the rest applied" 3 (List.length st.applied);
       Alcotest.(check (option int))
         "and nothing behind" None
-        (Option.map number st.behind));
+        (Option.map
+           (fun (m : Rowtype_migrate.migration) -> number m.version)
+           st.behind));
   on_db [] (fun db ->
       ok_s (Rowtype_migrate_postgres.apply db squashed);
       Alcotest.(check int)
@@ -503,7 +506,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
       | Error e -> Alcotest.failf "not an edit: %s" (words e));
       Alcotest.(check (list int))
         "and a status says" [ 20260102000000 ]
-        (numbers (ok_s (app_status db [ edited; c ])).edited));
+        (names (ok_s (app_status db [ edited; c ])).edited));
   on_db [] (fun db ->
       ok_s (Rowtype_migrate_postgres.apply db [ a ]);
       Alcotest.(check bool)
@@ -513,7 +516,19 @@ let test_a_baseline_stands_for_what_it_replaced () =
         | Ok () | Error _ -> false);
       Alcotest.(check (option int))
         "and a status says" (Some 20260102000000)
-        (Option.map number (ok_s (app_status db squashed)).behind))
+        (Option.map
+           (fun (m : Rowtype_migrate.migration) -> number m.version)
+           (ok_s (app_status db squashed)).behind));
+  (* A migration may be named anything, baseline among them: what it ran
+     below the baseline's version says the baseline did not run there. *)
+  on_db [] (fun db ->
+      ok_s
+        (Rowtype_migrate_postgres.apply db [ a; { b with name = "baseline" } ]);
+      ok_s (Rowtype_migrate_postgres.apply db squashed);
+      let st = ok_s (app_status db squashed) in
+      Alcotest.(check (pair (list int) (list int)))
+        "one named baseline is history too" ([], [])
+        (numbers st.unknown, names st.edited))
 
 (* What a migration sets for its session ends with it, in a transaction or
    outside one: the schema is the same whether the next migration runs in
@@ -615,7 +630,7 @@ let test_a_database_is_made_and_dropped () =
   | Error e -> Alcotest.failf "not said missing: %s" (words e));
   ok_s (on_server Rowtype_migrate_postgres.create url);
   Fun.protect
-    ~finally:(fun () -> ignore (on_server Rowtype_migrate_postgres.drop url))
+    ~finally:(fun () -> ok_s (on_server Rowtype_migrate_postgres.drop url))
     (fun () ->
       ok_s (connects ());
       Alcotest.(check bool)
@@ -885,7 +900,24 @@ let test_a_squash_leaves_a_library_out () =
                 (contains baseline.sql "TABLE public.a");
               Alcotest.(check bool)
                 "and the library's not" false
-                (contains baseline.sql "spool_jobs"))
+                (contains baseline.sql "spool_jobs"));
+      (* What a library made beside its tables -- a view -- a baseline
+         cannot tell from the application's own, so it is refused. *)
+      let viewer =
+        library "viewer"
+          [ migration 20260101000000 "view" "create view v as select 1" ]
+      in
+      Db_target.with_postgres (fun target ->
+          match
+            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
+              ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
+              ~process_mgr:(process_mgr ()) ~libraries:[ viewer ] ~pg_dump
+              ~restrict_key:"rowtype" ~through:(version 20260201000000)
+              ~migrations:history target
+          with
+          | Error (`Invalid_argument _) -> ()
+          | Ok _ -> Alcotest.fail "a library that made a view was squashed over"
+          | Error e -> Alcotest.failf "refused otherwise: %s" (words e))
 
 let test_a_failed_dump_names_no_password () =
   Db_target.with_postgres (fun target ->

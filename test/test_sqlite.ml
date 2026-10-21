@@ -6,6 +6,13 @@
 module S = Rowtype
 module Sq = Rowtype_sqlite
 
+(* A property drawn afresh each run, its seed printed and [QCHECK_SEED]
+   honoured, as qcheck-alcotest draws one, inside the case that holds its
+   database. *)
+let checked test =
+  let _, _, run = QCheck_alcotest.to_alcotest test in
+  run ()
+
 let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (Sq.error_to_string e)
@@ -71,6 +78,8 @@ let count db table =
     (Sq.run db
        (S.find ~params:S.unit ~row:S.int ("select count(*) from " ^ table))
        ())
+
+exception Raised
 
 (* ------------------------------------------------------------------ *)
 (* Statements *)
@@ -297,7 +306,7 @@ let round_trips ~column ty testable values =
 
 let property ~column ty gen eq =
   on_db [] (fun db ->
-      QCheck.Test.check_exn
+      checked
         (QCheck.Test.make ~count:300 ~name:column (QCheck.make gen) (fun v ->
              eq v (back db ~column ty v))))
 
@@ -508,6 +517,41 @@ let test_refusals () =
 (* ------------------------------------------------------------------ *)
 (* Arrays *)
 
+(* Arrays are JSON text on SQLite, so the writer and the reader of that
+   text are the whole of it: any list of strings, quotes, brackets,
+   backslashes, commas, control characters and the word null among them,
+   must come back as itself, NULLs included. *)
+let test_arrays_of_any_text () =
+  let hostile =
+    QCheck.Gen.(
+      let piece =
+        oneof_list
+          [
+            "\"";
+            "\\";
+            ",";
+            "[";
+            "]";
+            "{";
+            " ";
+            "null";
+            "NULL";
+            "";
+            "Ω";
+            "😀";
+            "a";
+            "\n";
+            "\t";
+            "\x01";
+            "\\u0000";
+          ]
+      in
+      let element = map (String.concat "") (list_size (int_range 0 6) piece) in
+      list_size (int_range 0 8) (option element))
+  in
+  let ty = S.(array (opt text)) in
+  property ~column:"text" ty hostile (List.equal (Option.equal String.equal))
+
 let test_arrays () =
   on_db [ "create table t (k integer)" ] (fun db ->
       let back ty v =
@@ -564,7 +608,39 @@ let test_arrays () =
         (contains (db_error (read "select 'hunter2'")) "not an array");
       Alcotest.(check bool)
         "an element of another kind names the element" true
-        (contains (db_error (read {|select '[1,"x"]'|})) "element 2"))
+        (contains (db_error (read {|select '[1,"x"]'|})) "element 2"));
+  (* JSON as RFC 8259 writes it, which json_each reads too; each refused
+     here is malformed JSON to SQLite, or JSON5, which json_valid refuses. *)
+  on_db [] (fun db ->
+      let read ty text =
+        Sq.run db (S.find ~params:S.text ~row:S.(array ty) "select $1") text
+      in
+      Alcotest.(check (list (float 0.)))
+        "numbers as JSON writes them" [ -0.; 0.5; 1e5; -1.5e-3 ]
+        (ok (read S.float "[-0, 0.5, 1e+5, -1.5E-3]"));
+      List.iter
+        (fun text ->
+          match read S.float text with
+          | Error (`Db m) when contains m "not an array" -> ()
+          | Ok _ -> Alcotest.failf "%S was read" text
+          | Error e -> Alcotest.failf "%S: %s" text (Sq.error_to_string e))
+        [
+          "[01]";
+          "[1.]";
+          "[.5]";
+          "[1.e5]";
+          "[1e]";
+          "[-]";
+          "[+1]";
+          "[1-2]";
+          "[0x10]";
+          "[NaN]";
+          "[1,]";
+        ];
+      match read S.text "[\"a\tb\"]" with
+      | Error (`Db m) when contains m "not an array" -> ()
+      | Ok _ -> Alcotest.fail "a raw tab in a string was read"
+      | Error e -> Alcotest.failf "a raw tab: %s" (Sq.error_to_string e))
 
 (* ------------------------------------------------------------------ *)
 (* Failures *)
@@ -625,6 +701,123 @@ let test_waits_off_the_domain () =
           ok (Sq.run b (S.exec ~params:S.unit "insert into t values (1)") ()))
         (fun () -> ok (Sq.exec_raw a "rollback"));
       Alcotest.(check int) "written once the lock went" 1 (count a "t"))
+
+(* A function quotes its argument in its message, a value bound or one read
+   from a table alike; a constraint SQLite checks names its columns, and no
+   value. *)
+let test_no_value_in_a_failure () =
+  on_db
+    [
+      "create table t (v text not null)";
+      "create table s (p text)";
+      "insert into s values ('token-5e0b')";
+    ] (fun db ->
+      let words = function
+        | Ok _ -> Alcotest.fail "a failure answered Ok"
+        | Error e -> Sq.error_to_string e
+      in
+      let bound =
+        words
+          (Sq.run db
+             (S.find ~params:S.text ~row:(S.opt S.text)
+                "select json_extract('{}', $1)")
+             "token-4f9a")
+      in
+      Alcotest.(check bool) "no value bound" false (contains bound "token-4f9a");
+      let read = words (Sq.exec_raw db "select json_extract('{}', p) from s") in
+      Alcotest.(check bool) "no value read" false (contains read "token-5e0b");
+      Alcotest.(check bool)
+        "a constraint names its column" true
+        (contains
+           (words
+              (Sq.run db
+                 (S.exec ~params:(S.opt S.text) "insert into t values ($1)")
+                 None))
+           "t.v"))
+
+(* A connection reads the schema as it prepares its first statement, which
+   waits on another's lock as a write does. *)
+let test_a_lock_while_preparing () =
+  on_two
+    ~timeout:Mtime.Span.(10 * ms)
+    [ "create table t (k integer)" ]
+    (fun a b ->
+      let read = S.list ~params:S.unit ~row:S.int "select k from t" in
+      ok (Sq.exec_raw a "begin exclusive");
+      (match Sq.run b read () with
+      | Error (`Not_serializable m) ->
+          Alcotest.(check bool)
+            "in no words of the binding's" false
+            (contains m "Sqlite3.prepare")
+      | Error e -> Alcotest.failf "unexpected error: %s" (Sq.error_to_string e)
+      | Ok _ -> Alcotest.fail "read under another's exclusive lock");
+      let attempts = ref 0 in
+      let rows =
+        ok
+          (Sq.Transaction.within ~retries:1 b (fun b ->
+               incr attempts;
+               let rows = Sq.run b read () in
+               if !attempts = 1 then ok (Sq.exec_raw a "rollback");
+               rows))
+      in
+      Alcotest.(check int) "tried again" 2 !attempts;
+      Alcotest.(check int) "and read" 0 (List.length rows))
+
+(* Text after a statement that compiles to nothing is no second statement. *)
+let test_trailing_text () =
+  on_db [] (fun db ->
+      let one sql = Sq.run db (S.find ~params:S.unit ~row:S.int sql) () in
+      List.iter
+        (fun sql -> Alcotest.(check int) sql 1 (ok (one sql)))
+        [ "select 1;\n"; "select 1; -- the end"; "select 1;;"; "select 1 " ];
+      List.iter
+        (fun sql ->
+          match one sql with
+          | Error (`Db _) -> ()
+          | Error e ->
+              Alcotest.failf "%s: unexpected error: %s" sql
+                (Sq.error_to_string e)
+          | Ok _ -> Alcotest.failf "%s: a second statement ran" sql)
+        [ "select 1; select 2"; "select 1;; select 2"; "" ];
+      ok (Sq.exec_raw db "create table t (k integer); -- the end\n");
+      ok (Sq.exec_raw db "insert into t values (1);; insert into t values (2);");
+      ok (Sq.exec_raw db "");
+      Alcotest.(check int) "a script runs each" 2 (count db "t"))
+
+(* A fold that raises leaves its statement to be ended, and ending a write
+   commits it, which waits for a reader's lock: the fiber that lets the lock
+   go runs while it waits, or the wait holds the domain until it runs out. *)
+let test_ending_leaves_the_domain () =
+  on_two
+    ~timeout:Mtime.Span.(200 * ms)
+    [
+      "create table t (k integer)";
+      "with recursive n(i) as (select 1 union all select i + 1 from n where i \
+       < 1000) insert into t select i from n";
+    ]
+    (fun a b ->
+      ok (Sq.exec_raw b "begin");
+      ignore (count b "t" : int);
+      let raised, raise_ = Eio.Promise.create () in
+      let let_go = ref false and let_go_first = ref false in
+      Eio.Fiber.both
+        (fun () ->
+          (match
+             Sq.fold a
+               (S.list ~params:S.unit ~row:S.int
+                  "update t set k = k + 1 returning k") () ~init:() (fun () _ ->
+                 Eio.Promise.resolve raise_ ();
+                 raise Raised)
+           with
+          | _ -> Alcotest.fail "the raise did not pass"
+          | exception Raised -> ());
+          let_go_first := !let_go)
+        (fun () ->
+          Eio.Promise.await raised;
+          ok (Sq.exec_raw b "commit");
+          let_go := true);
+      Alcotest.(check bool)
+        "the lock went while the write waited" true !let_go_first)
 
 let test_closed () =
   with_eio @@ fun ~sw ~mono_clock ->
@@ -856,8 +1049,6 @@ let test_behaviours () =
       | _ -> Alcotest.fail "began immediate under another's lock");
       ok (Sq.exec_raw b "rollback"))
 
-exception Raised
-
 let test_raise_and_cancel () =
   on_db [ "create table t (k integer)" ] (fun db ->
       (match
@@ -882,6 +1073,62 @@ let test_raise_and_cancel () =
       Alcotest.(check int) "a cancellation rolls back" 0 (count db "t");
       ok (Sq.Transaction.within db (fun db -> Sq.run db insert 1));
       Alcotest.(check int) "and the connection goes on" 1 (count db "t"))
+
+(* A transaction cancelled while its statement waits on a lock: the
+   statement ends once the lock goes, and the COMMIT after it, which a
+   cancelled fiber may not start, still ends the transaction. *)
+let test_cancelled_while_waiting () =
+  on_two
+    ~timeout:Mtime.Span.(200 * ms)
+    [ "create table t (k integer)" ]
+    (fun a b ->
+      ok (Sq.exec_raw b "begin immediate");
+      let writing, write = Eio.Promise.create () in
+      Eio.Fiber.first
+        (fun () ->
+          ignore
+            (Sq.Transaction.within a (fun a ->
+                 Eio.Promise.resolve write ();
+                 Sq.run a insert 1)
+              : (unit, Sq.error) result))
+        (fun () ->
+          Eio.Promise.await writing;
+          ok (Sq.exec_raw b "rollback"));
+      ok (Sq.Transaction.within a (fun a -> Sq.run a insert 2));
+      ok (Sq.run b insert 3);
+      Alcotest.(check int) "each written" 3 (count b "t"))
+
+(* Work between a savepoint and its release that ended the transaction, as
+   a script a caller did not write can, leaves nothing to release. *)
+let test_savepoints () =
+  on_db [ "create table t (k integer)" ] (fun db ->
+      let around script =
+        ok (Sq.exec_raw db "begin");
+        let point = ok (Sq.Transaction.savepoint db) in
+        ok (Sq.exec_raw db script);
+        let released = ok (Sq.Transaction.release db point) in
+        (match Sq.exec_raw db "rollback" with Ok () | Error _ -> ());
+        released
+      in
+      let check script expected =
+        Alcotest.(check bool)
+          script true
+          (match (around script, expected) with
+          | `Released, `Released | `Gone, `Gone -> true
+          | (`Released | `Gone), _ -> false)
+      in
+      check "insert into t values (1)" `Released;
+      check "insert into t values (1); commit" `Gone;
+      check "insert into t values (1); rollback" `Gone;
+      check "insert into t values (1); commit; begin" `Gone;
+      let point = ok (Sq.Transaction.savepoint db) in
+      ok (Sq.run db insert 1);
+      Alcotest.(check bool)
+        "outside a transaction, released and committed" true
+        (match ok (Sq.Transaction.release db point) with
+        | `Released -> true
+        | `Gone -> false);
+      Alcotest.(check int) "with the two each commit kept" 3 (count db "t"))
 
 (* ------------------------------------------------------------------ *)
 (* A load *)
@@ -1098,7 +1345,10 @@ let test_verify () =
         "2 columns declared, and the database has 1";
       found
         (S.exec ~params:S.(t2 int int) "delete from t where k = $1")
-        "2 parameters declared, and the database has 1";
+        "no placeholder takes value 2";
+      found
+        (S.find ~params:S.(t2 int int) ~row:S.int "select $1 + $3")
+        "the placeholder $3 is past the 2 values given";
       found (S.exec ~params:S.int "delete from t where k = :k") ":k";
       found
         (S.find ~params:S.unit ~row:S.int "select nope from t")
@@ -1269,7 +1519,7 @@ let test_any_text_is_read_or_refused () =
                    ]);
             ])
       in
-      QCheck.Test.check_exn
+      checked
         (QCheck.Test.make ~count:2000 ~name:"any text" (QCheck.make near)
            (fun text ->
              reads S.instant text && reads S.timestamp text && reads S.date text
@@ -1292,9 +1542,9 @@ let test_times_at_their_edges () =
       Alcotest.check ptime "a fraction past the microsecond"
         (after (utc 2026 10 20 9 0 0) 123_456)
         (ok (read S.instant "2026-10-20 09:00:00.123456789"));
-      Alcotest.check ptime "a leap second, the next one"
-        (utc 2016 12 31 23 59 60)
-        (ok (read S.instant "2016-12-31 23:59:60"));
+      Alcotest.check ptime "fourteen hours and 59 minutes ahead"
+        (utc 2026 10 19 18 1 0)
+        (ok (read S.instant "2026-10-20 09:00:00+14:59"));
       List.iter
         (fun text ->
           match read S.instant text with
@@ -1307,6 +1557,12 @@ let test_times_at_their_edges () =
           "2026-10-20 24:00:00";
           "2026-10-20 09:00:00.";
           "2026-10-20 09:00:00+2:00";
+          (* Each of these, SQLite's datetime() reads as NULL. *)
+          "2016-12-31 23:59:60";
+          "2026-10-20 12:30.5";
+          "2026-10-20 12:30:00+15:00";
+          "2026-10-20 12:30:00+14:60";
+          "2026-10-20 12:30:00+99:99";
           "+2026-10-20 09:00:00";
           " 2026-10-20 09:00:00";
         ])
@@ -1469,6 +1725,7 @@ let () =
           Alcotest.test_case "what SQLite writes" `Quick test_reads_sqlites_own;
           Alcotest.test_case "another kind is refused" `Quick test_refusals;
           Alcotest.test_case "arrays" `Quick test_arrays;
+          Alcotest.test_case "arrays of any text" `Quick test_arrays_of_any_text;
         ] );
       ( "failures",
         [
@@ -1476,6 +1733,13 @@ let () =
           Alcotest.test_case "a lock held" `Quick test_busy;
           Alcotest.test_case "a wait leaves the domain" `Quick
             test_waits_off_the_domain;
+          Alcotest.test_case "ending a statement leaves the domain" `Quick
+            test_ending_leaves_the_domain;
+          Alcotest.test_case "no value in a failure" `Quick
+            test_no_value_in_a_failure;
+          Alcotest.test_case "a lock while preparing" `Quick
+            test_a_lock_while_preparing;
+          Alcotest.test_case "trailing text" `Quick test_trailing_text;
           Alcotest.test_case "closed" `Quick test_closed;
           Alcotest.test_case "foreign keys enforced" `Quick test_foreign_keys_on;
           Alcotest.test_case "a cancelled fold" `Quick test_cancelled_fold;
@@ -1494,6 +1758,9 @@ let () =
           Alcotest.test_case "behaviours" `Quick test_behaviours;
           Alcotest.test_case "a raise and a cancellation" `Quick
             test_raise_and_cancel;
+          Alcotest.test_case "cancelled while waiting" `Quick
+            test_cancelled_while_waiting;
+          Alcotest.test_case "savepoints" `Quick test_savepoints;
         ] );
       ( "a load",
         [

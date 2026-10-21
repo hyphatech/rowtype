@@ -152,6 +152,8 @@
    (>= 2.1.0))
   (eio_main
    (>= 1.5))
+  (logs
+   (>= 0.10.0))
   (alcotest
    (and
     :with-test

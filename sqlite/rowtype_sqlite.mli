@@ -8,14 +8,16 @@
     name, [:name], is refused, since a shape's values have none, and so are
     placeholders that do not number the values from one, each at least once,
     before anything runs. One statement is run at a time: a text holding several
-    is {!exec_raw}'s.
+    is {!exec_raw}'s, and a space, a comment or a [;] after a statement is no
+    second one.
 
     SQLite keeps each value as an integer, a float, text or a blob, whatever its
     column was declared as, and each scalar is kept as one of them:
 
     - an [int], an [int64] and a [bool] as an integer, a [bool] [0] or [1];
-    - a [float] as a float, and read from an integer too where a float holds it
-      exactly; a NaN is kept as NULL, as SQLite keeps one;
+    - a [float] as a float, and read from an integer too within 2{^ 53} either
+      side of zero, where a float holds every integer exactly; a NaN is kept as
+      NULL, as SQLite keeps one;
     - a [text], a [json] and an enum's label as text, and [bytes] as a blob;
     - an {!Rowtype.instant} as text in UTC, [2026-10-20 09:24:46.621000], the
       form SQLite's date and time functions read and write, to the microsecond,
@@ -38,8 +40,16 @@
     never the value. A unique, primary-key or foreign-key violation is
     [`Conflict], named by the columns SQLite names, [users.email], and a foreign
     key's by none, since SQLite names none. [SQLITE_BUSY] -- a lock another
-    connection still held when the wait ran out -- is [`Not_serializable]:
-    nothing of the statement was done, and running it again may succeed.
+    connection still held when the wait ran out, preparing a statement or
+    running it -- is [`Not_serializable]: nothing of the statement was done, and
+    running it again may succeed.
+
+    A statement SQLite cannot prepare fails in SQLite's words, which quote only
+    its text: [no such table: t]. One that fails as it runs is told by SQLite's
+    code alone, since a function quotes its argument in its message -- a JSON
+    path, an FTS5 query -- and a trigger's [RAISE] says what its author wrote; a
+    [NOT NULL] or [CHECK] constraint keeps SQLite's words, which name the column
+    or the constraint and no value.
 
     Each connection enforces foreign keys, which SQLite leaves off unless asked.
     Each statement is a [debug] line on [rowtype-sqlite] with how long it took:
@@ -138,7 +148,8 @@ module Pool : sig
       even if [f] raises: [`Pool `Busy] if none came free within the wait, and
       [`Pool `Closed] at once if the pool is closed, or closes while the borrow
       waits. A connection is given back with no transaction open: one a borrower
-      left open is rolled back. *)
+      left open is rolled back, and one whose rollback fails is an [error] line
+      on [rowtype-sqlite], closed and made again. *)
 
   type stats = {
     size : int;  (** connections the pool keeps *)
@@ -222,7 +233,25 @@ module Transaction : sig
       [`Not_serializable] when [COMMIT] could not take its lock; either way the
       transaction is rolled back. Each [`Not_committed] is an [error] line on
       [rowtype-sqlite]. A raise inside [work], a cancellation among them, rolls
-      back and passes. *)
+      back and passes. Its [COMMIT] and each rollback run to their end whatever
+      cancels the fiber, so a cancellation never leaves the transaction, or its
+      lock, open. *)
+
+  type savepoint
+  (** A point in the transaction open on a connection that work after it can be
+      released into, made by {!val-savepoint}. *)
+
+  val savepoint : conn -> (savepoint, [> Rowtype.error ]) result
+  (** A savepoint, in the transaction open on [conn]; with none open, it begins
+      one, which its {!release} commits. *)
+
+  val release :
+    conn -> savepoint -> ([ `Released | `Gone ], [> Rowtype.error ]) result
+  (** The work since [savepoint] kept in the transaction, [`Released]; or
+      [`Gone] where that work ended the transaction the savepoint was made in --
+      a [commit], a [rollback], or one and a [begin] after it -- so nothing of
+      it stands to release. For a script a caller did not write, run between the
+      two, that has to be told apart from one that kept its transaction. *)
 end
 
 (** {1 Statements against the database} *)
@@ -239,7 +268,9 @@ val verify :
     [float]'s, a [text] one as text's, an instant's or any other kept as text,
     and a [blob] one as [bytes] or a [uuid]. A column made by an expression, or
     declared with no type, holds any kind of value, and is checked where it is
-    read. A placeholder with a name is a disagreement, as {!run} refuses one.
+    read. Its placeholders are held to {!run}'s rule -- numbered from one, each
+    value taken at least once, none past the values declared, none named -- so a
+    statement [verify] passes is not refused for them when it runs.
     [`Disagreements] is every problem, in words for a person, each naming its
     statement's first line and where in it. *)
 
@@ -254,7 +285,6 @@ type error =
     [Result.join (Pool.use pool (fun db -> Transaction.within db work))]. *)
 
 val error_to_string : [< error ] -> string
-(** In words for a person, which never hold a parameter's value: every
-    disagreement {!verify} found, a pool's state and a transaction's own
-    failure, and a statement's failure as {!Rowtype.error_to_string} tells it.
-*)
+(** In words for a person, which never hold a value: every disagreement
+    {!verify} found, a pool's state and a transaction's own failure, and a
+    statement's failure as {!Rowtype.error_to_string} tells it. *)

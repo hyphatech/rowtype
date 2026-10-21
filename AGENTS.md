@@ -59,8 +59,11 @@ test/
                      included
   test_migrate_sqlite the same behaviours on SQLite, dump and squash
                      included; no server
-  test_migrate_files the files' pieces, which need no database
-  command.t          the command, where it needs no database
+  test_migrate_files the files' pieces and the squash's own rules, which
+                     need no database and link no dialect
+  command.t          the command, where it needs no database or dialect;
+                     command_postgres.t and command_sqlite.t each
+                     dialect's, where that dialect is built
   db_target/         where a suite's database comes from: a library, so it
                      reads no variable, prints nothing and never exits
 ```
@@ -92,16 +95,22 @@ Each rule comes with why it exists and the test that catches a break.
   connection's lock, as long as the connection's `wait`, and every fiber of
   the domain would wait with it; a hop costs fifty steps, and 64 rows a hop
   read at half the speed of reading in place, holding no more than 64 rows.
-  Test: `a wait leaves the domain`, in `test_sqlite`, whose fiber that lets
-  the lock go runs only while the write waits off the domain.
+  Test: `a wait leaves the domain` and `ending a statement leaves the
+  domain`, in `test_sqlite`, whose fiber that lets the lock go runs only
+  while the write waits off the domain.
 - **Migrating is one algorithm, and a dialect supplies only its own
   ways.** `Rowtype_migrate`'s record, its refusals and its order are written
   once, over the `Dialect` signature; a dialect gives its lock, its record's
   table, how a migration that ended its own transaction is found, what is
-  reset after each, and its dump. Why: two copies of the rules would drift,
-  and a database migrated by one dialect's rules and checked by another's is
-  a record nobody can trust. Test: `test_migrate` and `test_migrate_sqlite`
-  hold the same behaviours, each on its database.
+  reset after each, and its dump. The command's `status` refuses by
+  `Rowtype_migrate.refusal`, as `up` does, and words nothing of its own. Why:
+  two copies of the rules would drift, and a database migrated by one
+  dialect's rules and checked by another's is a record nobody can trust.
+  Test: `test_migrate` and `test_migrate_sqlite` hold the same behaviours,
+  each on its database, and the core's own rules are tested in
+  `test_migrate_files`, which links no dialect. Symptom: `rg -n
+  'status.behind' migrate/bin` finds a match, or a dialect binds an
+  argument of `Dialect`'s as `_`, a value another dialect's rule handed it.
 - **A dialect is optional to `rowtype-migrate`.** Its core links
   `rowtype` and no backend; each dialect is an `(optional)` library beside
   it, and the command takes each through a dune `select`, so installing the
@@ -123,26 +132,36 @@ Each rule comes with why it exists and the test that catches a break.
   refused by `up`, naming it, before that source is applied. Every check is
   made within one source, never across two. A baseline replaces the files up
   to its version, and what the database recorded below it is history:
-  accepted, and compared with nothing. Why: two databases that ran "the
-  same" migration must hold the same schema. Test: `test_migrate`.
+  accepted, and compared with nothing. Whether the baseline ran at its
+  version is told by the record below it -- a database the baseline made
+  has nothing there -- never by the name, since a migration may be named
+  anything, `baseline` among them. Why: two databases that ran "the same"
+  migration must hold the same schema. Test: `test_migrate` and
+  `test_migrate_sqlite`, `a baseline stands for what it replaced` in each.
 - **No value is logged, handed to an observer or put in a failure's
   words.** A statement's `debug` line and `?observe` carry its text, with
   placeholders, and never its parameters; a cell that does not decode is
   named by its type, or in SQLite by its kind of value; a data exception,
   class 22, is worded from its code, since Postgres's message quotes the
-  value it refused. Why: a code, a digest or a token is a parameter, and a
-  failure reaches a log. Test: `no value in a failure or a log`, in
-  `test_errors`, and `no value logged` and `another kind is refused`, in
-  `test_sqlite`.
+  value it refused, and so is a SQLite statement's failure as it runs, but
+  for a constraint SQLite checks itself, which names columns alone. Why: a
+  code, a digest or a token is a parameter, and a failure reaches a log;
+  SQLite's functions quote their arguments, each its own way, so no filter
+  of its words is ever complete. Test: `no value in a failure or a log`, in
+  `test_errors`, and `no value logged`, `no value in a failure` and
+  `another kind is refused`, in `test_sqlite`.
 - **A transaction's own failures are values.** One that could not begin or
   commit, or whose work answered `Ok` after a failed statement aborted it,
   is `` `Not_committed ``, never a success -- or `` `Conflict ``, named,
   where a deferred constraint refused its `COMMIT`. SQLite's `COMMIT`, when
   it cannot take its lock or a deferred foreign key refuses it, leaves the
-  transaction open, so the backend rolls it back and says which. Why:
-  Postgres rolls such a transaction back in silence, and SQLite keeps one
-  open that nobody would end. Test: `transactions` in `test_rowtype` and in
-  `test_sqlite`.
+  transaction open, so the backend rolls it back and says which. Its
+  `COMMIT` and its rollback run to their end whatever cancels the fiber.
+  Why: Postgres rolls such a transaction back in silence, and SQLite keeps
+  one open that nobody would end; a rollback a cancellation stops before it
+  starts leaves the transaction, and its lock, on a connection its caller
+  believes is free. Test: `transactions` in `test_rowtype` and in
+  `test_sqlite`, `cancelled while waiting` among them.
 - **The one module `open` is `open Shape` in `src/rowtype.ml`, and a local
   open is a span's alone**, `Mtime.Span.(10 * s)`. Why: the walk exists to
   pattern-match that GADT, and every constructor qualified would bury the

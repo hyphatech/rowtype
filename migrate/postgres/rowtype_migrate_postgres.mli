@@ -83,7 +83,6 @@ val dump :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   process_mgr:_ Eio.Process.mgr ->
-  ?lock:int ->
   ?table:string ->
   ?libraries:Rowtype_migrate.source list ->
   ?pg_dump:string ->
@@ -112,7 +111,6 @@ val squash :
   net:_ Eio.Net.t ->
   mono_clock:_ Eio.Time.Mono.t ->
   process_mgr:_ Eio.Process.mgr ->
-  ?lock:int ->
   ?table:string ->
   ?libraries:Rowtype_migrate.source list ->
   ?pg_dump:string ->

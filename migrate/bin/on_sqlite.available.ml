@@ -4,10 +4,27 @@ module Q = Rowtype_migrate_sqlite
 
 let told = Database.told
 
+(* A flag only Postgres reads, refused on a file rather than ignored, so
+   nobody believes a run was serialised, or a program run, that was not. *)
+let postgres_only flag why = function
+  | Some _ -> Error (Printf.sprintf "%s is %s: leave it out" flag why)
+  | None -> Ok ()
+
+let no_pg_dump ~pg_dump ~restrict_key =
+  Result.bind
+    (postgres_only "--pg-dump" "Postgres's, and a SQLite dump runs no program"
+       pg_dump) (fun () ->
+      postgres_only "--restrict-key"
+        "pg_dump's, and a SQLite dump runs no program" restrict_key)
+
 let of_file file : Database.t =
   {
     apply =
-      (fun ~lock:_ ~table ~libraries migrations ->
+      (fun ~lock ~table ~libraries migrations ->
+        Result.bind
+          (postgres_only "--lock"
+             "Postgres's advisory lock, and a SQLite file has none" lock)
+        @@ fun () ->
         told
           ( Eio_main.run @@ fun env ->
             Q.run env file (fun conn ->
@@ -19,7 +36,8 @@ let of_file file : Database.t =
             Q.run env file (fun conn ->
                 Q.status ~table ~libraries conn migrations) ));
     dump =
-      (fun ~lock:_ ~table ~libraries ~pg_dump:_ ~restrict_key:_ migrations ->
+      (fun ~table ~libraries ~pg_dump ~restrict_key migrations ->
+        Result.bind (no_pg_dump ~pg_dump ~restrict_key) @@ fun () ->
         told
           ( Eio_main.run @@ fun env ->
             Eio.Switch.run @@ fun sw ->
@@ -27,14 +45,8 @@ let of_file file : Database.t =
               ~mono_clock:(Eio.Stdenv.mono_clock env)
               ~table ~libraries migrations ));
     squash =
-      (fun ~lock:_
-        ~table
-        ~libraries
-        ~pg_dump:_
-        ~restrict_key:_
-        ~through
-        migrations
-      ->
+      (fun ~table ~libraries ~pg_dump ~restrict_key ~through migrations ->
+        Result.bind (no_pg_dump ~pg_dump ~restrict_key) @@ fun () ->
         told
           ( Eio_main.run @@ fun env ->
             Eio.Switch.run @@ fun sw ->

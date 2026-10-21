@@ -388,8 +388,9 @@ module type S = sig
   (** [fold db statement args ~init f]: what {!run} answers, folded as
       [List.fold_left] would fold it, without the list being made -- each row of
       a {!Rowtype.list} statement is decoded and handed to [f] as it arrives, so
-      a result of any size is read in the memory of one row. A row that does not
-      decode is the answer, and [f] sees none after it. *)
+      a result of any size is read in the memory of the rows a backend reads at
+      a time, never of the whole result. A row that does not decode is the
+      answer, and [f] sees none after it. *)
 
   val run_many :
     conn -> ('p, unit) statement -> 'p list -> (unit, [> error ]) result

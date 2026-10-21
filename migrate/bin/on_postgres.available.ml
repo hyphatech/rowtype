@@ -29,17 +29,17 @@ let of_target target : Database.t =
             P.run env target (fun conn ->
                 P.status ~table ~libraries conn migrations) ));
     dump =
-      (fun ~lock ~table ~libraries ~pg_dump ~restrict_key migrations ->
+      (fun ~table ~libraries ~pg_dump ~restrict_key migrations ->
         told
           (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-               P.dump ~sw ~net ~mono_clock ~process_mgr ?lock ~table ~libraries
-                 ~pg_dump ~restrict_key ~migrations target)));
+               P.dump ~sw ~net ~mono_clock ~process_mgr ~table ~libraries
+                 ?pg_dump ?restrict_key ~migrations target)));
     squash =
-      (fun ~lock ~table ~libraries ~pg_dump ~restrict_key ~through migrations ->
+      (fun ~table ~libraries ~pg_dump ~restrict_key ~through migrations ->
         told
           (in_eio (fun ~sw ~net ~mono_clock ~process_mgr ->
-               P.squash ~sw ~net ~mono_clock ~process_mgr ?lock ~table
-                 ~libraries ~pg_dump ~restrict_key ~through ~migrations target)));
+               P.squash ~sw ~net ~mono_clock ~process_mgr ~table ~libraries
+                 ?pg_dump ?restrict_key ~through ~migrations target)));
     create =
       (fun () ->
         told

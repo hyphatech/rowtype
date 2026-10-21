@@ -142,10 +142,14 @@ let reads_builtin : type a. a S.scalar -> int -> bool =
 let cast_hint : type a. a S.scalar -> int -> string -> string =
  fun scalar oid cast ->
   match scalar with
-  | S.Text when oid >= first_user_oid ->
-      ": a type the database made: read an enum with Rowtype.enum, and cast \
-       any other, as " ^ cast
-  | _ -> ""
+  | S.Text ->
+      if oid >= first_user_oid then
+        ": a type the database made: read an enum with Rowtype.enum, and cast \
+         any other, as " ^ cast
+      else ""
+  | S.Int | S.Int64 | S.Float | S.Bytes | S.Bool | S.Instant | S.Date
+  | S.Timestamp | S.Interval | S.Uuid | S.Json | S.Enum _ ->
+      ""
 
 (* What a value of a type the scalar reads can be and the scalar not hold,
    for which the driver answers no value, and what reads it instead. *)
@@ -654,7 +658,15 @@ module Transaction = struct
         let* () = revive db in
         exec_raw db statement
 
-  let rollback db = ignore (exec_raw db "rollback" : (unit, S.error) result)
+  (* ROLLBACK fails only where the connection was lost, which the driver
+     has already closed for [revive] to make again; what is left is to say
+     so. *)
+  let rollback db =
+    match exec_raw db "rollback" with
+    | Ok () -> ()
+    | Error e ->
+        Log.warn (fun m ->
+            m "a transaction's rollback failed: %s" (S.error_to_string e))
 
   (* A COMMIT sent and no answer back may have committed: the server can
      commit and lose the connection before its answer is read. *)
@@ -861,7 +873,11 @@ let labels : type a.
                       name
                       (String.concat ", "
                          (List.map (Printf.sprintf "%S") missing))))))
-  | _ -> Ok None
+  | S.Enum _, (Base _ | Array _)
+  | ( ( S.Int | S.Int64 | S.Float | S.Text | S.Bytes | S.Bool | S.Instant
+      | S.Date | S.Timestamp | S.Interval | S.Uuid | S.Json ),
+      (Enum _ | Base _ | Array _) ) ->
+      Ok None
 
 (* What is wrong with one declared column, [None] where nothing is. *)
 let mismatch db use i column oid =

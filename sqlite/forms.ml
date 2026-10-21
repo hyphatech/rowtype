@@ -43,6 +43,9 @@ let picoseconds fraction =
     (fun us -> Int64.mul (Int64.of_int us) 1_000_000L)
     (int_of_string_opt (kept ^ String.make (6 - String.length kept) '0'))
 
+(* Only text SQLite's functions read too, or a column that SQL compares as
+   NULL would be an instant here: seconds to 59, a fraction only after
+   them, and a zone to 14 hours and its minutes to 59. *)
 let date_time s =
   let n = String.length s in
   let* date = if n >= 10 then date_of_string (String.sub s 0 10) else None in
@@ -51,11 +54,14 @@ let date_time s =
     let* h = digits s 11 2 in
     let* mi = digits s 14 2 in
     let* sec, i =
-      if at s 16 ':' then Option.map (fun sec -> (sec, 19)) (digits s 17 2)
+      if at s 16 ':' then
+        match digits s 17 2 with
+        | Some sec when sec <= 59 -> Some (sec, 19)
+        | Some _ | None -> None
       else Some (0, 16)
     in
     let* ps, i =
-      if at s i '.' then
+      if at s i '.' && i = 19 then
         let rec last j = if j < n && is_digit s.[j] then last (j + 1) else j in
         let j = last (i + 1) in
         if j = i + 1 then None
@@ -71,8 +77,10 @@ let date_time s =
       else if (at s i '+' || at s i '-') && i + 6 = n && at s (i + 3) ':' then
         let* zh = digits s (i + 1) 2 in
         let* zm = digits s (i + 4) 2 in
-        let offset = (zh * 3600) + (zm * 60) in
-        Some (Some (if at s i '-' then -offset else offset))
+        if zh > 14 || zm > 59 then None
+        else
+          let offset = (zh * 3600) + (zm * 60) in
+          Some (Some (if at s i '-' then -offset else offset))
       else None
     in
     let* t =
@@ -334,6 +342,7 @@ let elements s =
               Buffer.add_utf_8_uchar b (Uchar.of_int u);
               go ()
           | Some _ | None -> refuse ())
+      | Some c when Char.code c < 0x20 -> refuse ()
       | Some c ->
           Buffer.add_char b c;
           incr pos;
@@ -342,22 +351,35 @@ let elements s =
     go ();
     Buffer.contents b
   in
+  (* RFC 8259's number: no leading zero, a digit each side of the point,
+     and one in the exponent. *)
   let number () =
     let start = !pos in
-    let rec go () =
-      match peek () with
-      | Some ('0' .. '9' | '-' | '+' | '.' | 'e' | 'E') ->
-          incr pos;
-          go ()
-      | Some _ | None -> ()
+    let digits () =
+      let first = !pos in
+      while !pos < n && is_digit s.[!pos] do
+        incr pos
+      done;
+      if !pos = first then refuse ()
     in
-    go ();
+    if Option.equal Char.equal (peek ()) (Some '-') then incr pos;
+    (match peek () with Some '0' -> incr pos | Some _ | None -> digits ());
+    let fraction = Option.equal Char.equal (peek ()) (Some '.') in
+    if fraction then (
+      incr pos;
+      digits ());
+    let exponent =
+      match peek () with Some ('e' | 'E') -> true | Some _ | None -> false
+    in
+    if exponent then (
+      incr pos;
+      (match peek () with Some ('-' | '+') -> incr pos | Some _ | None -> ());
+      digits ());
     let text = String.sub s start (!pos - start) in
-    let whole =
-      String.for_all (function '0' .. '9' | '-' -> true | _ -> false) text
-    in
-    match (whole, Int64.of_string_opt text, float_of_string_opt text) with
-    | true, Some i, _ -> D.INT i
+    match
+      (fraction || exponent, Int64.of_string_opt text, float_of_string_opt text)
+    with
+    | false, Some i, _ -> D.INT i
     | _, _, Some f -> D.FLOAT f
     | _, _, None -> refuse ()
   in

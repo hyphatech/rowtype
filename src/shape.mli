@@ -136,7 +136,8 @@ val parse :
 (** As {!map}, for a value a row may hold that this program cannot read. *)
 
 val enum : ('a -> string) -> 'a list -> 'a ty
-(** A {!parse} over a column of the labels [values] have. *)
+(** [enum label values]: a {!parse} over a column of the labels [values] have.
+*)
 
 val arity : 'a ty -> int
 (** How many SQL columns or placeholders a shape occupies. An option is

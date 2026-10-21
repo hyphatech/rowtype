@@ -8,8 +8,9 @@
   Every scalar is kept as one of SQLite's kinds of value -- an instant as
   UTC text `datetime()` reads, an array as a JSON array `json_each` reads --
   and a placeholder is `$1` or SQLite's `?1`. `Rowtype_sqlite.Transaction`
-  begins deferred, immediate or exclusive, and rolls back a `COMMIT` SQLite
-  refused. It is the one package of rowtype that binds C, since SQLite has
+  begins deferred, immediate or exclusive, rolls back a `COMMIT` SQLite
+  refused, and tells a savepoint released from one whose transaction a
+  script ended. It is the one package of rowtype that binds C, since SQLite has
   no protocol to speak in OCaml. `Rowtype_sqlite.Pool` lends connections
   to one file, `Rowtype_sqlite.verify` checks statements against the
   database without running them, and `Rowtype_sqlite.copy_in` loads rows
@@ -18,14 +19,38 @@
   record and refusals, and the command takes `--url sqlite:PATH`. A SQLite
   dump and squash need no server and no `pg_dump`.
 - Breaking: a database's migrations are its dialect's library.
-  `Rowtype_migrate` keeps the files, the record and its rules; Postgres's
-  `run`, `create`, `drop`, `apply`, `status`, `dump`, `squash` and
-  `default_lock` are `Rowtype_migrate_postgres`'s, in the library
-  `rowtype-migrate.postgres`, with the signatures they had, and SQLite's
-  are `Rowtype_migrate_sqlite`'s, in `rowtype-migrate.sqlite`. Each is built
-  where its backend is installed, so a program and the command link the
-  dialects it uses and no other. `dump`'s and `squash`'s `~pg_dump` and
-  `~restrict_key` are optional, with the command's defaults.
+  `Rowtype_migrate` keeps the files, the record and its rules, and exports
+  them for a dialect: `Dialect`, `Make` over it, `status`'s record and
+  `refusal`. Postgres's `run`, `create`, `drop`, `apply`, `status`, `dump`,
+  `squash` and `default_lock` are `Rowtype_migrate_postgres`'s, in the
+  library `rowtype-migrate.postgres`, with the signatures they had, and
+  SQLite's are `Rowtype_migrate_sqlite`'s, in `rowtype-migrate.sqlite`.
+  `Rowtype_migrate.squash` remains, under its name with another signature:
+  the proof of a baseline over a dialect's `~dumped`, which connects to
+  nothing. Each dialect is built where its backend is installed, so a
+  program and the command link the dialects it uses and no other, and
+  installing `rowtype-migrate` alone no longer brings Postgres. `dump`'s and `squash`'s `~pg_dump` and
+  `~restrict_key` are optional, with the command's defaults. A `status`'s
+  `edited`, `late` and `behind` hold the migrations, not their versions, and
+  `Rowtype_migrate.refusal` says the disagreement `apply` refuses a source
+  for, which `rowtype-migrate status` now prints in `up`'s words.
+  `Rowtype_migrate.Dialect.exclusively` and `Make.apply` take no lock,
+  which is Postgres's dialect's own, and `Rowtype_migrate_postgres.dump`
+  and `squash` lose `?lock`, which a scratch database no other process
+  sees never needed. The command refuses `--lock`, `--pg-dump` and
+  `--restrict-key` for a `sqlite:` URL rather than ignoring them, and
+  `dump` and `squash` take no `--lock`.
+
+- A database that ran a migration named `baseline` is no longer refused
+  as edited once a squash replaces it: whether the baseline ran at its
+  version is told by what the database recorded below it, not by the name.
+  A squash through the only migration, named `baseline`, is refused, since
+  a database that ran it could not be told from one the baseline made.
+
+- A Postgres `dump` or `squash` whose scratch database could not be
+  dropped says so, an error on `rowtype-migrate.postgres` naming the
+  database to drop by hand, where it said nothing; the command prints its
+  libraries' warnings and errors.
 
 ## 0.8.1 (2026-10-16)
 

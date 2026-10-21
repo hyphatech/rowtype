@@ -210,12 +210,18 @@ type status = {
   pending : migration list;  (** in the list and not recorded, in order *)
   unknown : version list;
       (** recorded and not in the list: a newer checkout's *)
-  edited : version list;  (** recorded, with a text that has changed since *)
-  late : version list;  (** pending, and older than one already applied *)
-  behind : version option;
+  edited : migration list;  (** recorded, with a text that has changed since *)
+  late : migration list;  (** pending, and older than one already applied *)
+  behind : migration option;
       (** the list's baseline, where the database's record stops before it *)
 }
 (** What a dialect's [status] says of one source. *)
+
+val refusal : status -> [> error ] option
+(** The disagreement a dialect's [apply] refuses the source for, [None] where
+    there is none: the first, in the order a person would untangle them -- a
+    database behind a squash, then one from a newer checkout, then an edited
+    migration, then a late one. *)
 
 (** {1 A dialect}
 
@@ -251,7 +257,6 @@ module type Dialect = sig
       lets it choose. *)
 
   val exclusively :
-    lock:int ->
     conn ->
     (holding:(conn -> (unit, [ `Lock of [ `Lost ] | Rowtype.error ]) result) ->
     (unit, error) result) ->
@@ -285,7 +290,6 @@ end
     [apply] and [status]. *)
 module Make (D : Dialect) : sig
   val apply :
-    lock:int ->
     table:string ->
     libraries:source list ->
     D.conn ->
@@ -322,5 +326,8 @@ val squash :
     never the record -- with the libraries' tables left out where [apart]. The
     baseline is proved before it is answered: it and the migrations after it
     write out the same as the whole history, or it is [`Unproved].
-    [`Invalid_argument]: a [through] that is no migration's version, and one
-    that is the baseline's with nothing before it. *)
+    [`Invalid_argument]: a [through] that is no migration's version, one that is
+    the baseline's with nothing before it, and one whose migration is the only
+    one through it and is named [baseline], as the baseline it would write is,
+    since a database that ran it could not be told from one the baseline made.
+*)

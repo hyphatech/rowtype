@@ -355,15 +355,18 @@ let read migrations recorded =
      are gone. Where the database recorded that version it is applied, and
      what is recorded below it is history, compared with nothing; where the
      database recorded something, but not that, it is behind the squash.
-     The version itself is history where the database recorded the
-     migration the baseline replaced, known by its name, and held to its
-     text where it recorded the baseline, which is what ran there. *)
+     The version itself is held to the baseline's text where the baseline
+     ran there, and history where the migration it replaced did. A
+     database the baseline made has nothing below it, since one with
+     anything below is behind; and a migration may be named anything,
+     the baseline's name among them, so the name alone cannot tell. *)
   let history, behind =
     match (List.find_opt is_baseline migrations, recorded) with
     | None, _ | Some _, [] -> ((fun _ -> false), None)
     | Some b, _ :: _ -> (
+        let below = List.exists (fun (v, _, _) -> v < b.version) recorded in
         match recorded_as b.version with
-        | Some (name, _) when String.equal name b.name ->
+        | Some (name, _) when String.equal name b.name && not below ->
             ((fun v -> v < b.version), None)
         | Some _ -> ((fun v -> v <= b.version), None)
         | None -> ((fun _ -> false), Some b))
@@ -397,17 +400,6 @@ let read migrations recorded =
     behind;
   }
 
-(* The first way a list and a record disagree, in the order a person would
-   untangle them: a database behind a squash, then one from a newer
-   checkout, then an edited file, then a late one. *)
-let refusal r =
-  match (r.behind, r.unknown, r.edited, r.late) with
-  | Some b, _, _, _ -> Some (`Behind b)
-  | None, v :: _, _, _ -> Some (`Unknown v)
-  | None, [], m :: _, _ -> Some (`Edited m)
-  | None, [], [], m :: _ -> Some (`Late m)
-  | None, [], [], [] -> None
-
 (* Two libraries of one name would be one history read twice. *)
 let distinct libraries =
   let rec go seen = function
@@ -431,10 +423,31 @@ type status = {
   applied : (version * string) list;
   pending : migration list;
   unknown : version list;
-  edited : version list;
-  late : version list;
-  behind : version option;
+  edited : migration list;
+  late : migration list;
+  behind : migration option;
 }
+
+let status_of ~source recorded (r : reading) =
+  {
+    source;
+    applied = List.map (fun (v, n, _) -> (v, n)) recorded;
+    pending = r.to_apply;
+    unknown = r.unknown;
+    edited = r.edited;
+    late = r.late;
+    behind = r.behind;
+  }
+
+(* The order a person would untangle them in: a database behind a squash,
+   then one from a newer checkout, then an edited file, then a late one. *)
+let refusal (s : status) =
+  match (s.behind, s.unknown, s.edited, s.late) with
+  | Some b, _, _, _ -> Some (`Record (`Behind b))
+  | None, v :: _, _, _ -> Some (`Record (`Unknown v))
+  | None, [], m :: _, _ -> Some (`Record (`Edited m))
+  | None, [], [], m :: _ -> Some (`Record (`Late m))
+  | None, [], [], [] -> None
 
 (* ------------------------------------------------------------------ *)
 (* A dialect *)
@@ -450,9 +463,6 @@ type transaction_failure =
    made before them may lack it has. *)
 type record_columns = Absent | Present of { checksum : bool; source : bool }
 
-(* What a database does its own way, and nothing else: the record's
-   statements are rowtype's, [$1] on every dialect, and so is the reading
-   of a record against a list. *)
 module type Dialect = sig
   type conn
 
@@ -464,37 +474,22 @@ module type Dialect = sig
     (conn -> ('a, ([> transaction_failure ] as 'e)) result) ->
     ('a, 'e) result
 
-  (* One transaction, which takes the write lock as it begins where the
-      dialect lets it choose. *)
   val exclusively :
-    lock:int ->
     conn ->
     (holding:(conn -> (unit, [ `Lock of [ `Lost ] | S.error ]) result) ->
     (unit, error) result) ->
     (unit, error) result
 
-  (* The run, with whatever lock the dialect takes over all of it, and
-      [holding], asked at the start of each migration's transaction, which
-      says whether the run still holds it. *)
   val prepare_record : table:string -> conn -> (unit, [> S.error ]) result
-  (* The record's table made, and one made before brought up to it. *)
 
   val record_columns :
     table:string -> conn -> (record_columns, [> S.error ]) result
-  (* Read, and nothing written. *)
 
   type mark
 
   val mark : conn -> (mark, [> S.error ]) result
-  (* Inside a migration's transaction, before its file runs. *)
-
   val unbroken : conn -> mark -> (bool, [> S.error ]) result
-
-  (* After the file ran: whether the transaction {!mark} was taken in is
-      still the one open, which a file that ended it -- a [commit], a
-      [rollback] -- makes false. *)
   val reset : conn -> (unit, [> S.error ]) result
-  (* What a migration may set for its session put back, after each. *)
 end
 
 module Make (D : Dialect) = struct
@@ -625,8 +620,8 @@ module Make (D : Dialect) = struct
     let* () = listed migrations in
     let* recorded = applied ~table ~source conn in
     let r = read migrations recorded in
-    match refusal r with
-    | Some refused -> Error (`Record refused)
+    match refusal (status_of ~source recorded r) with
+    | Some refused -> Error refused
     | None ->
         let* () =
           List.fold_left
@@ -651,11 +646,10 @@ module Make (D : Dialect) = struct
      own failures can join it. *)
   let widen = function Ok v -> Ok v | Error (#error as e) -> Error e
 
-  let apply_closed ~lock ~table ~libraries conn migrations :
-      (unit, error) result =
+  let apply_closed ~table ~libraries conn migrations : (unit, error) result =
     let* table = table_name table in
     let* () = distinct libraries in
-    D.exclusively ~lock conn (fun ~holding ->
+    D.exclusively conn (fun ~holding ->
         let* () = D.prepare_record ~table conn in
         List.fold_left
           (fun acc (source, migrations) ->
@@ -704,29 +698,18 @@ module Make (D : Dialect) = struct
     in
     Ok (applied, read migrations applied)
 
-  let apply ~lock ~table ~libraries conn migrations =
-    widen (apply_closed ~lock ~table ~libraries conn migrations)
+  let apply ~table ~libraries conn migrations =
+    widen (apply_closed ~table ~libraries conn migrations)
 
   let status_closed ~table ~libraries conn migrations :
       (status list, error) result =
     let* table = table_name table in
     let* () = distinct libraries in
-    let versions = List.map (fun m -> m.version) in
     List.fold_left
       (fun acc (source, migrations) ->
         let* acc = acc in
         let* applied, r = reading ~table ~source conn migrations in
-        Ok
-          ({
-             source;
-             applied = List.map (fun (v, n, _) -> (v, n)) applied;
-             pending = r.to_apply;
-             unknown = r.unknown;
-             edited = versions r.edited;
-             late = versions r.late;
-             behind = Option.map (fun m -> m.version) r.behind;
-           }
-          :: acc))
+        Ok (status_of ~source applied r :: acc))
       (Ok [])
       (sources libraries migrations)
     |> Result.map List.rev
@@ -743,6 +726,8 @@ let made_more_than_tables =
     "a library's migrations made something other than tables, which a baseline \
      cannot tell from the application's own: squash its history without those \
      libraries"
+
+let baseline_name = "baseline"
 
 let squash ~through ~migrations ~dumped =
   let* () = listed migrations in
@@ -764,13 +749,25 @@ let squash ~through ~migrations ~dumped =
                 "migration %d is a baseline already: there is nothing before \
                  it to squash"
                 through))
+    (* A database that ran it would record what one the baseline made does,
+       nothing below the version and the baseline's name at it, and an
+       edit to the baseline could not be told from history. *)
+    | true, [ m ] when String.equal m.name baseline_name ->
+        Error
+          (`Invalid_argument
+             (Printf.sprintf
+                "migration %d_%s is the only one through %d, and named as the \
+                 baseline that would replace it: a database that ran it could \
+                 not be told from one the baseline made, so it is not squashed \
+                 alone; squash through a later migration"
+                through m.name through))
     | true, _ -> Ok ()
   in
   let* made = dumped ~apart:true replaced in
   let baseline =
     {
       version = through;
-      name = "baseline";
+      name = baseline_name;
       kind = Baseline;
       sql =
         Printf.sprintf

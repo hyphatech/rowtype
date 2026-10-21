@@ -154,8 +154,8 @@ let test_a_deadlock_is_not_serializable () =
           Alcotest.(check (list told_t))
             "one is refused as not serializable, the other goes on"
             [ Not_serializable ] refused;
-          ignore (Pg.exec_raw a "rollback");
-          ignore (Pg.exec_raw b "rollback");
+          ok (Pg.exec_raw a "rollback");
+          ok (Pg.exec_raw b "rollback");
           reads_on a "after a deadlock";
           reads_on b "after a deadlock"))
 

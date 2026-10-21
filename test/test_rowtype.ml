@@ -920,7 +920,7 @@ let test_a_raise_rolls_back_and_passes () =
   on_db [ "create table t (n int)" ] (fun db ->
       (match
          T.within db (fun db ->
-             ignore (ok (insert db 1));
+             ok (insert db 1);
              raise Work_raised)
        with
       | exception Work_raised -> ()
@@ -1174,7 +1174,7 @@ let test_a_transaction_inside_another_is_refused () =
       let inner = ref None in
       (match
          T.within db (fun db ->
-             ignore (ok (insert db 1));
+             ok (insert db 1);
              inner := Some (T.within db (fun db -> insert db 2));
              insert db 3)
        with
@@ -1212,6 +1212,41 @@ let test_a_dropped_connection_is_revived_before_begin () =
           Alcotest.failf "refused: %s" (S.error_to_string e)
       | Error (`Not_committed m) -> Alcotest.failf "not committed: %s" m);
       Alcotest.(check int) "the write landed" 1 (committed db))
+
+(* A rollback on a connection the server dropped fails, and the connection
+   is made again by the next transaction. *)
+let test_a_lost_rollback_is_revived () =
+  on_db [ "create table t (n int)" ] (fun db ->
+      let pid =
+        ok
+          (Pg.run db
+             (S.find ~params:S.unit ~row:S.int "select pg_backend_pid()")
+             ())
+      in
+      (match
+         T.within db (fun db ->
+             ok (insert db 1);
+             Db_target.admin (fun admin ->
+                 ignore
+                   (ok
+                      (Pg.run admin
+                         (S.find ~params:S.int ~row:S.bool
+                            "select pg_terminate_backend($1)")
+                         pid)
+                     : bool));
+             Error (`Db "refused"))
+       with
+      | Error (`Db _) -> ()
+      | Ok () -> Alcotest.fail "the refusal committed"
+      | Error (#S.error as e) ->
+          Alcotest.failf "unexpected: %s" (S.error_to_string e)
+      | Error (`Not_committed m) -> Alcotest.failf "not committed: %s" m);
+      (match T.within db (fun db -> insert db 2) with
+      | Ok () -> ()
+      | Error (#S.error as e) ->
+          Alcotest.failf "refused: %s" (S.error_to_string e)
+      | Error (`Not_committed m) -> Alcotest.failf "not committed: %s" m);
+      Alcotest.(check int) "and made again" 1 (committed db))
 
 (* A connection its owner closed is closed for good: a transaction on it is
    not committed, and runs nothing, rather than opening it again. *)
@@ -1919,6 +1954,8 @@ let () =
             test_a_transaction_inside_another_is_refused;
           Alcotest.test_case "a dropped connection is revived before begin"
             `Quick test_a_dropped_connection_is_revived_before_begin;
+          Alcotest.test_case "a lost rollback is revived" `Quick
+            test_a_lost_rollback_is_revived;
           Alcotest.test_case "a closed connection stays closed" `Quick
             test_a_closed_connection_stays_closed;
           Alcotest.test_case "a revival that fails says why" `Quick

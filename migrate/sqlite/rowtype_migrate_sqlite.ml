@@ -22,7 +22,7 @@ module Sqlite_dialect = struct
 
   (* SQLite has no lock over a session: each migration's transaction is
      what a second process waits on. *)
-  let exclusively ~lock:_ _ f = f ~holding:(fun _ -> Ok ())
+  let exclusively _ f = f ~holding:(fun _ -> Ok ())
 
   (* No record made before its columns exists in SQLite, so the table is
      made whole, or is there. *)
@@ -63,17 +63,14 @@ module Sqlite_dialect = struct
   (* A savepoint lives as long as the transaction it was made in: a file
      that ended that transaction -- a [commit], a [rollback], or one and a
      [begin] after it -- leaves none to release. *)
-  type mark = unit
+  type mark = Sq.Transaction.savepoint
 
-  let savepoint = "rowtype_migration"
-  let mark conn = Sq.exec_raw conn ("savepoint " ^ savepoint)
+  let mark = Sq.Transaction.savepoint
 
-  let unbroken conn () =
-    match Sq.exec_raw conn ("release " ^ savepoint) with
-    | Ok () -> Ok true
-    | Error (`Db m) when String.starts_with ~prefix:"no such savepoint" m ->
-        Ok false
-    | Error e -> Error e
+  let unbroken conn mark =
+    Result.map
+      (function `Released -> true | `Gone -> false)
+      (Sq.Transaction.release conn mark)
 
   (* A table rebuilt with foreign keys off -- SQLite's way to change one --
      is a migration outside a transaction, where the pragma has effect, and
@@ -83,9 +80,8 @@ end
 
 module On_sqlite = M.Make (Sqlite_dialect)
 
-(* SQLite has no lock over a run, so there is no number to name one. *)
 let apply ?(table = M.default_table) ?(libraries = []) conn migrations =
-  On_sqlite.apply ~lock:0 ~table ~libraries conn migrations
+  On_sqlite.apply ~table ~libraries conn migrations
 
 let status ?(table = M.default_table) ?(libraries = []) conn migrations =
   On_sqlite.status ~table ~libraries conn migrations
@@ -191,12 +187,14 @@ let sqlite_schema ~left_out ~rows conn =
                     (String.concat ", " (List.map quoted columns))))
               ()
           in
-          Ok (acc @ List.map (fun l -> l ^ "\n") lines))
+          Ok (List.map (fun l -> l ^ "\n") lines :: acc))
         (Ok []) tables
   in
   Ok
     (String.concat ""
-       (List.map statement tables @ inserts @ List.map statement others))
+       (List.map statement tables
+       @ List.concat (List.rev inserts)
+       @ List.map statement others))
 
 (* A library is to have made tables alone, and what is on them -- an index,
    a trigger -- goes with them. *)
@@ -231,11 +229,11 @@ let migrated ~sw ~mono_clock ~table ~libraries ~apart ~migrations f =
   Fun.protect ~finally:(fun () -> Sq.close conn) @@ fun () ->
   let* theirs =
     if apart then
-      let* () = On_sqlite.apply ~lock:0 ~table ~libraries conn [] in
+      let* () = On_sqlite.apply ~table ~libraries conn [] in
       made_by_libraries ~table conn
     else Ok []
   in
-  let* () = On_sqlite.apply ~lock:0 ~table ~libraries conn migrations in
+  let* () = On_sqlite.apply ~table ~libraries conn migrations in
   f conn ~theirs
 
 let dump ~sw ~mono_clock ?(table = M.default_table) ?(libraries = []) migrations

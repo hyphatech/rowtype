@@ -6,6 +6,13 @@
 module S = Rowtype
 module Pg = Rowtype_postgres
 
+(* A property drawn afresh each run, its seed printed and [QCHECK_SEED]
+   honoured, as qcheck-alcotest draws one, inside the case that holds its
+   database. *)
+let checked test =
+  let _, _, run = QCheck_alcotest.to_alcotest test in
+  run ()
+
 let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
@@ -341,7 +348,7 @@ let test_arrays_of_any_text () =
         (fun () ->
           let ty = S.array (S.opt S.text) in
           let echo = S.find ~params:ty ~row:ty "select $1::text[]" in
-          QCheck.Test.check_exn
+          checked
             (QCheck.Test.make ~count:500
                ~name:"an array of any text comes back as itself"
                (QCheck.make

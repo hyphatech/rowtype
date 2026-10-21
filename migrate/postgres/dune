@@ -4,4 +4,4 @@
  (name rowtype_migrate_postgres)
  (public_name rowtype-migrate.postgres)
  (optional)
- (libraries rowtype rowtype-migrate rowtype-postgres eio mtime unix))
+ (libraries rowtype rowtype-migrate rowtype-postgres eio logs mtime unix))

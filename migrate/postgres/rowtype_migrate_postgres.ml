@@ -7,13 +7,21 @@ module M = Rowtype_migrate
 module Pg = Rowtype_postgres
 
 let ( let* ) = Result.bind
+let log = Logs.Src.create "rowtype-migrate.postgres"
+
+module Log = (val Logs.src_log log)
 
 module Postgres_dialect = struct
-  type conn = Pg.conn
+  (* The advisory lock a run takes is Postgres's alone, so it travels with
+     Postgres's connection rather than through the record's rules. *)
+  type conn = { pg : Pg.conn; lock : int }
 
-  let run conn statement args = Pg.run conn statement args
-  let exec_raw conn sql = Pg.exec_raw conn sql
-  let within conn work = Pg.Transaction.within conn work
+  let run conn statement args = Pg.run conn.pg statement args
+  let exec_raw conn sql = Pg.exec_raw conn.pg sql
+
+  let within conn work =
+    Pg.Transaction.within conn.pg (fun pg -> work { conn with pg })
+
   let backend = S.find ~params:S.unit ~row:S.int "select pg_backend_pid()"
 
   (* The advisory lock is the session's, and ends with its backend; a
@@ -22,7 +30,7 @@ module Postgres_dialect = struct
      that took the lock, asked first thing in its own transaction, where a
      [revive] has already happened if it was going to. *)
   let holding ~holder conn =
-    let* pid = Pg.run conn backend () in
+    let* pid = run conn backend () in
     if pid = holder then Ok () else Error (`Lock `Lost)
 
   (* A migration is bounded by nothing but itself, and so is the wait for
@@ -32,24 +40,26 @@ module Postgres_dialect = struct
      connection was opened with, and the read bound is put back as it was,
      whatever the run ends in. A migration's failure is the answer over the
      release's, which a lost connection has already made. *)
-  let exclusively ~lock conn f =
-    let reads = Pg.timeout conn in
-    Pg.set_timeout conn ~timeout:None;
-    Fun.protect ~finally:(fun () -> Pg.set_timeout conn ~timeout:reads)
+  let exclusively conn f =
+    let reads = Pg.timeout conn.pg in
+    Pg.set_timeout conn.pg ~timeout:None;
+    Fun.protect ~finally:(fun () -> Pg.set_timeout conn.pg ~timeout:reads)
     @@ fun () ->
-    let* () = Pg.exec_raw conn "set statement_timeout = 0" in
+    let* () = exec_raw conn "set statement_timeout = 0" in
     let* () =
-      Pg.run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") lock
+      run conn (S.exec ~params:S.int "select pg_advisory_lock($1)") conn.lock
     in
     let outcome =
-      let* holder = Pg.run conn backend () in
+      let* holder = run conn backend () in
       f ~holding:(holding ~holder)
     in
     let released =
       let* () =
-        Pg.run conn (S.exec ~params:S.int "select pg_advisory_unlock($1)") lock
+        run conn
+          (S.exec ~params:S.int "select pg_advisory_unlock($1)")
+          conn.lock
       in
-      Pg.exec_raw conn "reset statement_timeout"
+      exec_raw conn "reset statement_timeout"
     in
     let* () = outcome in
     released
@@ -62,7 +72,7 @@ module Postgres_dialect = struct
      two processes never both bring one table up. *)
   let prepare_record ~table conn =
     let* () =
-      Pg.exec_raw conn
+      exec_raw conn
         (Printf.sprintf
            {|create table if not exists %s (
                source text not null default '%s',
@@ -78,7 +88,7 @@ module Postgres_dialect = struct
            table M.app table table M.app)
     in
     let* key =
-      Pg.run conn
+      run conn
         (S.find_opt ~params:S.text ~row:(S.t2 S.text S.int)
            "select conname::text, cardinality(conkey) from pg_constraint where \
             conrelid = to_regclass($1) and contype = 'p'")
@@ -86,7 +96,7 @@ module Postgres_dialect = struct
     in
     match key with
     | Some (name, 1) ->
-        Pg.exec_raw conn
+        exec_raw conn
           (Printf.sprintf
              "alter table %s drop constraint \"%s\", add primary key (source, \
               version)"
@@ -97,13 +107,13 @@ module Postgres_dialect = struct
      path, whether or not its name says a schema. *)
   let record_columns ~table conn =
     let* exists =
-      Pg.run conn
+      run conn
         (S.find_opt ~params:S.text ~row:S.bool
            "select to_regclass($1) is not null")
         table
     in
     let has column =
-      Pg.run conn
+      run conn
         (S.find_opt ~params:(S.t2 S.text S.text) ~row:S.bool
            "select exists (select 1 from pg_attribute where attrelid = \
             to_regclass($1) and attname = $2 and not attisdropped)")
@@ -122,12 +132,12 @@ module Postgres_dialect = struct
   type mark = int
 
   let mark conn =
-    Pg.run conn (S.find ~params:S.unit ~row:S.int "select txid_current()") ()
+    run conn (S.find ~params:S.unit ~row:S.int "select txid_current()") ()
 
   let unbroken conn id =
     Result.map
       (Option.equal Int.equal (Some id))
-      (Pg.run conn
+      (run conn
          (S.find ~params:S.unit ~row:(S.opt S.int)
             "select txid_current_if_assigned()")
          ())
@@ -135,7 +145,7 @@ module Postgres_dialect = struct
   (* A [set] outlives the transaction it ran in -- a pg_dump, which a
      baseline is, sets an empty search path -- so it is put back, with the
      run's own unbounded statements. *)
-  let reset conn = Pg.exec_raw conn "reset all; set statement_timeout = 0"
+  let reset conn = exec_raw conn "reset all; set statement_timeout = 0"
 end
 
 module On_postgres = M.Make (Postgres_dialect)
@@ -146,10 +156,13 @@ let default_lock = 7_265_756_171
 
 let apply ?(lock = default_lock) ?(table = M.default_table) ?(libraries = [])
     conn migrations =
-  On_postgres.apply ~lock ~table ~libraries conn migrations
+  On_postgres.apply ~table ~libraries { pg = conn; lock } migrations
 
 let status ?(table = M.default_table) ?(libraries = []) conn migrations =
-  On_postgres.status ~table ~libraries conn migrations
+  (* A status reads, under no lock; the connection carries one regardless. *)
+  On_postgres.status ~table ~libraries
+    { pg = conn; lock = default_lock }
+    migrations
 
 (* ------------------------------------------------------------------ *)
 (* A database *)
@@ -353,37 +366,41 @@ let made_by_libraries conn =
 (* A database of its own, made empty, migrated, dumped, and dropped however
    that went -- so a schema is what the migrations make from nothing, and
    never what some database has drifted to. *)
-let migrated ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries ~apart
+let migrated ~sw ~net ~mono_clock ~process_mgr ~table ~libraries ~apart
     ~migrations (c : Pg.Conninfo.t) dump =
   let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
   with_connection ~sw ~net ~mono_clock c (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
+      (* A drop that fails leaves a database on the server, which is said,
+         and the work's own answer stands: the schema it dumped is sound. *)
       Fun.protect
         ~finally:(fun () ->
-          Eio.Cancel.protect (fun () ->
-              ignore
-                (Pg.exec_raw admin
-                   ("drop database if exists " ^ quoted scratch
-                  ^ " with (force)")
-                  : (unit, S.error) result)))
+          match
+            Eio.Cancel.protect (fun () ->
+                Pg.exec_raw admin
+                  ("drop database if exists " ^ quoted scratch ^ " with (force)"))
+          with
+          | Ok () -> ()
+          | Error e ->
+              Log.err (fun m ->
+                  m
+                    "the scratch database %s was not dropped, and is to be \
+                     dropped by hand: %s"
+                    scratch (S.error_to_string e)))
         (fun () ->
           let target = Pg.Conninfo.with_database c scratch in
           let* theirs =
             with_connection ~sw ~net ~mono_clock target (fun conn ->
                 let* theirs =
                   if apart then
-                    let* () =
-                      On_postgres.apply ~lock ~table ~libraries conn []
-                    in
+                    let* () = apply ~table ~libraries conn [] in
                     match made_by_libraries conn with
                     | Ok tables -> Ok tables
                     | Error `Not_only_tables -> Error M.made_more_than_tables
                     | Error (#S.error as e) -> Error e
                   else Ok []
                 in
-                let* () =
-                  On_postgres.apply ~lock ~table ~libraries conn migrations
-                in
+                let* () = apply ~table ~libraries conn migrations in
                 Ok theirs)
           in
           let url = Pg.Conninfo.to_url target in
@@ -413,25 +430,23 @@ let statements dump =
   |> List.filter (fun l -> not (String.starts_with ~prefix:"\\" l))
   |> String.concat "\n"
 
-let dump ~sw ~net ~mono_clock ~process_mgr ?(lock = default_lock)
-    ?(table = M.default_table) ?(libraries = [])
-    ?(pg_dump = "pg_dump --dbname={url}") ?(restrict_key = "rowtype")
-    ~migrations c =
+let dump ~sw ~net ~mono_clock ~process_mgr ?(table = M.default_table)
+    ?(libraries = []) ?(pg_dump = "pg_dump --dbname={url}")
+    ?(restrict_key = "rowtype") ~migrations c =
   let* table = M.table_name table in
   Result.map normalise_dump
-    (migrated ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-       ~apart:false ~migrations c
+    (migrated ~sw ~net ~mono_clock ~process_mgr ~table ~libraries ~apart:false
+       ~migrations c
        (pg_dump_argv ~template:pg_dump ~restrict_key))
 
 (* The schema and every row the migrations wrote, the record and the
    libraries' tables left out. *)
-let squash ~sw ~net ~mono_clock ~process_mgr ?(lock = default_lock)
-    ?(table = M.default_table) ?(libraries = [])
-    ?(pg_dump = "pg_dump --dbname={url}") ?(restrict_key = "rowtype") ~through
-    ~migrations c =
+let squash ~sw ~net ~mono_clock ~process_mgr ?(table = M.default_table)
+    ?(libraries = []) ?(pg_dump = "pg_dump --dbname={url}")
+    ?(restrict_key = "rowtype") ~through ~migrations c =
   let* table = M.table_name table in
   M.squash ~through ~migrations ~dumped:(fun ~apart migrations ->
       Result.map statements
-        (migrated ~sw ~net ~mono_clock ~process_mgr ~lock ~table ~libraries
-           ~apart ~migrations c
+        (migrated ~sw ~net ~mono_clock ~process_mgr ~table ~libraries ~apart
+           ~migrations c
            (baseline_argv ~template:pg_dump ~restrict_key ~table)))

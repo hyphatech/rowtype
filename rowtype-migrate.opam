@@ -18,6 +18,7 @@ depends: [
   "eio" {>= "1.5"}
   "mtime" {>= "2.1.0"}
   "eio_main" {>= "1.5"}
+  "logs" {>= "0.10.0"}
   "alcotest" {with-test & >= "1.9.1"}
   "odoc" {with-doc}
 ]

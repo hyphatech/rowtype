@@ -61,6 +61,8 @@ type failure =
   | Closed
   | Refused of string
 
+(* SQLite's words where it has not run anything, which quote only the
+   statement's text: [no such table: t], [near "$1": syntax error]. *)
 let failed db code =
   Sqlite
     {
@@ -69,9 +71,38 @@ let failed db code =
       message = Sqlite3.errmsg db;
     }
 
-(* The binding raises where SQLite answered a statement it could not
-   prepare, or was handed one it no longer has; everything else answers a
-   code. *)
+let sqlite_constraint_check = 275
+let sqlite_constraint_notnull = 1299
+let sqlite_constraint_unique = 2067
+let sqlite_constraint_primarykey = 1555
+let sqlite_constraint_foreignkey = 787
+
+(* Running a statement, a function quotes its argument in its message, each
+   function its own way, and a trigger's RAISE says what its author wrote,
+   so the words are the code's, as Postgres's class 22 is told; the
+   constraints SQLite checks itself name the schema's columns alone. *)
+let stepped db code =
+  let extended = Sqlite3.extended_errcode_int db in
+  let message =
+    if
+      List.mem extended
+        [
+          sqlite_constraint_check;
+          sqlite_constraint_notnull;
+          sqlite_constraint_unique;
+          sqlite_constraint_primarykey;
+        ]
+    then Sqlite3.errmsg db
+    else
+      Printf.sprintf
+        "SQLite answered %s (extended code %d) running the statement (its \
+         words are left out, since they may quote a value)"
+        (Rc.to_string code) extended
+  in
+  Sqlite { code; extended; message }
+
+(* The binding raises where it was handed a statement it no longer has;
+   everything else answers a code. *)
 let guarded db f =
   match f () with
   | v -> v
@@ -86,81 +117,106 @@ let finalize stmt =
   | (_ : Rc.t) -> ()
   | exception Sqlite3.SqliteError _ -> ()
 
+(* The binding raises where SQLite refused the text, and where it compiled
+   nothing from it -- a space, a comment, a lone [;] -- which SQLite answers
+   OK; the connection's code tells the two apart. *)
+let compiled db f =
+  match f () with
+  | stmt -> Ok stmt
+  | exception Sqlite3.Error _ -> (
+      match Sqlite3.errcode db with
+      | Rc.OK -> Ok None
+      | code -> Error (failed db code))
+
 (* One statement: SQLite prepares the first of a text and leaves the rest,
    which would never run. *)
 let prepare db sql =
-  let stmt = Sqlite3.prepare db sql in
-  match Sqlite3.prepare_tail stmt with
-  | None -> Ok stmt
-  | Some tail ->
-      finalize tail;
-      finalize stmt;
-      Error (Refused "a text of several statements, which only exec_raw runs")
+  match compiled db (fun () -> Some (Sqlite3.prepare db sql)) with
+  | Error e -> Error e
+  | Ok None -> Error (Refused "a text with no statement")
+  | Ok (Some stmt) -> (
+      match compiled db (fun () -> Sqlite3.prepare_tail stmt) with
+      | Ok None -> Ok stmt
+      | Ok (Some tail) ->
+          finalize tail;
+          finalize stmt;
+          Error
+            (Refused "a text of several statements, which only exec_raw runs")
+      | Error e ->
+          finalize stmt;
+          Error e)
 
 let values n = if n = 1 then "1 value" else Printf.sprintf "%d values" n
 
 (* The value each placeholder takes, by its number: [?] numbered as SQLite
    numbers it, [?3] and [$3] by theirs. A placeholder with a name has no
    value in a shape, and a value no placeholder takes is a statement and a
-   shape that disagree, as Postgres says of one. *)
-let bind db stmt params =
-  let given = Array.of_list params in
-  let n = Array.length given in
+   shape that disagree, as Postgres says of one. [run] binds by it and
+   [verify] checks by it, so neither passes what the other refuses. *)
+let numbers placeholders n =
   let taken = Array.make n false in
-  let rec each i =
-    if i > Sqlite3.bind_parameter_count stmt then Ok ()
-    else
-      let name = Sqlite3.bind_parameter_name stmt i in
-      let* k =
-        match name with
-        | None -> Ok i
-        | Some name ->
-            (* Its first character is what marks it: [?], [$], [:] or [@]. *)
-            let number =
-              if String.length name > 1 then
-                String.sub name 1 (String.length name - 1)
-              else ""
-            in
-            if
-              String.length number > 0
-              && String.for_all
-                   (function '0' .. '9' -> true | _ -> false)
-                   number
-            then
-              Option.to_result
-                ~none:
-                  (Refused ("the placeholder " ^ name ^ " is past any value"))
-                (int_of_string_opt number)
-            else
-              Error
-                (Refused
-                   ("the placeholder " ^ name
-                  ^ " has a name, and a shape's values have none: number it, \
-                     as $1"))
-      in
-      if k < 1 || k > n then
-        Error
-          (Refused
-             (Printf.sprintf "the placeholder %s is past the %s given"
-                (Option.value name ~default:"?")
-                (values n)))
-      else (
-        taken.(k - 1) <- true;
-        match Sqlite3.bind stmt i given.(k - 1) with
-        | Rc.OK -> each (i + 1)
-        | rc -> Error (failed db rc))
+  let number i = function
+    | None -> Ok i
+    | Some name ->
+        (* Its first character is what marks it: [?], [$], [:] or [@]. *)
+        let digits =
+          if String.length name > 1 then
+            String.sub name 1 (String.length name - 1)
+          else ""
+        in
+        if
+          String.length digits > 0
+          && String.for_all (function '0' .. '9' -> true | _ -> false) digits
+        then
+          Option.to_result
+            ~none:("the placeholder " ^ name ^ " is past any value")
+            (int_of_string_opt digits)
+        else
+          Error
+            ("the placeholder " ^ name
+           ^ " has a name, and a shape's values have none: number it, as $1")
   in
-  let* () = each 1 in
+  let rec each i acc = function
+    | [] -> Ok (List.rev acc)
+    | name :: rest ->
+        let* k = number i name in
+        if k < 1 || k > n then
+          Error
+            (Printf.sprintf "the placeholder %s is past the %s given"
+               (Option.value name ~default:"?")
+               (values n))
+        else (
+          taken.(k - 1) <- true;
+          each (i + 1) (k :: acc) rest)
+  in
+  let* ks = each 1 [] placeholders in
   let rec untaken k =
-    if k = n then Ok ()
+    if k = n then Ok ks
     else if taken.(k) then untaken (k + 1)
     else
       Error
-        (Refused
-           (Printf.sprintf "%s given, and no placeholder takes value %d"
-              (values n) (k + 1)))
+        (Printf.sprintf "%s given, and no placeholder takes value %d" (values n)
+           (k + 1))
   in
   untaken 0
+
+let bind db stmt params =
+  let given = Array.of_list params in
+  let placeholders =
+    List.init (Sqlite3.bind_parameter_count stmt) (fun i ->
+        Sqlite3.bind_parameter_name stmt (i + 1))
+  in
+  match numbers placeholders (Array.length given) with
+  | Error m -> Error (Refused m)
+  | Ok ks ->
+      let rec each i = function
+        | [] -> Ok ()
+        | k :: rest -> (
+            match Sqlite3.bind stmt i given.(k - 1) with
+            | Rc.OK -> each (i + 1) rest
+            | rc -> Error (failed db rc))
+      in
+      each 1 ks
 
 (* Rows read on the system thread a hop, measured on an Apple M-series
    machine: a hop costs about 6.5 us, fifty times a step, and 64 rows a
@@ -170,21 +226,42 @@ let rows_per_hop = 64
 
 (* Each run of a prepared statement, with its parameters, to its end, its
    rows discarded. *)
+let rec to_end db stmt =
+  match Sqlite3.step stmt with
+  | Rc.ROW -> to_end db stmt
+  | Rc.DONE -> Ok ()
+  | rc -> Error (stepped db rc)
+
 let run_each db stmt runs =
-  let rec to_end () =
-    match Sqlite3.step stmt with
-    | Rc.ROW -> to_end ()
-    | Rc.DONE -> Ok ()
-    | rc -> Error (failed db rc)
-  in
   List.fold_left
     (fun so_far params ->
       let* () = so_far in
       let* () = bind db stmt params in
-      let* () = to_end () in
+      let* () = to_end db stmt in
       ignore (Sqlite3.reset stmt : Rc.t);
       Ok ())
     (Ok ()) runs
+
+(* Each statement of a text, prepared only once the one before it has run,
+   since that one may make what the next names. *)
+let each_statement db sql =
+  let rec from stmt =
+    let next =
+      Fun.protect
+        ~finally:(fun () -> finalize stmt)
+        (fun () ->
+          let* () = to_end db stmt in
+          compiled db (fun () -> Sqlite3.prepare_tail stmt))
+    in
+    match next with
+    | Ok (Some stmt) -> from stmt
+    | Ok None -> Ok ()
+    | Error e -> Error e
+  in
+  match compiled db (fun () -> Some (Sqlite3.prepare db sql)) with
+  | Ok (Some stmt) -> from stmt
+  | Ok None -> Ok ()
+  | Error e -> Error e
 
 (* Work SQLite undoes whole goes in a savepoint: inside a transaction, the
    transaction's own writes stay, and outside one the savepoint is a
@@ -224,7 +301,7 @@ let chunk db stmt =
       match Sqlite3.step stmt with
       | Rc.ROW -> go (k + 1) (row stmt :: acc)
       | Rc.DONE -> Ok (Done (List.rev acc, Sqlite3.changes db))
-      | rc -> Error (failed db rc)
+      | rc -> Error (stepped db rc)
   in
   go 0 []
 
@@ -348,15 +425,19 @@ module Backend = struct
             guarded t.db (fun () ->
                 let* stmt = prepare t.db sql in
                 match bind t.db stmt params with
-                | Ok () -> Ok stmt
+                | Ok () -> Ok (stmt, Sqlite3.column_count stmt)
                 | Error e ->
                     finalize stmt;
                     Error e))
       in
       match prepared with
       | Error e -> Error e
-      | Ok stmt ->
-          Fun.protect ~finally:(fun () -> finalize stmt) @@ fun () ->
+      | Ok (stmt, columns) ->
+          (* Ending a write left part-read commits it, which can wait on a
+             lock, and a cancelled fiber may not start the hop. *)
+          Fun.protect ~finally:(fun () ->
+              Eio.Cancel.protect (fun () -> off (fun () -> finalize stmt)))
+          @@ fun () ->
           let rec go acc sent =
             match off (fun () -> guarded t.db (fun () -> chunk t.db stmt)) with
             | Error e -> Error e
@@ -366,7 +447,7 @@ module Backend = struct
                 let sent = sent + List.length rows in
                 Ok
                   ( List.fold_left row acc rows,
-                    if Sqlite3.column_count stmt > 0 then sent else changed )
+                    if columns > 0 then sent else changed )
           in
           go init 0
 
@@ -392,7 +473,7 @@ module Backend = struct
     if t.closed then Error Closed
     else
       timed t sql @@ fun () ->
-      off (fun () -> guarded t.db (fun () -> exec t.db sql))
+      off (fun () -> guarded t.db (fun () -> each_statement t.db sql))
 
   let array elements = D.TEXT (Forms.array elements)
 
@@ -412,10 +493,6 @@ module Backend = struct
      columns of the first two, [UNIQUE constraint failed: t.a, t.b], and
      nothing of the third. NOT NULL and CHECK refuse the row alone, the
      program's mistake. *)
-  let sqlite_constraint_unique = 2067
-  let sqlite_constraint_primarykey = 1555
-  let sqlite_constraint_foreignkey = 787
-
   let error : failure -> [> S.error ] = function
     | Closed -> `Connection `Closed
     | Refused m -> `Db m
@@ -445,10 +522,19 @@ include (Run : Rowtype.S with type conn := conn)
 (* ------------------------------------------------------------------ *)
 (* Connections *)
 
+(* Closing a WAL file's last connection checkpoints it. *)
 let close t =
   if not t.closed then (
     t.closed <- true;
-    ignore (Sqlite3.db_close t.db : bool))
+    Eio.Cancel.protect (fun () ->
+        off (fun () -> ignore (Sqlite3.db_close t.db : bool))))
+
+(* ROLLBACK answers SQLITE_ERROR where no transaction is open -- SQLite
+   rolled it back itself, or none was begun -- and any other failure may
+   leave one open. *)
+let rolled_back = function
+  | Ok () | Error (Sqlite { code = Rc.ERROR; _ } | Closed) -> Ok ()
+  | Error ((Sqlite _ | Refused _) as e) -> Error e
 
 (* SQLite's wait is whole milliseconds, a C int of them. *)
 let milliseconds wait =
@@ -643,18 +729,27 @@ module Pool = struct
           ])
 
   (* A connection goes back with no transaction open, since SQLite keeps one
-     a borrower left open for whoever borrows next; one its borrower closed
-     is made again, and kept closed, its statements saying so, where it
-     cannot be. Once the pool is closed, it is closed. *)
+     a borrower left open for whoever borrows next; one its borrower closed,
+     or whose rollback failed, is made again, and kept closed, its
+     statements saying so, where it cannot be. Once the pool is closed, it
+     is closed. *)
   let give_back t c =
     if Eio.Promise.is_resolved t.closed then close c
     else
+      let remade () =
+        close c;
+        match t.remake () with Ok fresh -> fresh | Error _ -> c
+      in
       let c =
-        if c.closed then
-          match t.remake () with Ok fresh -> fresh | Error _ -> c
-        else (
-          ignore (off (fun () -> exec c.db "rollback") : (unit, failure) result);
-          c)
+        if c.closed then remade ()
+        else
+          match rolled_back (off (fun () -> exec c.db "rollback")) with
+          | Ok () -> c
+          | Error e ->
+              Log.err (fun m ->
+                  m "a pooled connection was closed, its rollback failed: %s"
+                    (S.error_to_string (Backend.error e)));
+              remade ()
       in
       Eio.Stream.add t.free c
 
@@ -715,13 +810,24 @@ module Transaction = struct
     Log.err (fun m -> m "a transaction was not committed: %s: %s" what detail);
     Error (`Not_committed (what ^ ": " ^ detail))
 
-  let rollback db = ignore (exec_raw db "rollback" : (unit, S.error) result)
+  (* A COMMIT and a ROLLBACK are made outside any cancellation: a cancelled
+     fiber may not start a statement, and a transaction it left open would
+     keep its lock on a connection its caller goes on using. *)
+  let rollback db =
+    match
+      rolled_back (Eio.Cancel.protect (fun () -> Backend.script db "rollback"))
+    with
+    | Ok () -> ()
+    | Error e ->
+        Log.err (fun m ->
+            m "a transaction could not be rolled back: %s"
+              (S.error_to_string (Backend.error e)))
 
   (* A COMMIT SQLite refuses -- a lock it could not take, a deferred foreign
      key -- leaves the transaction open, so it is rolled back here; one
      SQLite had already rolled back answers that none is open. *)
   let commit db =
-    match exec_raw db "commit" with
+    match Eio.Cancel.protect (fun () -> exec_raw db "commit") with
     | Ok () -> Ok ()
     | Error e ->
         rollback db;
@@ -738,11 +844,9 @@ module Transaction = struct
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
         match work db with
-        (* A cancelled fiber may not start a statement, and the rollback
-           is one, so it is made outside the cancellation. *)
         | exception ex ->
             let trace = Printexc.get_raw_backtrace () in
-            Eio.Cancel.protect (fun () -> rollback db);
+            rollback db;
             Printexc.raise_with_backtrace ex trace
         | Ok v -> ( match commit db with Ok () -> Ok v | Error e -> ended e)
         | Error e when not (keep e) ->
@@ -764,6 +868,24 @@ module Transaction = struct
       | answer -> answer
     in
     attempt retries
+
+  type savepoint = Savepoint
+
+  let savepoint_name = "rowtype_savepoint"
+
+  let savepoint db =
+    Result.map
+      (fun () -> Savepoint)
+      (exec_raw db ("savepoint " ^ savepoint_name))
+
+  (* RELEASE answers SQLITE_ERROR, and nothing else, where the savepoint is
+     not there; one that is there fails only as a COMMIT does, where it ends
+     the transaction. *)
+  let release db Savepoint =
+    match Backend.script db ("release " ^ savepoint_name) with
+    | Ok () -> Ok `Released
+    | Error (Sqlite { code = Rc.ERROR; _ }) -> Ok `Gone
+    | Error ((Sqlite _ | Closed | Refused _) as e) -> Error (Backend.error e)
 end
 
 (* ------------------------------------------------------------------ *)
@@ -809,17 +931,23 @@ let affinity declared =
 let reads : type a. a S.scalar -> affinity -> bool =
  fun scalar affinity ->
   match (scalar, affinity) with
-  | _, Blob -> true
+  | ( ( S.Int | S.Int64 | S.Bool | S.Float | S.Text | S.Json | S.Enum _
+      | S.Instant | S.Date | S.Timestamp | S.Interval | S.Uuid | S.Bytes ),
+      Blob ) ->
+      true
   | (S.Int | S.Int64 | S.Bool), (Integer | Numeric) -> true
+  | (S.Int | S.Int64 | S.Bool), (Text | Real) -> false
   | S.Float, (Integer | Real | Numeric) -> true
+  | S.Float, Text -> false
   | (S.Text | S.Json | S.Enum _), Text -> true
+  | (S.Text | S.Json | S.Enum _), (Integer | Real | Numeric) -> false
   | (S.Instant | S.Date | S.Timestamp | S.Interval | S.Uuid), (Text | Numeric)
     ->
       true
-  | ( ( S.Int | S.Int64 | S.Bool | S.Float | S.Text | S.Json | S.Enum _
-      | S.Instant | S.Date | S.Timestamp | S.Interval | S.Uuid | S.Bytes ),
-      _ ) ->
+  | (S.Instant | S.Date | S.Timestamp | S.Interval | S.Uuid), (Integer | Real)
+    ->
       false
+  | S.Bytes, (Integer | Text | Real | Numeric) -> false
 
 (* What SQLite says of a statement it prepared and did not run: each
    placeholder's name, in order, and each column's declared type, where the
@@ -858,45 +986,10 @@ let problems t (declared : S.declared) =
   match d with
   | Refused_by message -> Ok [ "the database refuses it: " ^ message ]
   | Described (placeholders, columns) ->
-      let numbered, named =
-        List.fold_left
-          (fun (numbered, named) (i, name) ->
-            match name with
-            | None -> (i :: numbered, named)
-            | Some name -> (
-                let number =
-                  if String.length name > 1 then
-                    String.sub name 1 (String.length name - 1)
-                  else ""
-                in
-                match
-                  if
-                    String.for_all
-                      (function '0' .. '9' -> true | _ -> false)
-                      number
-                  then int_of_string_opt number
-                  else None
-                with
-                | Some k -> (k :: numbered, named)
-                | None ->
-                    ( numbered,
-                      Printf.sprintf
-                        "parameter %s has a name, and a shape's values have \
-                         none"
-                        name
-                      :: named )))
-          ([], [])
-          (List.mapi (fun i name -> (i + 1, name)) placeholders)
-      in
-      let distinct = List.length (List.sort_uniq Int.compare numbered) in
       let parameters =
-        let declared_n = List.length declared.parameters in
-        if declared_n <> distinct && List.is_empty named then
-          [
-            Printf.sprintf "%d parameters declared, and the database has %d"
-              declared_n distinct;
-          ]
-        else List.rev named
+        match numbers placeholders (List.length declared.parameters) with
+        | Ok (_ : int list) -> []
+        | Error m -> [ m ]
       in
       let columns =
         match declared.row with

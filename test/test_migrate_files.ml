@@ -1,8 +1,7 @@
 (* The migration files' pieces, without a database: reading them, naming a
-   new one, and what a squash refuses before it connects. *)
+   new one, and a squash's own rules, over a dump that is no dialect's. *)
 
 module C = Rowtype_migrate
-module Conninfo = Rowtype_postgres.Conninfo
 
 let check_string = Alcotest.(check string)
 let words = C.error_to_string
@@ -56,6 +55,30 @@ let test_files_are_read_in_version_order () =
   | Ok _ -> Alcotest.fail "a directory holding a stray file was read"
   | Error (`Files m) ->
       Alcotest.(check bool) ("names it: " ^ m) true (String.length m > 0)
+  | Error e -> Alcotest.failf "not the files': %s" (words e)
+
+(* A directory is its .sql files, in version order: none at all is no
+   migrations, another kind of file is not one, and a directory not there
+   is refused by name. *)
+let test_a_directory_is_its_sql_files () =
+  let read dir =
+    match C.of_directory dir with
+    | Ok ms -> List.map (fun (m : C.migration) -> m.name) ms
+    | Error e -> Alcotest.failf "refused: %s" (words e)
+  in
+  let dir = temp_dir () in
+  Alcotest.(check (list string)) "empty" [] (read dir);
+  ignore (file dir "README.md" "# migrations" : string);
+  ignore (file dir ".keep" "" : string);
+  Alcotest.(check (list string)) "other files are not migrations" [] (read dir);
+  ignore (file dir "20260102000000_second.sql" "select 2;" : string);
+  ignore (file dir "20260101000000_first.sql" "select 1;" : string);
+  Alcotest.(check (list string))
+    "in version order" [ "first"; "second" ] (read dir);
+  match C.of_directory (Filename.concat dir "absent") with
+  | Error (`Files m) ->
+      Alcotest.(check bool) ("names it: " ^ m) true (String.length m > 0)
+  | Ok _ -> Alcotest.fail "a directory not there was read"
   | Error e -> Alcotest.failf "not the files': %s" (words e)
 
 (* A directive is the first line or nothing, and one not known is refused
@@ -248,21 +271,12 @@ let test_a_version_is_fourteen_digits () =
        ])
 
 (* A squash is through one of the files, and has something before it to
-   replace; both are refused before the server is asked anything, which is
-   why the URL names no server. *)
+   replace; both are refused before anything is dumped. *)
 let test_a_squash_refuses_what_it_cannot_squash () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
   let squash ~through migrations =
     match
-      Rowtype_migrate_postgres.squash ~sw ~net:(Eio.Stdenv.net env)
-        ~mono_clock:(Eio.Stdenv.mono_clock env)
-        ~process_mgr:(Eio.Stdenv.process_mgr env)
-        ~pg_dump:"pg_dump" ~restrict_key:"rowtype" ~through:(version through)
-        ~migrations
-        (match Conninfo.of_string "postgres://u@nowhere.invalid/x" with
-        | Ok c -> c
-        | Error m -> Alcotest.fail m)
+      C.squash ~through:(version through) ~migrations ~dumped:(fun ~apart:_ _ ->
+          Alcotest.fail "dumped before refusing")
     with
     | Ok _ -> "squashed"
     | Error (`Invalid_argument _) -> "invalid"
@@ -280,9 +294,54 @@ let test_a_squash_refuses_what_it_cannot_squash () =
     "through a baseline with nothing before it" "invalid"
     (squash ~through:20260101000000 [ baseline; second ]);
   Alcotest.(check string)
+    "through the one migration, named as the baseline it would write" "invalid"
+    (squash ~through:20260101000000
+       [ m 20260101000000 "baseline" C.Transaction; second ]);
+  Alcotest.(check string)
     "a list whose baseline is not the oldest" "files"
     (squash ~through:20260102000000
        [ m 20260100000000 "older" C.Transaction; baseline; second ])
+
+(* A baseline is answered only where it and what follows it dump as the
+   whole history does, whatever dialect dumps them. *)
+let test_a_squash_is_proved () =
+  let history =
+    [
+      {
+        C.version = version 20260101000000;
+        name = "a";
+        kind = C.Transaction;
+        sql = "create table a (n int)";
+      };
+      {
+        C.version = version 20260102000000;
+        name = "b";
+        kind = C.Transaction;
+        sql = "create table b (n int)";
+      };
+    ]
+  in
+  (match
+     C.squash ~through:(version 20260101000000) ~migrations:history
+       ~dumped:(fun ~apart:_ _ -> Ok "the same schema")
+   with
+  | Ok baseline ->
+      Alcotest.(check int)
+        "at the version it replaced" 20260101000000 (number baseline.version);
+      Alcotest.(check bool)
+        "a baseline" true
+        (match baseline.kind with
+        | C.Baseline -> true
+        | C.Transaction | C.No_transaction -> false)
+  | Error e -> Alcotest.failf "not squashed: %s" (words e));
+  match
+    C.squash ~through:(version 20260101000000) ~migrations:history
+      ~dumped:(fun ~apart:_ ms ->
+        Ok (String.concat "," (List.map (fun (m : C.migration) -> m.name) ms)))
+  with
+  | Error `Unproved -> ()
+  | Ok _ -> Alcotest.fail "a baseline that dumps otherwise was answered"
+  | Error e -> Alcotest.failf "refused otherwise: %s" (words e)
 
 let () =
   Alcotest.run "migrate files"
@@ -291,6 +350,8 @@ let () =
         [
           Alcotest.test_case "read in version order" `Quick
             test_files_are_read_in_version_order;
+          Alcotest.test_case "a directory is its .sql files" `Quick
+            test_a_directory_is_its_sql_files;
           Alcotest.test_case "a version is fourteen digits" `Quick
             test_a_version_is_fourteen_digits;
           Alcotest.test_case "a directive is the first line" `Quick
@@ -302,6 +363,7 @@ let () =
         [
           Alcotest.test_case "it refuses what it cannot squash" `Quick
             test_a_squash_refuses_what_it_cannot_squash;
+          Alcotest.test_case "it is proved" `Quick test_a_squash_is_proved;
         ] );
       ( "migrations",
         [

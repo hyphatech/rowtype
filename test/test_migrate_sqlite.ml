@@ -186,14 +186,14 @@ let test_a_migration_can_run_outside_a_transaction () =
         (count conn "pragma foreign_keys"))
 
 let test_a_baseline_stands_for_what_it_replaced () =
+  let baseline =
+    m ~kind:Baseline 20260102000000 "baseline"
+      "-- rowtype-migrate: baseline\n\
+       create table a (n integer);\n\
+       insert into a values (1);"
+  in
   on_db (fun db conn ->
       ok (Q.apply db [ first; second ]);
-      let baseline =
-        m ~kind:Baseline 20260102000000 "baseline"
-          "-- rowtype-migrate: baseline\n\
-           create table a (n integer);\n\
-           insert into a values (1);"
-      in
       ok (Q.apply db [ baseline; third ]);
       Alcotest.(check (list (triple string int string)))
         "history kept, the next applied"
@@ -202,7 +202,27 @@ let test_a_baseline_stands_for_what_it_replaced () =
           ("app", 20260102000000, "second");
           ("app", 20260103000000, "third");
         ]
-        (recorded conn))
+        (recorded conn));
+  (* A migration may be named anything, baseline among them: what it ran
+     below the baseline's version says the baseline did not run there. *)
+  on_db (fun db conn ->
+      ok (Q.apply db [ first; { second with name = "baseline" } ]);
+      ok (Q.apply db [ baseline; third ]);
+      Alcotest.(check int)
+        "one named baseline is history too" 3
+        (List.length (recorded conn)));
+  (* A database made from the baseline ran the baseline, so its text is held
+     to what ran, as any migration's is. *)
+  on_db (fun db _ ->
+      ok (Q.apply db [ baseline; third ]);
+      let edited =
+        { baseline with sql = baseline.sql ^ "\ncreate table d (n integer);" }
+      in
+      match Q.apply db [ edited; third ] with
+      | Error (`Record (`Edited (m : M.migration))) ->
+          Alcotest.(check string) "the baseline, edited" "baseline" m.name
+      | Ok () -> Alcotest.fail "an edited baseline was accepted"
+      | Error e -> Alcotest.failf "not an edit: %s" (M.error_to_string e))
 
 let test_a_record_can_have_a_table_of_its_own () =
   on_db (fun db conn ->
@@ -236,7 +256,29 @@ let test_a_database_is_made_and_dropped () =
     (Result.is_ok (Q.create ~sw ~mono_clock file));
   ok (Q.drop file);
   Alcotest.(check bool) "and gone" false (Result.is_ok (connects ()));
-  ok (Q.drop file)
+  ok (Q.drop file);
+  (* A WAL database keeps two files beside it while a connection is open,
+     which go with it. *)
+  ok (Q.create ~sw ~mono_clock file);
+  let conn =
+    match Sq.connect ~sw ~mono_clock file with
+    | Ok c -> c
+    | Error e -> Alcotest.failf "%s" (Sq.error_to_string e)
+  in
+  List.iter
+    (fun sql ->
+      match Sq.exec_raw conn sql with
+      | Ok () -> ()
+      | Error e -> Alcotest.failf "%s" (Sq.error_to_string e))
+    [ "pragma journal_mode = wal"; "create table t (n integer)" ];
+  Alcotest.(check bool)
+    "a -wal beside it" true
+    (Sys.file_exists (file ^ "-wal"));
+  ok (Q.drop file);
+  Sq.close conn;
+  Alcotest.(check (list string))
+    "nothing of it left" []
+    (List.filter Sys.file_exists [ file; file ^ "-wal"; file ^ "-shm" ])
 
 (* Two processes migrating one file at once, each having read the record
    before either applies anything: a third holds the write lock until both
@@ -300,14 +342,20 @@ let test_two_migrators_take_turns () =
 let test_a_status_says_each_disagreement () =
   on_db (fun db conn ->
       ok (Q.apply db [ first; third ]);
-      let versions = List.map number in
+      let versions = List.map number
+      and named = List.map (fun (m : M.migration) -> number m.version) in
       let st =
         app_status db
           [ { first with sql = "create table a (n text)" }; second; third ]
       in
-      Alcotest.(check (list int))
-        "edited" [ 20260101000000 ] (versions st.edited);
-      Alcotest.(check (list int)) "late" [ 20260102000000 ] (versions st.late);
+      Alcotest.(check (list int)) "edited" [ 20260101000000 ] (named st.edited);
+      Alcotest.(check (list int)) "late" [ 20260102000000 ] (named st.late);
+      Alcotest.(check (option string))
+        "refused as apply refuses it, the edited one first"
+        (Some
+           (M.error_to_string
+              (`Record (`Edited { first with sql = "create table a (n text)" }))))
+        (Option.map M.error_to_string (M.refusal st));
       let st = app_status db [ first ] in
       Alcotest.(check (list int))
         "unknown" [ 20260103000000 ] (versions st.unknown);
@@ -328,7 +376,7 @@ let test_a_database_behind_a_baseline () =
       let st = app_status db [ baseline; third ] in
       Alcotest.(check (option int))
         "said" (Some 20260102000000)
-        (Option.map number st.behind);
+        (Option.map (fun (m : M.migration) -> number m.version) st.behind);
       (match Q.apply db [ baseline; third ] with
       | Error (`Record (`Behind b)) ->
           Alcotest.(check int) "names it" 20260102000000 (number b.version)
@@ -385,6 +433,35 @@ let test_libraries_are_histories_of_their_own () =
         (List.map
            (fun (st : M.status) -> st.source)
            (ok (Q.status ~libraries:[ spool ] db app))))
+
+(* Every check is made within one source, so a library's own history is
+   held to its order as the application's is. *)
+let test_a_source_is_still_held_to_its_order () =
+  on_db (fun db _ ->
+      let later = m 20260102000000 "later" "select 1" in
+      ok (Q.apply ~libraries:[ library "spool" [ later ] ] db []);
+      let earlier = m 20260101000000 "earlier" "select 1" in
+      match Q.apply ~libraries:[ library "spool" [ earlier; later ] ] db [] with
+      | Error (`Record (`Late (m : M.migration))) ->
+          Alcotest.(check string) "the late one" "earlier" m.name
+      | Ok () -> Alcotest.fail "a late migration within a source ran"
+      | Error e -> Alcotest.failf "refused otherwise: %s" (words e))
+
+(* The libraries run first, so the application's migrations may stand on
+   their tables -- SQLite takes a foreign key to a table not yet made, so
+   a row written into one says it -- and a source given twice is refused. *)
+let test_libraries_run_before_the_application () =
+  on_db (fun db _ ->
+      let spool =
+        library "spool"
+          [ m 20260301000000 "jobs" "create table spool_jobs (id integer)" ]
+      in
+      ok
+        (Q.apply ~libraries:[ spool ] db
+           [ m 20260101000000 "first job" "insert into spool_jobs values (1)" ]);
+      match Q.apply ~libraries:[ spool; spool ] db [] with
+      | Error (`Invalid_argument _) -> ()
+      | Ok () | Error _ -> Alcotest.fail "a source given twice was taken")
 
 (* ------------------------------------------------------------------ *)
 (* The schema, and a history as one file *)
@@ -470,6 +547,21 @@ let test_a_squash_stands_for_its_history () =
   | Error (`Invalid_argument _) -> ()
   | _ -> Alcotest.fail "a squash through no migration was answered"
 
+(* A migration after the baseline whose rows differ on every run makes two
+   databases that cannot dump the same: nothing is squashed. *)
+let test_an_unproved_squash_is_refused () =
+  with_eio @@ fun env ~sw ->
+  match
+    squash env ~sw ~through:20260101000000
+      [
+        m 20260101000000 "a" "create table a (n real)";
+        m 20260102000000 "chance" "insert into a select random()";
+      ]
+  with
+  | Error `Unproved -> ()
+  | Ok _ -> Alcotest.fail "a squash that could not be proved was answered"
+  | Error e -> Alcotest.failf "refused otherwise: %s" (words e)
+
 let test_a_squash_leaves_a_library_out () =
   with_eio @@ fun env ~sw ->
   let spool =
@@ -488,6 +580,22 @@ let test_a_squash_leaves_a_library_out () =
   Alcotest.(check bool)
     "the library's table left out" false
     (contains baseline.sql "spool_jobs");
+  (* A trigger on a library's table is the library's, and goes with it. *)
+  let counted =
+    library "spool"
+      [
+        m 20260101000000 "jobs" "create table spool_jobs (n integer)";
+        m 20260101000001 "counted"
+          "create trigger spool_counted after insert on spool_jobs begin \
+           select 1; end";
+      ]
+  in
+  let baseline =
+    ok (squash env ~sw ~libraries:[ counted ] ~through:20260102000000 history)
+  in
+  Alcotest.(check bool)
+    "the library's trigger left out with it" false
+    (contains baseline.sql "spool_counted");
   let viewer =
     library "viewer" [ m 20250101000000 "view" "create view v as select 1" ]
   in
@@ -519,6 +627,10 @@ let () =
             test_two_migrators_take_turns;
           Alcotest.test_case "libraries are histories of their own" `Quick
             test_libraries_are_histories_of_their_own;
+          Alcotest.test_case "a source is still held to its order" `Quick
+            test_a_source_is_still_held_to_its_order;
+          Alcotest.test_case "libraries run before the application" `Quick
+            test_libraries_run_before_the_application;
           Alcotest.test_case "a status says each disagreement" `Quick
             test_a_status_says_each_disagreement;
           Alcotest.test_case "a database behind a baseline" `Quick
@@ -537,6 +649,8 @@ let () =
             test_a_dump_is_what_the_migrations_make;
           Alcotest.test_case "a squash stands for its history" `Quick
             test_a_squash_stands_for_its_history;
+          Alcotest.test_case "an unproved squash is refused" `Quick
+            test_an_unproved_squash_is_refused;
           Alcotest.test_case "a squash leaves a library out" `Quick
             test_a_squash_leaves_a_library_out;
         ] );

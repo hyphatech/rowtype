@@ -17,19 +17,17 @@ type t = {
     M.migration list ->
     (M.status list, string) result;
   dump :
-    lock:int option ->
     table:string ->
     libraries:M.source list ->
-    pg_dump:string ->
-    restrict_key:string ->
+    pg_dump:string option ->
+    restrict_key:string option ->
     M.migration list ->
     (string, string) result;
   squash :
-    lock:int option ->
     table:string ->
     libraries:M.source list ->
-    pg_dump:string ->
-    restrict_key:string ->
+    pg_dump:string option ->
+    restrict_key:string option ->
     through:M.version ->
     M.migration list ->
     (M.migration, string) result;

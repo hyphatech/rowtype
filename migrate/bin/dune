@@ -10,6 +10,7 @@
   cmdliner
   eio
   eio_main
+  logs
   ptime
   ptime.clock.os
   (select

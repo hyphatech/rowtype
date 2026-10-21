@@ -167,9 +167,9 @@ let lock =
     (Arg.opt (Arg.some Arg.int) None
        (Arg.info [ "lock" ] ~docv:"N"
           ~doc:
-            "The advisory lock migrating takes on Postgres, the same for every \
-             process that migrates one database; the library's own unless \
-             given."))
+            "On Postgres, the advisory lock migrating takes, the same for \
+             every process that migrates one database; the library's own \
+             unless given. A SQLite file has none, and refuses it."))
 
 let up =
   Cmd.v
@@ -210,37 +210,25 @@ let status =
       (fun v -> line "unknown  %d (from a newer checkout)\n" (number v))
       status.unknown;
     List.iter
-      (fun v -> line "edited   %d (changed since it ran)\n" (number v))
+      (fun (m : M.migration) ->
+        line "edited   %d_%s (changed since it ran)\n" (number m.version) m.name)
       status.edited;
     List.iter
-      (fun v -> line "late     %d (older than one applied)\n" (number v))
+      (fun (m : M.migration) ->
+        line "late     %d_%s (older than one applied)\n" (number m.version)
+          m.name)
       status.late;
     Option.iter
-      (fun v -> line "behind   %d (a baseline it has not reached)\n" (number v))
+      (fun (m : M.migration) ->
+        line "behind   %d_%s (a baseline it has not reached)\n"
+          (number m.version) m.name)
       status.behind
-  in
-  let refused (status : M.status) =
-    let whose =
-      if String.equal status.source M.app then ""
-      else Printf.sprintf " (%s)" status.source
-    in
-    match (status.behind, status.unknown, status.edited, status.late) with
-    | Some _, _, _, _ ->
-        Some
-          ("the database is behind the squash: migrate it with a build from \
-            before it first" ^ whose)
-    | None, _ :: _, _, _ ->
-        Some ("the database was migrated from a newer checkout" ^ whose)
-    | None, [], _ :: _, _ -> Some ("a migration was edited after it ran" ^ whose)
-    | None, [], [], _ :: _ ->
-        Some ("a migration is older than one already applied" ^ whose)
-    | None, [], [], [] -> None
   in
   let show ~check (statuses : M.status list) =
     let named = List.length statuses > 1 in
     List.iter (lines ~named) statuses;
-    match List.find_map refused statuses with
-    | Some m -> Error m
+    match List.find_map M.refusal statuses with
+    | Some e -> Error (M.error_to_string e)
     | None -> (
         match List.concat_map (fun (s : M.status) -> s.pending) statuses with
         | _ :: _ as pending when check ->
@@ -274,19 +262,20 @@ let new_ =
 
 let pg_dump =
   Arg.value
-    (Arg.opt Arg.string "pg_dump --dbname={url}"
+    (Arg.opt (Arg.some Arg.string) None
        (Arg.info [ "pg-dump" ] ~docv:"CMD"
           ~doc:
-            "The pg_dump to run, which must be the server's major version. \
-             $(b,{url}) and $(b,{database}) stand for the database it dumps."))
+            "On Postgres, the pg_dump to run, which must be the server's major \
+             version, $(b,pg_dump --dbname={url}) unless given. $(b,{url}) and \
+             $(b,{database}) stand for the database it dumps."))
 
 let restrict_key =
   Arg.value
-    (Arg.opt Arg.string "rowtype"
+    (Arg.opt (Arg.some Arg.string) None
        (Arg.info [ "restrict-key" ] ~docv:"KEY"
           ~doc:
-            "The key pg_dump's restrict lines carry, fixed so the file is the \
-             same on every run."))
+            "On Postgres, the key pg_dump's restrict lines carry, fixed so the \
+             file is the same on every run, $(b,rowtype) unless given."))
 
 let dump =
   let output =
@@ -302,13 +291,11 @@ let dump =
               "Write nothing; fail if $(b,--output) is not what the migrations \
                make."))
   in
-  let run dir target lock table output check pg_dump restrict_key sources =
+  let run dir target table output check pg_dump restrict_key sources =
     let* migrations = told (M.of_directory dir) in
     let* libraries = libraries sources in
     let* (db : Database.t) = target in
-    let* schema =
-      db.dump ~lock ~table ~libraries ~pg_dump ~restrict_key migrations
-    in
+    let* schema = db.dump ~table ~libraries ~pg_dump ~restrict_key migrations in
     if check then
       match In_channel.with_open_bin output In_channel.input_all with
       | committed when String.equal committed schema -> Ok ()
@@ -331,12 +318,12 @@ let dump =
   Cmd.v
     (Cmd.info "dump"
        ~doc:
-         "Write what the migrations add up to, dumped from a scratch database \
-          on the server $(b,--url) names.")
-    (Term.const (fun dir target lock table output check pg_dump key sources ->
-         exits (run dir target lock table output check pg_dump key sources))
-    $ dir $ target $ lock $ table $ output $ check $ pg_dump $ restrict_key
-    $ sources)
+         "Write what the migrations add up to, dumped from a scratch database: \
+          on Postgres, one made on the server $(b,--url) names and dropped \
+          after; on SQLite, one in memory, nothing written beside the file.")
+    (Term.const (fun dir target table output check pg_dump key sources ->
+         exits (run dir target table output check pg_dump key sources))
+    $ dir $ target $ table $ output $ check $ pg_dump $ restrict_key $ sources)
 
 (* The baseline is written before a file is removed, and removed only once
    the library has proved it: an interrupted squash leaves a directory
@@ -347,7 +334,7 @@ let squash =
     Arg.required
       (Arg.pos 0 (Arg.some Arg.int) None (Arg.info [] ~docv:"VERSION"))
   in
-  let run dir target lock table pg_dump restrict_key through sources =
+  let run dir target table pg_dump restrict_key through sources =
     let* through =
       Option.to_result
         ~none:
@@ -359,8 +346,7 @@ let squash =
     let* libraries = libraries sources in
     let* (db : Database.t) = target in
     let* baseline =
-      db.squash ~lock ~table ~libraries ~pg_dump ~restrict_key ~through
-        migrations
+      db.squash ~table ~libraries ~pg_dump ~restrict_key ~through migrations
     in
     let path (m : M.migration) =
       Filename.concat dir (Printf.sprintf "%d_%s.sql" (m.version :> int) m.name)
@@ -399,11 +385,12 @@ let squash =
     (Cmd.info "squash"
        ~doc:
          "Replace every migration through $(i,VERSION) with one baseline, \
-          proved on scratch databases on the server $(b,--url) names to make \
-          what they made.")
-    (Term.const (fun dir target lock table pg_dump key through sources ->
-         exits (run dir target lock table pg_dump key through sources))
-    $ dir $ target $ lock $ table $ pg_dump $ restrict_key $ through $ sources)
+          proved to make what they made on scratch databases: on Postgres, \
+          made on the server $(b,--url) names and dropped after; on SQLite, in \
+          memory.")
+    (Term.const (fun dir target table pg_dump key through sources ->
+         exits (run dir target table pg_dump key through sources))
+    $ dir $ target $ table $ pg_dump $ restrict_key $ through $ sources)
 
 let on_database name ~doc f =
   Cmd.v (Cmd.info name ~doc)
@@ -423,7 +410,12 @@ let drop =
       "Drop the database the URL names; on Postgres, one nobody is connected \
        to." (fun db -> db.drop ())
 
+(* What the libraries could not answer as a value -- a scratch database
+   left on the server -- reaches the terminal as a warning or worse, and
+   nothing quieter does. *)
 let () =
+  Logs.set_reporter (Logs.format_reporter ());
+  Logs.set_level (Some Logs.Warning);
   exit
     (Cmd.eval'
        (Cmd.group
