@@ -13,7 +13,7 @@ help: ## list targets
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
 setup: ## create the switch and install dependencies
-	@docker compose version >/dev/null 2>&1 || echo "The tests need docker compose."
+	@podman compose version >/dev/null 2>&1 || echo "The tests need podman compose."
 	@opam switch list --short | grep -qx $(SWITCH) || opam switch create $(SWITCH) --empty -y
 	opam repo add hypha https://github.com/hyphatech/opam-repository.git --switch=$(SWITCH) --rank=1
 	opam install . --switch=$(SWITCH) --deps-only --with-test --with-dev-setup -y
@@ -24,7 +24,7 @@ build: ## build everything
 # A squash dumps with the server's own pg_dump, the container's.
 test: db ## run the tests
 	ROWTYPE_TEST_PG=$(PG_TEST_URL) \
-	  ROWTYPE_TEST_PG_DUMP="docker compose -f $(CURDIR)/compose.yaml exec -T db pg_dump -U rowtype -d {database}" \
+	  ROWTYPE_TEST_PG_DUMP="podman exec rowtype-db-1 pg_dump -U rowtype -d {database}" \
 	  $(OPAM) dune test --force
 
 # Release is the profile opam installs with.
@@ -39,8 +39,8 @@ doc: ## build the API docs into _build/default/_doc/_html
 	$(OPAM) dune build @doc
 
 db: ## start the test database
-	docker compose up -d --wait db
+	podman compose up -d --wait db
 
 db-down: ## stop and delete the test database
-	docker compose rm -sf db
+	podman compose rm -sf db
 
