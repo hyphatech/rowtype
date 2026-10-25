@@ -1,0 +1,80 @@
+---
+title: Install
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+You need **opam**, OCaml's package manager, and **OCaml 5.5 or later**.
+
+## 1. Install opam
+
+<Tabs>
+<TabItem label="macOS">
+
+```sh
+brew install opam
+```
+
+</TabItem>
+<TabItem label="Linux">
+
+```sh
+bash -c "sh <(curl -fsSL https://opam.ocaml.org/install.sh)"
+```
+
+</TabItem>
+</Tabs>
+
+## 2. Set up OCaml
+
+```sh
+opam init
+eval $(opam env)
+```
+
+Answer yes when `opam init` offers to set up your shell. It installs the
+latest OCaml, which takes a few minutes. If you had opam already, check
+`ocaml -version`; older than 5.5, make a switch with the latest OCaml:
+
+```sh
+opam switch create rowtype ocaml-base-compiler
+eval $(opam env)
+```
+
+## 3. Install rowtype
+
+```sh
+opam repo add hypha https://github.com/hyphatech/opam-repository.git
+opam install rowtype rowtype-postgres rowtype-migrate   # Postgres
+opam install rowtype rowtype-sqlite rowtype-migrate     # SQLite, through its C library
+```
+
+| Package | What it is |
+|---|---|
+| `rowtype` | queries described once; links no database library |
+| `rowtype-postgres` | the Postgres backend, over [postgres-eio](https://hyphatech.github.io/postgres-eio/) |
+| `rowtype-sqlite` | the SQLite backend, over the [sqlite3](https://github.com/mmottl/sqlite3-ocaml) binding |
+| `rowtype-migrate` | the migrations and the `rowtype-migrate` command, for each dialect installed beside it |
+
+`rowtype-migrate` migrates the dialects whose backend is installed beside
+it, and links no other: its libraries are `rowtype-migrate.postgres` and
+`rowtype-migrate.sqlite`, each built where its backend is.
+
+`rowtype-sqlite` links your system's SQLite. Where it is missing, opam
+offers to install it with your system's package manager.
+
+## 4. Name the libraries
+
+A program names the libraries it uses in its `dune` file. On Postgres:
+
+```lisp
+(libraries rowtype rowtype-postgres eio_main)
+```
+
+On SQLite:
+
+```lisp
+(libraries rowtype rowtype-sqlite eio_main)
+```
+
+The [quick start](/rowtype/quick-start/) writes a whole program, next.

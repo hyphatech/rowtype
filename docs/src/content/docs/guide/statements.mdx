@@ -1,0 +1,97 @@
+---
+title: Statements
+---
+
+import { Code } from "@astrojs/starlight/components";
+import orders from "@examples/orders.ml?raw";
+import claim from "@examples/claim.ml?raw";
+import spent from "@examples/spent.ml?raw";
+import shipAll from "@examples/ship_all.ml?raw";
+import session from "@examples/session.ml?raw";
+
+A statement is its SQL, the shape of its parameters and how many rows it
+answers, in one value. It is declared once, beside the function that runs
+it, and run by a backend's `run`, whose answer is the type the statement
+says.
+
+## The SQL
+
+A statement reaches the database as written, in its own syntax. `rowtype`
+reads no SQL. A placeholder is `$1`, `$2`, ... bound by position from the
+shape's values, and `$1` twice asks about one value twice. Whether a
+statement and its values agree in number is the database's to check, and
+[`verify`'s](/rowtype/guide/checking-statements/) before any runs.
+
+## How many rows it answers
+
+| Statement | Answers |
+|---|---|
+| `S.exec ~params sql` | `unit` |
+| `S.find ~params ~row sql` | exactly one row; none or several is an error |
+| `S.find_opt ~params ~row sql` | at most one row; several is an error |
+| `S.list ~params ~row sql` | every row, in the order the database sent them |
+| `S.exec_count ~params sql` | how many rows it changed |
+
+<Code code={orders} lang="ocaml" title="orders.ml" />
+
+`S.find` is for a statement the database guarantees answers one row, an
+`insert ... returning` or an aggregate. A lookup that may find nothing is
+`S.find_opt`'s, and one that may match several rows is `S.list`'s, or a
+`limit 1` says which. `S.exec` and `S.exec_count` discard any rows the
+statement answers. A statement with no parameters takes `S.unit`.
+
+## Running one
+
+`Pg.run db statement args` runs it with its parameters and answers what it
+says it answers:
+
+<Code code={claim} lang="ocaml" title="claim.ml" />
+
+A guarded write run as `S.exec_count` is an answer rather than a write:
+`update ... where owner is null` asks "did I get it", decided by the
+database in one statement, where a read and then a write is two.
+
+A row with more columns or fewer than its shape reads is an error, as
+[`verify`](/rowtype/guide/checking-statements/) refuses it before any run.
+
+## Reading rows as they arrive
+
+`Pg.fold db statement args ~init f` reads a `list` statement's rows as they
+arrive, so a result of any size is read in the memory of one row:
+
+<Code code={spent} lang="ocaml" title="spent.ml" />
+
+Each row is decoded and handed to `f` as it arrives, as `List.fold_left`
+would fold the list, without the list being made. A row that does not
+decode is the answer, and `f` sees none after it.
+
+## One statement, many values
+
+`Pg.run_many db statement values` runs an `exec` statement once for each
+value in one round trip, all or nothing: if any run fails, none applies.
+No values sends nothing.
+
+<Code code={shipAll} lang="ocaml" title="ship_all.ml" />
+
+[Bulk writes](/rowtype/guide/bulk-writes/) has the other ways to write
+many rows.
+
+## DDL and settings
+
+`Pg.exec_raw db sql` runs statements with no parameters, several in one
+call, and discards their rows: for DDL and a session's settings.
+
+<Code code={session} lang="ocaml" title="session.ml" />
+
+A transaction is never a `begin` and a `commit` sent this way. The backend
+runs its own, in [`Pg.Transaction.within`](/rowtype/guide/transactions/),
+since only it can tell a commit from a transaction Postgres rolled back in
+silence.
+
+## The same statements on every database
+
+`rowtype` runs no statement itself. `Rowtype.Make` over a backend gives the
+functions that run statements on that database's connection, `run`, `fold`,
+`run_many` and `exec_raw`, and `Rowtype_postgres` and `Rowtype_sqlite` are
+each one. A statement names no database, so the same value runs on both,
+and one program may use two databases at once.

@@ -1,0 +1,53 @@
+---
+title: Bulk writes
+---
+
+import { Code } from "@astrojs/starlight/components";
+import addAll from "@examples/add_all.ml?raw";
+import addEach from "@examples/add_each.ml?raw";
+import load from "@examples/load.ml?raw";
+
+Three ways write many rows, each in one round trip: a list bound as an
+array, one statement run for each value, and a load through `COPY`.
+
+## A list bound as an array
+
+A list bound as an array writes many rows in one statement and one round
+trip:
+
+<Code code={addAll} lang="ocaml" title="add_all.ml" />
+
+For a few rows, this is the simplest: one statement, which
+[`verify`](/rowtype/guide/checking-statements/) checks as any other.
+
+## One statement for each value
+
+`Pg.run_many db statement values` runs an `exec` statement once for each
+value in one round trip, all or nothing: if any run fails, none applies.
+
+<Code code={addEach} lang="ocaml" title="add_each.ml" />
+
+A statement that answers a row is refused before anything is sent, since a
+batch reads no rows.
+
+## A load through COPY
+
+`Pg.copy_in` loads rows of any number with one `COPY`, each bound by its
+shape as a statement's parameters are, and read from a `Seq.t` as they are
+sent, so a load is held a row at a time:
+
+<Code code={load} lang="ocaml" title="load.ml" />
+
+It answers how many rows it wrote. `~columns` are in the row's order, every
+column in table order where empty, and quoted as given, so `"Jobs"` is not
+`jobs`; a number of them that is not the row's is refused before anything
+is sent. `?schema` names the table's schema.
+
+A row that cannot be bound, a constraint, and a raise from the sequence each
+fail the whole `COPY`, with nothing written and the connection usable; the
+raise passes. A cancelled load closes the connection and cancels the `COPY`,
+as for any statement.
+
+On SQLite, `Sq.copy_in` loads rows of any number from a `Seq.t` with one
+prepared `insert`, all or none, as `Pg.copy_in` does with `COPY`. Inside a
+transaction, the load is the transaction's, and goes with it.

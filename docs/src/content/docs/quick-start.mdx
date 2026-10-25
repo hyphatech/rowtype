@@ -1,0 +1,71 @@
+---
+title: Quick start
+---
+
+import { Code } from "@astrojs/starlight/components";
+import quickStart from "@examples/quick_start.ml?raw";
+
+A program that adds a user to Postgres and finds it again by the id
+Postgres gave it.
+
+## The table
+
+It needs a Postgres it reaches as `postgres://app@localhost/shop`, holding
+one table:
+
+```sql
+create table users (
+  id bigint generated always as identity primary key,
+  name text not null
+);
+```
+
+## The program
+
+In a directory of its own, a `dune-project`:
+
+```lisp
+(lang dune 3.18)
+```
+
+a `dune`:
+
+```lisp
+(executable
+ (name main)
+ (libraries rowtype rowtype-postgres eio_main))
+```
+
+and `main.ml`:
+
+<Code code={quickStart} lang="ocaml" title="main.ml" />
+
+```console
+$ dune exec ./main.exe
+Ada
+```
+
+## What it does
+
+`user`, `add_user` and `find_user` are declared once, before anything
+connects. `add_user` takes a `text` and answers one `int`, the id;
+`find_user` takes an `int` and answers at most one `user`, read through
+`S.map` from the row's two columns. `Pg.run` binds the values going in and
+decodes the rows coming out, so `id` is an `int` and `u` a `user`, with no
+conversion written by hand.
+
+Every failure is a value, here a `result`. `S.error_to_string` words one for
+a log, and never holds a parameter's value.
+
+## Connecting
+
+A connection is made to a `Pg.Conninfo.t`, read once from a connection
+string, a URL or a keyword list; `Pg.Conninfo.with_database` names another
+database on the same server, and `Pg.Conninfo.with_connect_timeout` bounds
+each address it tries. Connection strings are
+[postgres-eio's](https://hyphatech.github.io/postgres-eio/), the driver
+under `rowtype-postgres`.
+
+A program serving requests borrows its connections from a
+[pool](/rowtype/guide/pools/). The same statements run on
+[SQLite](/rowtype/guide/sqlite/) unchanged.

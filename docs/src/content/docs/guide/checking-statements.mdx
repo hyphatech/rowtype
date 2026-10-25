@@ -1,0 +1,56 @@
+---
+title: Checking statements
+---
+
+import { Code } from "@astrojs/starlight/components";
+import check from "@examples/check.ml?raw";
+
+`Pg.verify db statements` has Postgres describe every statement without
+running it, and compares the parameters and columns with what you declared.
+Run it in a test against a migrated database, and a renamed column fails the
+test instead of a request.
+
+<Code code={check} lang="ocaml" title="check.ml" />
+
+`S.Any` wraps a statement whatever it takes and answers, so every statement
+of a program goes in one list. Here they are the
+[statements page's](/rowtype/guide/statements/) `Orders`.
+
+## What it compares
+
+For each statement, how many parameters and, for a statement that reads
+rows, how many columns, and each one's type: an `int` an integer or an
+`oid`, a `float` a float, a `text` text, a name, a uuid or JSON, and the
+rest their own, a domain as the type it is made from. A parameter the
+database could not type is left to it. A statement it accepts is one
+`Pg.run` reads.
+
+An enum is read and written by an `S.enum` each of whose labels is one of
+the enum's. A label only the database has is no disagreement, since a
+migration adds one ahead of the code that reads it, and a row holding it is
+refused where it is read. An enum is also written from a `text`, and read as
+one through a cast, `::text`.
+
+Whether a column may be NULL is not checked: the database says so only of a
+column read as it is stored, and a query may promise more, so a check would
+refuse what is right. A NULL a shape does not allow fails where it is read,
+naming its column.
+
+## What it answers
+
+`` `Disagreements `` names every problem, in words for a person, each naming
+its statement's first line and where in it. A check that could not ask -- a
+lost connection -- is that failure, as a statement's is, and no statement is
+said to disagree. `Pg.error_to_string` tells either.
+
+## On SQLite
+
+`Sq.verify db statements` prepares every statement without running it and
+holds its parameters and columns to what you declared, a column of a table
+to its declared type: an `integer` column as one an `int`, an `int64` or a
+`bool` reads, a `real` one as a `float`'s, a `text` one as text's, an
+instant's or any other kept as text, and a `blob` one as `bytes` or a
+`uuid`. A column made by an expression, or declared with no type, holds any
+kind of value, and is checked where it is read. Its placeholders are held to
+the rule a statement runs by, so a statement it passes is not refused for
+them when it runs.

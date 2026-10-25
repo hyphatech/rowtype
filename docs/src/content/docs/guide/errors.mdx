@@ -1,0 +1,56 @@
+---
+title: Errors
+---
+
+import { Code } from "@astrojs/starlight/components";
+import signUp from "@examples/sign_up.ml?raw";
+import signUpIn from "@examples/sign_up_in.ml?raw";
+
+Every failure is a value, and each says what a caller can do about it.
+
+## A statement's failures
+
+| Error | What it means |
+|---|---|
+| `` `Conflict (Some "users_email_key") `` | a unique, exclusion or foreign-key constraint refused the write, named |
+| `` `Not_serializable `` | a transaction a concurrent one won: running it again may succeed |
+| `` `Connection `Closed `` | the connection was closed before the statement was sent, so nothing it would have done was done |
+| `` `Lost `` | the connection failed with the statement in flight -- a timeout, a broken socket, a server that ended the session -- so a write may have been applied |
+| `` `Unsent `` | a connection that could not be made, or made again -- nothing answered -- so nothing was sent and trying again is safe |
+| `` `Db `` | anything else |
+
+A NOT NULL or CHECK violation is the program's mistake, so it is `` `Db ``.
+`` `Conflict `` is named because a table with two unique columns has two
+different answers; an HTTP layer answers it 409, not 500. A lost write is
+never run again blindly, only once what it did is known or doing it twice is
+harmless. Inside a transaction, a statement lost before its `COMMIT` did
+nothing, since an open transaction ends with its connection; only a lost
+`COMMIT` may have committed.
+
+<Code code={signUp} lang="ocaml" title="sign_up.ml" />
+
+They are polymorphic variants, so they join your own errors in one result.
+A match on them ends in a catch-all, as here, since a later release may add
+one.
+
+## Words for a log
+
+`S.error_to_string` tells a statement's failure in words for a log, and
+`Pg.error_to_string` every failure the Postgres backend answers. Neither
+ever holds a parameter's value, since a code, a digest or a token is one: a
+conflict is told by its constraint's name.
+
+## Every failure in one result
+
+Every failure the backend answers is a `Pg.error` -- a statement's, a
+transaction's own, a pool's `` `Pool `Busy `` or `` `Pool `Closed ``, and
+[`verify`'s](/rowtype/guide/checking-statements/) `` `Disagreements `` --
+so a transaction in a borrowed connection is one result, and
+`Pg.error_to_string` tells all of it:
+
+<Code code={signUpIn} lang="ocaml" title="sign_up_in.ml" />
+
+A [transaction's](/rowtype/guide/transactions/) own failures are told
+apart from its work's, and a [pool's](/rowtype/guide/pools/) from a
+statement's. SQLite's are `Sq.error`, told by `Sq.error_to_string`, and
+[its own page](/rowtype/guide/sqlite/#failures) says how each arises there.

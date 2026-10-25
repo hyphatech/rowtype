@@ -1,2 +1,7 @@
 _build/
 .DS_Store
+# The documentation site's dependencies and Astro's cache, and the
+# reference copied into it.
+node_modules/
+.astro/
+docs/public/reference/

@@ -1,0 +1,136 @@
+---
+title: SQLite
+---
+
+import { Code } from "@astrojs/starlight/components";
+import users from "@examples/users.ml?raw";
+import sqlite from "@examples/sqlite.ml?raw";
+import sqliteTake from "@examples/sqlite_take.ml?raw";
+import sqliteAccounts from "@examples/sqlite_accounts.ml?raw";
+
+`rowtype-sqlite` runs the same statements on SQLite: the
+[quick start's](/rowtype/quick-start/) `add_user` and `find_user` run on it
+unchanged. Here they are in a module of their own:
+
+<Code code={users} lang="ocaml" title="users.ml" />
+
+<Code code={sqlite} lang="ocaml" title="sqlite.ml" />
+
+`Sq.connect ~sw ~mono_clock file` opens the database in `file`, making it
+where there is none. `":memory:"` is a database in memory, the connection's
+alone. A file that cannot be opened is `` `Unsent ``, and the connection is
+closed when `sw` finishes, unless `Sq.close` closed it first.
+
+## A C library
+
+Unlike every other package here, it binds C: SQLite is a library, not a
+server, so there is no protocol to speak in OCaml, and it links your
+system's SQLite through [sqlite3](https://github.com/mmottl/sqlite3-ocaml).
+SQLite's calls wait on the disk and on other connections' locks, so each
+statement runs on a system thread and the domain's other fibers go on
+meanwhile; its rows are read 64 at a time. `connect`'s `~timeout` is how
+long a statement waits for another connection's lock, 5 s unless given,
+after which it is `` `Not_serializable ``.
+
+A fiber cancelled during a statement waits for the rows being read, then
+the statement is ended and the cancellation passes. The connection is as
+usable after it as before.
+
+## Placeholders
+
+A placeholder is `$1` as on Postgres, or SQLite's `?1` or `?`, each bound
+by its number from the shape's values. One with a name, `:name`, is
+refused, since a shape's values have none, and so are placeholders that do
+not number the values from one, each at least once, before anything runs.
+One statement runs at a time: a text holding several is `Sq.exec_raw`'s.
+
+## How each column is kept
+
+SQLite keeps four kinds of value, and each column is kept as one:
+
+| Column | SQLite | Kept as |
+|---|---|---|
+| `S.int`, `S.int64` | integer | an `int` past 63 bits is refused |
+| `S.float` | real | an integer is read too where a float holds it exactly; a NaN is NULL |
+| `S.text`, `S.json`, `S.enum` | text | |
+| `S.bytes` | blob | |
+| `S.bool` | integer | `0` or `1` |
+| `S.instant` | text | UTC, `2026-10-20 09:24:46.621000`: what `datetime()` reads and writes, so it sorts as time and compares with `datetime('now')`; read with any zone the text gives |
+| `S.timestamp` | text | the same, and one with a zone is refused |
+| `S.date` | text | `2026-10-20` |
+| `S.interval` | text | `P14M3DT-0.000005S` |
+| `S.uuid` | text | `7c9e6679-7425-40de-944b-e07fc1f90ae7`; a blob of 16 bytes is read too |
+| `S.array` | text | a JSON array, which `json_each($1)` reads and `json_group_array` writes; `bytes` in it as hex |
+
+Make tables `strict`, or declare each column `integer`, `real`, `text` or
+`blob`. SQLite turns a value into its column's type where it can, and a
+column of a type it does not know -- `uuid`, `json`, `timestamp` -- turns
+text that looks like a number into one: a JSON document `123` comes back an
+integer, which `S.json` refuses. A value of another kind than its scalar's
+is refused, naming the kind and never the value.
+
+## Failures
+
+Each connection enforces foreign keys. A unique or primary key is
+`` `Conflict (Some "users.email") ``, named by its columns as SQLite names
+them, and a foreign key `` `Conflict None ``. A lock another connection still
+holds once the wait is over -- 5 s unless `connect` is given `~timeout` --
+is `` `Not_serializable ``: nothing was done, and trying again may succeed.
+
+A statement SQLite cannot prepare fails in SQLite's words, which quote only
+its text: `no such table: t`. One that fails as it runs is told by SQLite's
+code alone, since a function quotes its argument in its message; a NOT NULL
+or CHECK constraint keeps SQLite's words, which name the column or the
+constraint and no value.
+
+## Transactions
+
+<Code code={sqliteTake} lang="ocaml" title="sqlite_take.ml" />
+
+SQLite's transactions are serializable; what you choose is when one takes
+the write lock, `Deferred` (SQLite's own), `Immediate` or `Exclusive`. A
+transaction that reads and then writes begins `Immediate`, or its write can
+find another connection wrote since it read. A statement that fails inside
+one undoes itself alone, as SQLite does, and the transaction goes on. A
+`COMMIT` SQLite refuses is rolled back and said, as on Postgres:
+`` `Conflict `` for a deferred foreign key, `` `Not_serializable `` for a
+lock it could not take, and `` `Not_committed `` for anything else.
+
+`~retries` runs the whole transaction again when it meets
+`` `Not_serializable ``, and `~keep` keeps what a refusal wrote, as on
+[Postgres](/rowtype/guide/transactions/). Its `COMMIT` and each rollback
+run to their end whatever cancels the fiber, so a cancellation never leaves
+the transaction, or its lock, open.
+
+`Sq.Transaction.savepoint` and `Sq.Transaction.release` keep the work done
+between them in the transaction, and say `` `Gone `` where that work ended
+the transaction itself: for a script you did not write, run between the two.
+
+## A pool
+
+A connection is one fiber's at a time. `Sq.Pool.create ~sw ~mono_clock
+"shop.db"` opens connections to one file up front and `Sq.Pool.use` lends
+them, each given back with no transaction open; for readers alongside a
+writer, turn on WAL once, `pragma journal_mode = wal`, which the file keeps.
+
+<Code code={sqliteAccounts} lang="ocaml" title="sqlite_accounts.ml" />
+
+| Option | Default | |
+|---|---|---|
+| `~size` | 8 | connections, at least one |
+| `~wait` | 5 s | how long a borrow waits for a connection, after which it is `` `Pool `Busy `` |
+| `~timeout` | 5 s | each connection's wait for another's lock |
+
+A database in memory is refused, since each connection would have one of
+its own: a pool is of a file. A connection a borrower left in a transaction
+is rolled back before it is lent again.
+
+## Checking and loading
+
+`Sq.verify db statements` prepares every statement without running it, as
+[checking statements](/rowtype/guide/checking-statements/#on-sqlite) says.
+`Sq.copy_in` loads rows of any number from a `Seq.t` with one prepared
+`insert`, all or none, as `Pg.copy_in` does with `COPY`.
+
+Each statement is a `debug` line on the `rowtype-sqlite` log source, with
+how long it took: its first line of text, never its parameters.

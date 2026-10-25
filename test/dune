@@ -90,6 +90,17 @@
  (modules test_shape)
  (libraries rowtype ptime uuidm alcotest qcheck-core qcheck-alcotest))
 
+; Every example on a page of the documentation site.
+
+(test
+ (name test_docs)
+ (package rowtype)
+ (modules test_docs)
+ (libraries alcotest)
+ (deps
+  (glob_files ../examples/*.ml)
+  (glob_files_rec ../docs/src/content/*.{md,mdx})))
+
 ; The migration files' pieces, which need no database.
 
 (test

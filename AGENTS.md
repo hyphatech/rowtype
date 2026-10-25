@@ -3,7 +3,9 @@
 rowtype is an OCaml library of Hypha Stack. It describes a query's
 parameters and rows once, runs it through a backend -- Postgres or SQLite --
 and migrates a database of either dialect with the same files and command. This file is for anyone changing it, human or agent. Users start
-at [README.md](README.md).
+at [README.md](README.md) and the documentation site,
+[docs/](docs/src/content/docs/index.mdx), which is the document a
+user-visible change updates.
 
 ## Commands
 
@@ -12,11 +14,14 @@ make setup   # once: the switch hypha-rowtype, all dependencies
 make test    # starts the test Postgres in Podman, runs every test
 make lint    # formatting, odoc, and the release build
 make fmt     # format in place
+make docs    # the documentation site into _build/docs, as Pages publishes it
+make docs-serve  # the built site, served locally, search included
 ```
 
-`make test` needs `podman compose`. Without
+`make test` needs `podman compose`, and `make docs` Bun. Without
 `ROWTYPE_TEST_PG` the suites that need a server are skipped, and the test
-output says so; `test_sqlite` needs none, and always runs. CI runs `make lint` and `make test` on OCaml 5.5.
+output says so; `test_sqlite` needs none, and always runs. CI runs `make lint` and `make test` on OCaml 5.5, and
+`docs.yml` publishes the site to GitHub Pages on every push to `main`.
 
 ## Layout
 
@@ -40,6 +45,16 @@ migrate/             rowtype-migrate: the files, the record and its rules, over
                      rowtype-sqlite is
   bin/               the rowtype-migrate command, each dialect it was built
                      with through a dune select
+docs/                the documentation site, a Starlight site in Hypha's look,
+                     from starlight-theme-hypha: its pages in
+                     src/content/docs/, each example imported whole from
+                     examples/ as @examples/<file>.ml?raw into Starlight's
+                     <Code>, odoc's reference copied into public/reference/
+                     by make docs, and the site built into _build/docs,
+                     which dune clean removes
+examples/            the programs the site shows, each built, the SQLite ones
+                     run with the tests, and beside them each piece a page
+                     shows that is no program of its own, a plain module
 test/
   test_shape         the walk, against a backend that echoes: random shapes
                      and values must come back as themselves; no database
@@ -64,6 +79,7 @@ test/
   command.t          the command, where it needs no database or dialect;
                      command_postgres.t and command_sqlite.t each
                      dialect's, where that dialect is built
+  test_docs          every .ml file in examples/ is imported by a page
   db_target/         where a suite's database comes from: a library, so it
                      reads no variable, prints nothing and never exits
 ```

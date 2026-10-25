@@ -8,21 +8,16 @@
 
 Typed SQL queries and migrations for Postgres and SQLite, on OCaml 5.
 
-You write the SQL. You declare its parameters and rows once, and that one
-declaration binds the values going in and decodes the rows coming out. No
-ORM, no query DSL, no ppx.
+**Documentation**: [hyphatech.github.io/rowtype](https://hyphatech.github.io/rowtype/)
 
-## Why not Caqti?
+## Features
 
-Caqti is the mature choice, and the right one for MariaDB or Lwt. The
-rowtype library does less, Postgres and SQLite on Eio only, and in return
-gives you:
-
-- a driver written for Eio, [postgres-eio](https://github.com/hyphatech/postgres-eio),
-  rather than libpq bindings or a driver adapted to it;
-- every statement checked against your database, from a test, without
-  running it;
-- migrations in the box, the same files and command for every dialect.
+- **Plain SQL**: no ORM, no query DSL, no ppx.
+- **Checked against your database**: every statement described by the database from a test, without running it, so a renamed column fails a test instead of a request.
+- **Postgres and SQLite**: the same statements run on both.
+- **Migrations in the box**: plain SQL files and one command for every dialect, a library's own migrations included.
+- **Failures you can act on**: a refused write names its constraint, and a lost write is told from one never sent.
+- **Any size**: rows read in the memory of one, and loads through COPY.
 
 ## Install
 
@@ -32,15 +27,13 @@ opam install rowtype rowtype-postgres rowtype-migrate   # Postgres
 opam install rowtype rowtype-sqlite rowtype-migrate     # SQLite, through its C library
 ```
 
-`rowtype-migrate` migrates the dialects whose backend is installed beside
-it, and links no other: its libraries are `rowtype-migrate.postgres` and
-`rowtype-migrate.sqlite`, each built where its backend is.
+Add to your `dune`:
 
 ```lisp
 (libraries rowtype rowtype-postgres eio_main)
 ```
 
-## Quick start
+## Example
 
 ```ocaml
 module S = Rowtype
@@ -70,7 +63,8 @@ let () =
       match
         let* db =
           Pg.connect ~sw ~net:(Eio.Stdenv.net env)
-            ~mono_clock:(Eio.Stdenv.mono_clock env) target
+            ~mono_clock:(Eio.Stdenv.mono_clock env)
+            target
         in
         let* id = Pg.run db add_user "Ada" in
         Pg.run db find_user id
@@ -80,327 +74,7 @@ let () =
       | Error e -> prerr_endline (S.error_to_string e))
 ```
 
-A connection is made to a `Pg.Conninfo.t`, read once from a connection
-string, a URL or a keyword list; `Pg.Conninfo.with_database` names another
-database on the same server, and `Pg.Conninfo.with_connect_timeout` bounds
-each address it tries.
-
-A statement says how many rows it answers:
-
-| Statement | Answers |
-|---|---|
-| `S.exec ~params sql` | `unit` |
-| `S.find ~params ~row sql` | exactly one row; none or several is an error |
-| `S.find_opt ~params ~row sql` | at most one row; several is an error |
-| `S.list ~params ~row sql` | every row |
-| `S.exec_count ~params sql` | how many rows it changed |
-
-`Pg.fold db statement args ~init f` reads a `list` statement's rows as they
-arrive, so a result of any size is read in the memory of one row.
-
-`Pg.run_many db statement values` runs an `exec` statement once for each
-value in one round trip, all or nothing: if any run fails, none applies.
-
-| Column | Postgres | OCaml |
-|---|---|---|
-| `S.int` | `int2`, `int4`, `int8`, `oid` | `int`; an `int8` past 63 bits is refused |
-| `S.int64` | `int2`, `int4`, `int8`, `oid` | `int64`, the whole of an `int8` |
-| `S.float` | `float4`, `float8` | `float` |
-| `S.text` | `text`, `varchar`, `char`, `name`, `uuid`, `json`, `jsonb` | `string` |
-| `S.bytes` | `bytea` | `string` |
-| `S.bool` | `bool` | `bool` |
-| `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond; years 1 to 9999, and infinity is refused |
-| `S.date` | `date` | `Ptime.date`; years 1 to 9999, and infinity is refused |
-| `S.timestamp` | `timestamp` | `Ptime.t`, the instant whose reading in UTC it is; years 1 to 9999, and infinity is refused |
-| `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart; infinity is refused |
-| `S.uuid` | `uuid` | `Uuidm.t` |
-| `S.json` | `json`, `jsonb` | `string`, the document |
-| `S.enum label values` | an enum | each of `values`, written as its `label` |
-
-An enum is read and written through the labels of your own type:
-
-```ocaml
-let colour = S.enum Colour.to_string Colour.all
-```
-
-A row holding a label none of `values` has is refused, naming its column.
-`Pg.verify` holds the column to an enum that has every one of the labels, so
-a migration may add a label before the code that reads it ships.
-
-Any other type -- `numeric`, `time`, a range, `inet` -- is read through a
-cast in the SQL (`price::text`, `spans::text[]`) and `S.text`, and a read
-without one is refused, saying so. It is written from `S.text` the same way,
-cast to text and then to its type: `$1::text::numeric`, `$1::text::time`,
-`$1::text::inet`. `$1::numeric` alone makes the parameter a `numeric`, which
-`Pg.verify` refuses for a text.
-
-`S.opt` is a NULL, `S.array` a Postgres array, and `S.map` or `S.parse` read
-a column as your own type: `~parse` from the column's, and `~print` back.
-`S.parse`'s `~parse` may refuse a value, answering `Error` with a sentence
-that says what it is not, which the row's error gives after the column's
-name:
-
-```ocaml
-let sku = S.parse S.text ~parse:Sku.of_string ~print:Sku.to_string
-(* Sku.of_string : string -> (Sku.t, string) result *)
-```
-
-A list bound as an array writes many rows in one statement and one round
-trip:
-
-```ocaml
-let add_users =
-  S.exec ~params:S.(t2 (array text) (array text))
-    "insert into users (name, email) select * from unnest($1::text[], $2::text[])"
-```
-
-`Pg.copy_in` loads rows of any number with one `COPY`, each bound by its
-shape as a statement's parameters are, and read from a `Seq.t` as they are
-sent, so a load is held a row at a time:
-
-```ocaml
-Pg.copy_in db ~table:"users" ~columns:[ "name"; "email" ]
-  S.(t2 text text) (List.to_seq users)
-```
-
-## Errors and transactions
-
-Every failure is a value. `` `Conflict (Some "users_email_key") `` is a
-unique, exclusion or foreign-key constraint that refused the write, named.
-A NOT NULL or CHECK violation is the program's mistake, so it is `` `Db ``.
-`` `Not_serializable `` is a
-transaction a concurrent one won. `` `Connection `Closed `` is a connection closed
-before the statement was sent, so nothing it would have done was done, and
-`` `Lost `` one that failed with the statement in flight -- a timeout, a
-broken socket, a server that ended the session -- so a write may have been
-applied. `` `Unsent `` is a connection that could not be made, or made again
--- nothing answered -- so nothing was sent and trying again is safe. `` `Db `` is anything else. They are polymorphic variants, so they
-join your own errors in one result.
-
-```ocaml
-Pg.Transaction.within db ~isolation:Serializable ~retries:3 (fun db ->
-    let* balance = Pg.run db balance_of account in
-    if balance < amount then Error `Insufficient
-    else Pg.run db withdraw (account, amount))
-```
-
-A transaction is the backend's, since each database runs one its own
-way: `rowtype` runs none, and `Pg.Transaction.within` is the Postgres
-backend's. `Ok` commits and `Error` rolls back. A transaction that could not commit is
-`` `Not_committed ``, never a silent success, and one whose `COMMIT` was
-sent with no answer back is `` `Lost ``: it may have committed. A
-`DEFERRABLE` constraint that refuses the write at `COMMIT` is
-`` `Conflict ``, named, as it is when a statement finds it. The transaction's own failures
-are `Pg.Transaction.failure`, so a caller whose errors are an ordinary
-variant tells them from its own:
-
-```ocaml
-match
-  Pg.Transaction.within db (fun db ->
-      Result.map_error (fun e -> `Work e) (work db))
-with
-| Ok v -> Ok v
-| Error (`Work e) -> Error e
-| Error (`Conflict name) -> Error (Taken name)
-| Error (#Pg.Transaction.failure as f) -> Error (Unavailable f)
-```
-
-Every failure the backend answers is a `Pg.error` -- a statement's, a
-transaction's own, a pool's `` `Pool `Busy `` or `` `Pool `Closed `` -- so a
-transaction in a borrowed connection is one result, and `Pg.error_to_string`
-tells all of it:
-
-```ocaml
-match Result.join (Pg.Pool.use pool (fun db -> Pg.Transaction.within db work)) with
-| Ok v -> ...
-| Error e -> Logs.err (fun m -> m "%s" (Pg.error_to_string e))
-```
-
-## Checking statements
-
-`Pg.verify db statements` has Postgres describe every statement without
-running it, and compares the parameters and columns with what you declared:
-`` `Disagreements `` names every problem, and a check that could not ask --
-a lost connection -- is that failure, as a statement's is;
-`Pg.error_to_string` tells either.
-Run it in a test against a migrated database, and a renamed column fails the
-test instead of a request.
-
-## SQLite
-
-`rowtype-sqlite` runs the same statements on SQLite: the quick start's
-`add_user` and `find_user` run on it unchanged.
-
-```ocaml
-module Sq = Rowtype_sqlite
-
-let () =
-  Eio_main.run @@ fun env ->
-  Eio.Switch.run @@ fun sw ->
-  let ( let* ) = Result.bind in
-  match
-    let* db = Sq.connect ~sw ~mono_clock:(Eio.Stdenv.mono_clock env) "shop.db" in
-    let* () =
-      Sq.exec_raw db
-        "create table if not exists users (id integer primary key, name text \
-         not null) strict"
-    in
-    let* id = Sq.run db add_user "Ada" in
-    Sq.run db find_user id
-  with
-  | Ok (Some u) -> print_endline u.name
-  | Ok None -> print_endline "no such user"
-  | Error e -> prerr_endline (Sq.error_to_string e)
-```
-
-`":memory:"` is a database in memory, the connection's alone. Unlike every
-other package here, it binds C: SQLite is a library, not a server, so there
-is no protocol to speak in OCaml, and it links your system's SQLite through
-[sqlite3](https://github.com/mmottl/sqlite3-ocaml). SQLite's calls wait on
-the disk and on other connections' locks, so each statement runs on a
-system thread and the domain's other fibers go on meanwhile. `connect`'s
-`~timeout` is how long a statement waits for another connection's lock, 5 s
-unless given, after which it is `` `Not_serializable ``.
-
-A placeholder is `$1` as on Postgres, or SQLite's `?1` or `?`; one with a
-name, `:name`, is refused. SQLite keeps four kinds of value, and each column
-is kept as one:
-
-| Column | SQLite | Kept as |
-|---|---|---|
-| `S.int`, `S.int64` | integer | an `int` past 63 bits is refused |
-| `S.float` | real | an integer is read too where a float holds it exactly; a NaN is NULL |
-| `S.text`, `S.json`, `S.enum` | text | |
-| `S.bytes` | blob | |
-| `S.bool` | integer | `0` or `1` |
-| `S.instant` | text | UTC, `2026-10-20 09:24:46.621000`: what `datetime()` reads and writes, so it sorts as time and compares with `datetime('now')`; read with any zone the text gives |
-| `S.timestamp` | text | the same, and one with a zone is refused |
-| `S.date` | text | `2026-10-20` |
-| `S.interval` | text | `P14M3DT-0.000005S` |
-| `S.uuid` | text | `7c9e6679-7425-40de-944b-e07fc1f90ae7`; a blob of 16 bytes is read too |
-| `S.array` | text | a JSON array, which `json_each($1)` reads and `json_group_array` writes; `bytes` in it as hex |
-
-Make tables `strict`, or declare each column `integer`, `real`, `text` or
-`blob`. SQLite turns a value into its column's type where it can, and a
-column of a type it does not know -- `uuid`, `json`, `timestamp` -- turns
-text that looks like a number into one: a JSON document `123` comes back an
-integer, which `S.json` refuses.
-
-Each connection enforces foreign keys. A unique or primary key is
-`` `Conflict (Some "users.email") ``, named by its columns as SQLite names
-them, and a foreign key `` `Conflict None ``. A lock another connection still
-holds once the wait is over -- 5 s unless `connect` is given `~wait` -- is
-`` `Not_serializable ``: nothing was done, and trying again may succeed.
-
-```ocaml
-Sq.Transaction.within db ~behaviour:Immediate ~retries:3 (fun db ->
-    let* balance = Sq.run db balance_of account in
-    if balance < amount then Error `Insufficient
-    else Sq.run db withdraw (account, amount))
-```
-
-SQLite's transactions are serializable; what you choose is when one takes
-the write lock, `Deferred` (SQLite's own), `Immediate` or `Exclusive`. A
-transaction that reads and then writes begins `Immediate`, or its write can
-find another connection wrote since it read. A statement that fails inside
-one undoes itself alone, as SQLite does, and the transaction goes on. A
-`COMMIT` SQLite refuses is rolled back and said, as on Postgres.
-
-A connection is one fiber's at a time. `Sq.Pool.create ~sw ~mono_clock
-"shop.db"` opens connections to one file up front and `Sq.Pool.use` lends
-them, each given back with no transaction open; for readers alongside a
-writer, turn on WAL once, `pragma journal_mode = wal`, which the file keeps.
-`Sq.verify db statements` prepares every statement without running it and
-holds its parameters and columns to what you declared, a column of a table
-to its declared type. `Sq.copy_in` loads rows of any number from a `Seq.t`
-with one prepared `insert`, all or none, as `Pg.copy_in` does with `COPY`.
-
-## Migrations
-
-Plain SQL files named `<UTC stamp>_<name>.sql`, forward only, applied by a
-command of their own before your application starts:
-
-```sh
-rowtype-migrate create             # make the database
-rowtype-migrate new add_users      # migrations/<UTC stamp>_add_users.sql
-rowtype-migrate up                 # apply what is pending
-rowtype-migrate status [--check]   # applied and pending
-rowtype-migrate dump [--check]     # the schema they make, as db/schema.sql
-rowtype-migrate squash VERSION     # every migration through it, as one baseline
-rowtype-migrate drop               # drop the database, if nobody is connected
-```
-
-`up` applies each file in its own transaction and records a digest of it,
-so two processes migrating at once take turns: Postgres's run holds an
-advisory lock, `--lock N` naming another, and each of SQLite's transactions
-takes the write lock as it begins and asks the record first. A flag only
-Postgres reads -- `--lock`, `--pg-dump`, `--restrict-key` -- is refused for
-a `sqlite:` URL, never ignored. A migration edited after it ran, or merged out of
-order, is refused, and so is a file that ends its transaction itself with a
-`commit` or a `rollback`. A statement a database refuses inside a
-transaction -- Postgres's `create index concurrently` or `vacuum`, SQLite's
-`vacuum` or the `pragma foreign_keys = off` its table rebuild needs -- goes
-in a file of its own whose first line is
-
-```sql
--- rowtype-migrate: no transaction
-```
-
-Such a file is one statement, and is recorded after it succeeds, so a run
-cut off between the two runs it again: write it to run twice
-(`create index concurrently if not exists`).
-
-`squash` proves the baseline makes the same schema as the history before it
-changes a file. The database is `--url`, or `DATABASE_URL`: a Postgres URL
-or keyword list, or `sqlite:PATH`, a file SQLite keeps. A SQLite dump and
-squash need no server and no `pg_dump`: each is migrated in memory and
-written from SQLite's own schema.
-
-A test migrates its database through the library, which the command is
-built on. `run` takes Eio's environment and a target, and closes what it
-opened; `create`, `drop`, `dump` and `squash` take the capabilities they
-use -- a switch, the network and the clock, and for a dump the process
-manager -- so a test hands them nothing more:
-
-```ocaml
-let migrate env target =
-  let ( let* ) = Result.bind in
-  let* migrations = Rowtype_migrate.of_directory "migrations" in
-  Rowtype_migrate_postgres.run env target @@ fun db ->
-  Rowtype_migrate_postgres.apply db migrations
-```
-
-On SQLite it is `Rowtype_migrate_sqlite`, with a file where Postgres has a
-target: `Rowtype_migrate_sqlite.run env "app.db" @@ fun db -> ...`. A
-command built without a dialect says what to install for its URL.
-### A library's migrations
-
-A library that owns a table ships the migrations that make it, in its own
-`migrations/`, installed with its package. Name it with `--source` and its
-migrations run first, as a history of their own:
-
-```sh
-rowtype-migrate up --source spool            # the library's, then yours
-rowtype-migrate up --source spool=vendor/sql  # a library's folder, named
-```
-
-Each source is ordered and checked only among its own, so upgrading a
-library whose migration is older than your last one applies it rather
-than refusing it as late. The record says whose each migration is: yours
-are `app`. `status`, `dump` and `squash` take `--source` too, and `squash`
-leaves a library's tables out of your baseline, since its own migrations
-make them.
-
-## Packages
-
-| Package | What it is |
-|---|---|
-| `rowtype` | queries described once; links no database library |
-| `rowtype-postgres` | the Postgres backend, over [postgres-eio](https://github.com/hyphatech/postgres-eio) |
-| `rowtype-sqlite` | the SQLite backend, over the [sqlite3](https://github.com/mmottl/sqlite3-ocaml) binding |
-| `rowtype-migrate` | the migrations and the `rowtype-migrate` command, for each dialect installed beside it |
-
-Each module's `.mli` is its reference.
+The same statements run on SQLite unchanged: [SQLite](https://hyphatech.github.io/rowtype/guide/sqlite/).
 
 ## Contributing
 

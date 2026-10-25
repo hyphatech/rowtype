@@ -1,0 +1,112 @@
+---
+title: Columns and types
+---
+
+import { Code } from "@astrojs/starlight/components";
+import user from "@examples/user.ml?raw";
+import sku from "@examples/sku.ml?raw";
+import colour from "@examples/colour.ml?raw";
+import products from "@examples/products.ml?raw";
+import tagged from "@examples/tagged.ml?raw";
+import prices from "@examples/prices.ml?raw";
+
+One shape describes a statement's parameters or its rows, and drives both
+directions: binding the values going in and decoding the rows coming out.
+A shape is built from the scalars below and the tuples over them.
+
+## The scalars
+
+| Column | Postgres | OCaml |
+|---|---|---|
+| `S.int` | `int2`, `int4`, `int8`, `oid` | `int`; an `int8` past 63 bits is refused |
+| `S.int64` | `int2`, `int4`, `int8`, `oid` | `int64`, the whole of an `int8` |
+| `S.float` | `float4`, `float8` | `float` |
+| `S.text` | `text`, `varchar`, `char`, `name`, `uuid`, `json`, `jsonb` | `string` |
+| `S.bytes` | `bytea` | `string` |
+| `S.bool` | `bool` | `bool` |
+| `S.instant` | `timestamptz` | `Ptime.t`, kept to the microsecond; years 1 to 9999, and infinity is refused |
+| `S.date` | `date` | `Ptime.date`; years 1 to 9999, and infinity is refused |
+| `S.timestamp` | `timestamp` | `Ptime.t`, the instant whose reading in UTC it is; years 1 to 9999, and infinity is refused |
+| `S.interval` | `interval` | `S.interval`: months, days and microseconds, each apart; infinity is refused |
+| `S.uuid` | `uuid` | `Uuidm.t` |
+| `S.json` | `json`, `jsonb` | `string`, the document |
+| `S.enum label values` | an enum | each of `values`, written as its `label` |
+
+Every scalar refuses a NULL; a column that may hold one is `S.opt`. An
+instant is sent as ISO 8601 in UTC and read back whatever the session's
+time zone. A value its scalar cannot hold is refused as what it is, saying
+what reads it instead. SQLite keeps each scalar its own way, in
+[its own table](/rowtype/guide/sqlite/#how-each-column-is-kept).
+
+An interval is months, days and microseconds apart, each signed on its own,
+since a month is no fixed number of days and a day, across a change of
+clocks, no fixed number of hours. A JSON document is its text; parsing it
+is yours.
+
+## Tuples
+
+`S.t2` to `S.t11` combine shapes into a row or a list of parameters. They
+are flat, so a call site never sees the nesting: `S.t3 S.int S.text S.bool`
+is an `int * string * bool`.
+
+## Your own types
+
+`S.map` or `S.parse` read a column as your own type: `~parse` from the
+column's, and `~print` back.
+
+<Code code={user} lang="ocaml" title="user.ml" />
+
+`S.parse`'s `~parse` may refuse a value, answering `Error` with a sentence
+that says what it is not, which the row's error gives after the column's
+name:
+
+<Code code={sku} lang="ocaml" title="sku.ml" />
+
+The sentence never holds the value, since a failure reaches a log.
+
+## Enums
+
+An enum is read and written through the labels of your own type:
+
+<Code code={colour} lang="ocaml" title="colour.ml" />
+
+A row holding a label none of `values` has is refused, naming its column.
+`Pg.verify` holds the column to an enum that has every one of the labels, so
+a migration may add a label before the code that reads it ships. It refuses
+an enum whose list is empty or gives two values one label.
+
+Shapes of your own types combine as any others:
+
+<Code code={products} lang="ocaml" title="products.ml" />
+
+## NULL
+
+`S.opt` is a NULL. `None` binds NULL in every column the shape spans, and
+decodes from a row where every one of them is NULL. A value that is itself
+NULL in every column -- `Some None` of `S.opt (S.opt S.int)` -- reads back
+as `None`, since a row cannot tell the two apart.
+
+## Arrays
+
+`S.array` is a Postgres array, a column holding a list, each value of the
+element's shape: `S.array S.int` for a `smallint[]`, `S.array (S.opt
+S.float)` for a `real[]` that holds NULLs, `S.array sku` for values read
+through their own `S.parse`.
+
+<Code code={tagged} lang="ocaml" title="tagged.ml" />
+
+An element is one column and no array of its own: one dimension, as a list
+has. A list has no first index, so an array is read in order from wherever
+the database starts it. A list bound as an array also writes many rows in
+one statement: see [bulk writes](/rowtype/guide/bulk-writes/).
+
+## Any other type
+
+Any other type -- `numeric`, `time`, a range, `inet` -- is read through a
+cast in the SQL (`price::text`, `spans::text[]`) and `S.text`, and a read
+without one is refused, saying so. It is written from `S.text` the same way,
+cast to text and then to its type: `$1::text::numeric`, `$1::text::time`,
+`$1::text::inet`. `$1::numeric` alone makes the parameter a `numeric`, which
+`Pg.verify` refuses for a text.
+
+<Code code={prices} lang="ocaml" title="prices.ml" />

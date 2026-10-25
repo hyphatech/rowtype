@@ -1,0 +1,56 @@
+---
+title: rowtype
+description: Typed SQL queries and migrations for Postgres and SQLite, on OCaml 5.
+template: splash
+---
+
+import { Code } from "@astrojs/starlight/components";
+import users from "@examples/users.ml?raw";
+import Landing from "starlight-theme-hypha/components/Landing.astro";
+import Features from "starlight-theme-hypha/components/Features.astro";
+import Feature from "starlight-theme-hypha/components/Feature.astro";
+
+<Landing
+  title="Typed SQL queries and migrations for Postgres and SQLite, on OCaml 5."
+  tagline="You write the SQL. You declare its parameters and rows once, and that one declaration binds the values going in and decodes the rows coming out."
+  actions={[
+    { text: "Get started", link: "/rowtype/install/", icon: "right-arrow" },
+    { text: "Reference", link: "/rowtype/reference/", variant: "secondary" },
+  ]}
+>
+
+```sh
+opam repo add hypha https://github.com/hyphatech/opam-repository.git
+opam install rowtype rowtype-postgres rowtype-migrate
+```
+
+<Fragment slot="aside">
+
+<Code code={users} lang="ocaml" />
+
+</Fragment>
+</Landing>
+
+<Features>
+  <Feature title="Plain SQL" icon="code-xml" href="/rowtype/guide/statements/" linkText="Statements">
+    No ORM, no query DSL, no ppx.
+  </Feature>
+  <Feature title="Checked against your database" icon="shield-check" href="/rowtype/guide/checking-statements/" linkText="Checking statements">
+    Every statement described by the database from a test, without running
+    it, so a renamed column fails a test instead of a request.
+  </Feature>
+  <Feature title="Postgres and SQLite" icon="layers" href="/rowtype/guide/sqlite/" linkText="SQLite">
+    The same statements run on both.
+  </Feature>
+  <Feature title="Migrations in the box" icon="scroll-text" href="/rowtype/guide/migrations/" linkText="Migrations">
+    Plain SQL files and one command for every dialect, a library's own
+    migrations included.
+  </Feature>
+  <Feature title="Failures you can act on" icon="list-checks" href="/rowtype/guide/errors/" linkText="Errors">
+    A refused write names its constraint, and a lost write is told from one
+    never sent.
+  </Feature>
+  <Feature title="Any size" icon="zap" href="/rowtype/guide/bulk-writes/" linkText="Bulk writes">
+    Rows read in the memory of one, and loads through COPY.
+  </Feature>
+</Features>

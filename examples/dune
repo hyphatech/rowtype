@@ -1,0 +1,45 @@
+; The programs the documentation site shows, and beside them every piece a
+; page shows that is no program of its own, each a whole file a page
+; imports. Only a program's main module has an empty interface, so a piece
+; needs no main to use what it defines. They are built with the repository,
+; so an example that stops compiling as the library changes is found by the
+; build and not by a reader.
+
+(executables
+ (names quick_start pool listener)
+ (modules :standard \ sqlite sqlite_accounts users sqlite_take)
+ (libraries
+  rowtype
+  rowtype-postgres
+  rowtype-migrate
+  rowtype-migrate.postgres
+  rowtype-migrate.sqlite
+  eio
+  eio_main
+  logs))
+
+; SQLite needs no server, so its programs run with the tests, on files of
+; their own in the build directory.
+
+(executables
+ (names sqlite sqlite_accounts)
+ (modules sqlite sqlite_accounts users sqlite_take)
+ (libraries rowtype rowtype-sqlite eio eio_main))
+
+(rule
+ (alias runtest)
+ (package rowtype-sqlite)
+ (action
+  (progn
+   (run %{exe:sqlite.exe})
+   (run %{exe:sqlite_accounts.exe}))))
+
+; @all builds only the modules a program links, and most pieces are linked
+; by none, so @all asks for this directory's @check, which compiles every
+; module.
+
+(rule
+ (alias all)
+ (deps
+  (alias check))
+ (action (progn)))

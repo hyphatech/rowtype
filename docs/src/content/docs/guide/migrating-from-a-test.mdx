@@ -1,0 +1,51 @@
+---
+title: Migrating from a test
+---
+
+import { Code } from "@astrojs/starlight/components";
+import migratePostgres from "@examples/migrate_postgres.ml?raw";
+import migrateSqlite from "@examples/migrate_sqlite.ml?raw";
+import testDatabase from "@examples/test_database.ml?raw";
+
+A test migrates its database through the library, which the
+[command](/rowtype/guide/migrations/) is built on. `run` takes Eio's
+environment and a target, and closes what it opened; `create`, `drop`,
+`dump` and `squash` take the capabilities they use -- a switch, the network
+and the clock, and for a dump the process manager -- so a test hands them
+nothing more:
+
+<Code code={migratePostgres} lang="ocaml" title="migrate_postgres.ml" />
+
+On SQLite it is `Rowtype_migrate_sqlite`, with a file where Postgres has a
+target:
+
+<Code code={migrateSqlite} lang="ocaml" title="migrate_sqlite.ml" />
+
+`Rowtype_migrate.of_directory` reads every `.sql` file in a directory, in
+version order, and refuses a file it cannot read as a migration, naming it.
+`apply` applies every migration the database has not recorded, as the
+command's `up` does, and `status` says what it would do, without doing it.
+
+## A database of the test's own
+
+`create` makes the database a target names, and `drop` drops it, refused
+while anybody is connected to it:
+
+<Code code={testDatabase} lang="ocaml" title="test_database.ml" />
+
+`Pg.Conninfo.with_database` names another database on the same server. On
+SQLite, `Rowtype_migrate_sqlite.create` makes an empty file, and `drop`
+removes it with the files SQLite keeps beside it.
+
+## An application never migrates itself
+
+A migration is applied by the command, never by an application at start: a
+dialect's `apply` is for a test and a tool. Every instance of an
+application would race to migrate, its role would have to own the schema,
+and no migration could run ahead of the code that needs it.
+
+A database the server does not have, or a SQLite file that is not there, is
+`` `No_database ``, and `Rowtype_migrate.error_to_string` words every
+failure for a person, naming the migration and what to do next. Once
+migrated, the database is the one to [check statements
+against](/rowtype/guide/checking-statements/).
