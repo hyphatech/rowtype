@@ -23,7 +23,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "rowtype",
-      description: "Typed SQL queries and migrations for Postgres and SQLite, on OCaml 5.",
+      description: "SQL queries and migrations for modern OCaml.",
       logo: { src: "starlight-theme-hypha/assets/hypha.webp" },
       favicon: "/favicon-32.png",
       head: [
