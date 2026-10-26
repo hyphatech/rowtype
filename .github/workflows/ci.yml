@@ -24,6 +24,9 @@ jobs:
       - run: opam install . --deps-only --with-test --with-dev-setup -y
       # Use setup-ocaml's switch instead of the Makefile's.
       - run: make lint OPAM="opam exec --"
+      # Compose reaches Podman through its user socket, which the runner
+      # does not start.
+      - run: systemctl --user start podman.socket
       - run: make test OPAM="opam exec --"
 
   # The oldest versions the opam file allows, as opam-repository checks.
@@ -43,4 +46,7 @@ jobs:
       - run: opam install . --deps-only --with-test -y
       - run: opam list --installed --columns=name,version
       - run: make build OPAM="opam exec --"
+      # Compose reaches Podman through its user socket, which the runner
+      # does not start.
+      - run: systemctl --user start podman.socket
       - run: make test OPAM="opam exec --"
