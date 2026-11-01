@@ -2,11 +2,14 @@
 
 ## 0.9.1 (2026-11-01)
 
-- `rowtype-test`, a Postgres database a test run owns, as Testcontainers
-  gives one in other languages: `Rowtype_test.server` is the server a URL
-  names, or one it starts in Podman and removes when its switch ends, a
-  container a killed run left removed by the next; `Rowtype_test.database`
-  is a database of a case's own in it, dropped after.
+- `rowtype-test`, Postgres for a test run as a pytest session fixture
+  gives it: `rowtype-test run -- COMMAND` starts one server in Podman,
+  hands it to every suite the command runs as `TEST_DATABASE_URL`, and
+  removes it when the command ends, whatever its result.
+  `Rowtype_test.template` runs a suite's migrations once into a template,
+  and `Rowtype_test.database` gives each case a copy of it, dropped after.
+  A suite run alone starts and removes a server of its own, and a
+  container a killed run left is removed by the next.
 
 ## 0.9.0 (2026-10-21)
 

@@ -22,10 +22,12 @@ setup: ## create the switch and install dependencies
 build: ## build everything
 	$(OPAM) dune build @all
 
-# Each suite on Postgres starts a server of its own in Podman and removes
-# it as it ends, unless TEST_DATABASE_URL names one.
+# One Postgres for the whole run, in Podman, removed as the run ends
+# whatever its result: rowtype-test hands it to every suite as
+# TEST_DATABASE_URL, and each makes its databases in it.
 test: ## run the tests
-	$(OPAM) dune test --force
+	$(OPAM) dune build testing/bin/main.exe
+	$(OPAM) ./_build/default/testing/bin/main.exe run -- $(OPAM) dune test --force
 
 # Release is the profile opam installs with.
 lint: ## check formatting, docs and the release build

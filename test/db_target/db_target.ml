@@ -13,12 +13,22 @@ let variable = "TEST_DATABASE_URL"
    functions of nothing, so the one [Eio_main.run] a suite starts in hands
    them over once, with [start]. *)
 let loop :
-    (Eio_unix.Stdenv.base * Eio.Switch.t * Rowtype_test.server) option ref =
+    (Eio_unix.Stdenv.base
+    * Eio.Switch.t
+    * Rowtype_test.server
+    * Rowtype_test.template)
+    option
+    ref =
   ref None
 
+(* The suite's template is empty: each case makes its own tables. *)
 let start env ~sw ?url () =
-  match Rowtype_test.server ~sw ?url env with
-  | Ok server -> loop := Some ((env :> Eio_unix.Stdenv.base), sw, server)
+  match
+    Result.bind (Rowtype_test.server ~sw ?url env) (fun server ->
+        Result.map (fun t -> (server, t)) (Rowtype_test.template server))
+  with
+  | Ok (server, template) ->
+      loop := Some ((env :> Eio_unix.Stdenv.base), sw, server, template)
   | Error e ->
       prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
       exit 1
@@ -29,22 +39,22 @@ let io () =
   | None -> Alcotest.fail "the suite did not call Db_target.start"
 
 let sw () =
-  let _, sw, _ = io () in
+  let _, sw, _, _ = io () in
   sw
 
 let env () =
-  let env, _, _ = io () in
+  let env, _, _, _ = io () in
   env
 
 let net () = Eio.Stdenv.net (env ())
 let mono () = Eio.Stdenv.mono_clock (env ())
 
 let server () =
-  let _, _, server = io () in
+  let _, _, server, _ = io () in
   Rowtype_postgres.Conninfo.to_url (Rowtype_test.conninfo server)
 
 let pg_dump () =
-  let _, _, server = io () in
+  let _, _, server, _ = io () in
   Option.map
     (fun name ->
       Printf.sprintf "podman exec %s pg_dump -U test -d {database}" name)
@@ -81,8 +91,8 @@ let exec db sql =
 (* A database of its own per asking, so one case cannot see another's rows
    and a failure leaves nothing behind for the next run to trip over. *)
 let with_postgres f =
-  let _, _, server = io () in
-  match Rowtype_test.database server f with
+  let _, _, _, template = io () in
+  match Rowtype_test.database template f with
   | Ok v -> v
   | Error e ->
       Alcotest.failf "a database of its own: %s" (Rowtype.error_to_string e)

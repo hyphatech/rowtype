@@ -1,0 +1,7 @@
+; rowtype-test run -- COMMAND: one Postgres for a whole test run.
+
+(executable
+ (name main)
+ (public_name rowtype-test)
+ (package rowtype-test)
+ (libraries rowtype-postgres rowtype-test eio eio_main unix))

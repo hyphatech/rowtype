@@ -18,9 +18,10 @@ make docs    # the documentation site into _build/docs, as Pages publishes it
 make docs-serve  # the built site, served locally, search included
 ```
 
-`make test` needs Podman, and `make docs` Bun. Each suite on Postgres
-starts a server of its own through `rowtype-test` and removes it as it
-ends, unless `TEST_DATABASE_URL` names one; `test_sqlite` needs none. CI runs `make lint` and `make test` on OCaml 5.5, and
+`make test` needs Podman, and `make docs` Bun. It runs every suite under
+`rowtype-test run`, one Postgres for the whole run, removed at its end;
+each suite on Postgres makes a template and a copy per case in it, and
+`test_sqlite` needs none. CI runs `make lint` and `make test` on OCaml 5.5, and
 `docs.yml` publishes the site to GitHub Pages on every push to `main`.
 
 ## Layout
@@ -45,9 +46,11 @@ migrate/             rowtype-migrate: the files, the record and its rules, over
                      rowtype-sqlite is
   bin/               the rowtype-migrate command, each dialect it was built
                      with through a dune select
-testing/             rowtype-test: a Postgres database a test run owns, in a
-                     server it is handed or one it starts in Podman and
-                     removes, a killed run's container removed by the next
+testing/             rowtype-test: one Postgres a test run owns, a template
+                     a suite and a copy a case, a killed run's container
+                     removed by the next
+  bin/               the rowtype-test command: run -- COMMAND under one
+                     server
 docs/                the documentation site, a Starlight site in Hypha's look,
                      from starlight-theme-hypha: its pages in
                      src/content/docs/, each example imported whole from

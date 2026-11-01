@@ -46,8 +46,9 @@ let test_a_run_owns_its_server () =
       | None -> Alcotest.fail "no container was started"
     in
     Alcotest.(check bool) "its container runs" true (exists env name);
+    let template = ok (T.template server) in
     fine
-      (T.database server (fun conninfo ->
+      (T.database template (fun conninfo ->
            exec ~sw env conninfo
              "create table t (n int); insert into t values (1)"));
     name
@@ -59,9 +60,10 @@ let test_a_case_s_database_is_dropped () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let server = ok (T.server ~sw env) in
+  let template = ok (T.template server) in
   let named = ref "" in
   (match
-     T.database server (fun conninfo ->
+     T.database template (fun conninfo ->
          named := Pg.Conninfo.to_url conninfo;
          failwith "a case that raises")
    with
@@ -99,7 +101,61 @@ let test_a_handed_server_starts_nothing () =
   Alcotest.(check bool)
     "no container started" true
     (before = podman env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ]);
-  fine (T.database handed (fun conninfo -> exec ~sw env conninfo "select 1"))
+  let template = ok (T.template handed) in
+  fine (T.database template (fun conninfo -> exec ~sw env conninfo "select 1"))
+
+let count ~sw env conninfo sql =
+  let db =
+    fine
+      (Pg.connect ~sw ~net:(Eio.Stdenv.net env)
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         conninfo)
+  in
+  Fun.protect
+    ~finally:(fun () -> Pg.close db)
+    (fun () ->
+      fine
+        (Pg.run db (Rowtype.find ~params:Rowtype.unit ~row:Rowtype.int sql) ()))
+
+(* What a suite's setup made once -- tables, and rows its migrations seed --
+   is in every case's copy, and a case's own rows in no other's. *)
+let test_a_copy_is_the_setup_s () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  let template =
+    ok
+      (T.template server ~setup:(fun conninfo ->
+           exec ~sw env conninfo
+             "create table plan (name text); insert into plan values ('free')";
+           Ok ()))
+  in
+  let rows () =
+    fine
+      (T.database template (fun conninfo ->
+           let seeded =
+             count ~sw env conninfo "select count(*)::int from plan"
+           in
+           exec ~sw env conninfo "insert into plan values ('mine')";
+           seeded))
+  in
+  Alcotest.(check int) "the seeded row, in the first copy" 1 (rows ());
+  Alcotest.(check int) "and only it in the next" 1 (rows ())
+
+(* A template goes with the run: on a server handed, nothing of it stays. *)
+let test_a_template_goes_with_the_run () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  let url = Pg.Conninfo.to_url (T.conninfo server) in
+  Eio.Switch.run (fun inner ->
+      let handed = ok (T.server ~sw:inner ~url env) in
+      ignore (ok (T.template handed) : T.template));
+  Alcotest.(check int)
+    "no template left" 0
+    (count ~sw env (T.conninfo server)
+       "select count(*)::int from pg_database where datname like \
+        'rowtype_template_%'")
 
 (* A process that has ended, by its id: a run killed while its container
    ran. *)
@@ -142,6 +198,10 @@ let () =
             test_a_case_s_database_is_dropped;
           Alcotest.test_case "a handed server starts nothing" `Slow
             test_a_handed_server_starts_nothing;
+          Alcotest.test_case "a copy is the setup's" `Slow
+            test_a_copy_is_the_setup_s;
+          Alcotest.test_case "a template goes with the run" `Slow
+            test_a_template_goes_with_the_run;
           Alcotest.test_case "a killed run's container is removed" `Slow
             test_a_killed_run_s_container_is_removed;
         ] );

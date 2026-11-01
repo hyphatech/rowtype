@@ -29,9 +29,12 @@ type error =
     (** Podman could not start, read or remove the container, in its words *)
   | `Not_ready of string
     (** Postgres did not answer within a minute, saying the last failure *)
-  | `Unreadable of string  (** the [url] handed is no connection string *) ]
+  | `Unreadable of string  (** the [url] handed is no connection string *)
+  | `Setup of string  (** a template's setup failed, in its words *) ]
 
-val error_to_string : [< error ] -> string
+val error_to_string : [< error | Rowtype.error ] -> string
+(** In words for a log; a database's failure as {!Rowtype.error_to_string} words
+    it. *)
 
 val server :
   sw:Eio.Switch.t ->
@@ -55,10 +58,26 @@ val container : server -> string option
     [pg_dump] say, as its owner, the user [test]. [None] for a server handed by
     [url]. *)
 
-val database :
+type template
+(** A database a suite's setup made once -- its migrations run, say -- that each
+    case is handed a copy of. *)
+
+val template :
+  ?setup:(Rowtype_postgres.Conninfo.t -> (unit, string) result) ->
   server ->
+  (template, [> error | Rowtype.error ]) result
+(** [template server ~setup] makes a database in the server, runs [setup] in it
+    once, ends every connection to it -- one [setup] left open included -- and
+    marks it a template no one may connect to: what every {!database} made from
+    it is a copy of, rows the setup wrote included. With no [setup], an empty
+    database. It is dropped when the server's switch ends. Making it needs a
+    user allowed to create databases, which the container's owner is. *)
+
+val database :
+  template ->
   (Rowtype_postgres.Conninfo.t -> 'a) ->
   ('a, [> Rowtype.error ]) result
-(** [database server f] is [f] over a database of its own, made for it in the
-    server and dropped after, even where [f] raises, and dropped with [(force)],
-    so a connection [f] left open does not keep it. *)
+(** [database template f] is [f] over a copy of [template] of its own --
+    [CREATE DATABASE ... TEMPLATE], tens of milliseconds -- dropped after, even
+    where [f] raises, and dropped with [(force)], so a connection [f] left open
+    does not keep it. *)

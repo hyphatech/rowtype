@@ -1,17 +1,23 @@
 module Pg = Rowtype_postgres
 
 type error =
-  [ `Runtime of string | `Not_ready of string | `Unreadable of string ]
+  [ `Runtime of string
+  | `Not_ready of string
+  | `Unreadable of string
+  | `Setup of string ]
 
 let error_to_string = function
   | `Runtime why -> "Podman: " ^ why
   | `Not_ready why -> "Postgres did not answer: " ^ why
   | `Unreadable why -> "not a connection string: " ^ why
+  | `Setup why -> "a template's setup failed: " ^ why
+  | #Rowtype.error as e -> Rowtype.error_to_string e
 
 type server = {
   conninfo : Pg.Conninfo.t;
   container : string option;
-  connect : Pg.Conninfo.t -> (Pg.conn, Rowtype.error) result;
+  connect : sw:Eio.Switch.t -> Pg.Conninfo.t -> (Pg.conn, Rowtype.error) result;
+  sw : Eio.Switch.t;
 }
 
 let conninfo s = s.conninfo
@@ -87,10 +93,10 @@ let port_of listing =
   | [] -> None
 
 let rec until_ready ~clock ~deadline connect conninfo =
-  match connect conninfo with
-  | Ok db ->
-      Pg.close db;
-      Ok ()
+  match
+    Eio.Switch.run (fun sw -> Result.map Pg.close (connect ~sw conninfo))
+  with
+  | Ok () -> Ok ()
   | Error e ->
       if Mtime.is_later (Eio.Time.Mono.now clock) ~than:deadline then
         Error (`Not_ready (Rowtype.error_to_string e))
@@ -136,9 +142,13 @@ let started ~sw ~image ~clock mgr connect =
       ]
   in
   (* Removed as the run's switch ends, however it ends. *)
+  (* Protected, since a switch that failed is cancelled as it ends, when
+     this matters most. *)
   Eio.Switch.on_release sw (fun () ->
-      ignore
-        (podman mgr [ "rm"; "-f"; "-v"; name ] : (string, [> error ]) result));
+      Eio.Cancel.protect (fun () ->
+          ignore
+            (podman mgr [ "rm"; "-f"; "-v"; name ]
+              : (string, [> error ]) result)));
   let* listing = podman mgr [ "port"; name; "5432" ] in
   let* port =
     Option.to_result
@@ -156,46 +166,93 @@ let started ~sw ~image ~clock mgr connect =
       (Mtime.add_span (Eio.Time.Mono.now clock) ready_within)
   in
   let* () = until_ready ~clock ~deadline connect conninfo in
-  Ok { conninfo; container = Some name; connect }
+  Ok { conninfo; container = Some name; connect; sw }
 
 let server ~sw ?url ?(image = default_image) env =
   let mgr = Eio.Stdenv.process_mgr env and clock = Eio.Stdenv.mono_clock env in
-  let connect conninfo =
+  (* Each connection on a switch of its own, opened and closed by its use:
+     one made as the run's switch ends, to drop what it made, must not be
+     the run's. *)
+  let connect ~sw conninfo =
     Pg.connect ~sw ~net:(Eio.Stdenv.net env) ~mono_clock:clock conninfo
   in
   match url with
   | Some url -> (
       match Pg.Conninfo.of_string url with
-      | Ok conninfo -> Ok { conninfo; container = None; connect }
+      | Ok conninfo -> Ok { conninfo; container = None; connect; sw }
       | Error m -> Error (`Unreadable m))
   | None ->
       (started ~sw ~image ~clock mgr connect :> (server, [> error ]) result)
 
-(* One database per asking: the process and a counter name it, since the
-   suites of one run share a server and run at once. *)
+(* A database per asking, templates and copies alike: the process and a
+   counter name it, since the suites of one run share a server and run at
+   once. *)
 let asked = Atomic.make 0
 
-let database s f =
+let named kind =
+  Printf.sprintf "rowtype_%s_%d_%d" kind (Unix.getpid ())
+    (Atomic.fetch_and_add asked 1)
+
+let admin s sql =
+  Eio.Switch.run @@ fun sw ->
   let ( let* ) = Result.bind in
-  let widen r =
-    (r : (_, Rowtype.error) result :> (_, [> Rowtype.error ]) result)
+  let* db = s.connect ~sw s.conninfo in
+  Fun.protect ~finally:(fun () -> Pg.close db) (fun () -> Pg.exec_raw db sql)
+
+type template = { server : server; name : string }
+
+let widen r = (r : (_, Rowtype.error) result :> (_, [> Rowtype.error ]) result)
+
+let template ?(setup = fun _ -> Ok ()) server =
+  let ( let* ) = Result.bind in
+  let name = named "template" in
+  let* () = widen (admin server ("create database " ^ name)) in
+  (* Dropped with the server's switch, a template no longer first. *)
+  (* Two statements, since DROP DATABASE refuses to run in the transaction
+     one query of two would be; protected, as the container's removal is. *)
+  Eio.Switch.on_release server.sw (fun () ->
+      Eio.Cancel.protect (fun () ->
+          List.iter
+            (fun sql ->
+              ignore (admin server sql : (unit, Rowtype.error) result))
+            [
+              Printf.sprintf "alter database %s is_template false" name;
+              Printf.sprintf "drop database if exists %s with (force)" name;
+            ]));
+  let* () =
+    Result.map_error
+      (fun why -> `Setup why)
+      (setup (Pg.Conninfo.with_database server.conninfo name))
   in
-  let name =
-    Printf.sprintf "rowtype_test_%d_%d" (Unix.getpid ())
-      (Atomic.fetch_and_add asked 1)
+  (* A copy is refused while anyone is connected to its template, so the
+     setup's connections end here, and none may open after. *)
+  let* () =
+    widen
+      (admin server
+         (Printf.sprintf
+            "alter database %s with is_template true allow_connections false; \
+             select pg_terminate_backend(pid) from pg_stat_activity where \
+             datname = '%s' and pid <> pg_backend_pid()"
+            name name))
   in
-  let admin sql =
-    let* db = s.connect s.conninfo in
-    Fun.protect ~finally:(fun () -> Pg.close db) (fun () -> Pg.exec_raw db sql)
+  Ok { server; name }
+
+let database t f =
+  let ( let* ) = Result.bind in
+  let name = named "test" in
+  let* () =
+    widen
+      (admin t.server
+         (Printf.sprintf "create database %s template %s" name t.name))
   in
-  let* () = widen (admin ("create database " ^ name)) in
   (* Dropped with (force), so a connection the case left open does not keep
      it, and whatever the case did. *)
   let drop () =
     ignore
-      (admin (Printf.sprintf "drop database if exists %s with (force)" name)
+      (admin t.server
+         (Printf.sprintf "drop database if exists %s with (force)" name)
         : (unit, Rowtype.error) result)
   in
   Ok
     (Fun.protect ~finally:drop (fun () ->
-         f (Pg.Conninfo.with_database s.conninfo name)))
+         f (Pg.Conninfo.with_database t.server.conninfo name)))
