@@ -18,9 +18,9 @@ make docs    # the documentation site into _build/docs, as Pages publishes it
 make docs-serve  # the built site, served locally, search included
 ```
 
-`make test` needs `podman compose`, and `make docs` Bun. Without
-`ROWTYPE_TEST_PG` the suites that need a server are skipped, and the test
-output says so; `test_sqlite` needs none, and always runs. CI runs `make lint` and `make test` on OCaml 5.5, and
+`make test` needs Podman, and `make docs` Bun. Each suite on Postgres
+starts a server of its own through `rowtype-test` and removes it as it
+ends, unless `TEST_DATABASE_URL` names one; `test_sqlite` needs none. CI runs `make lint` and `make test` on OCaml 5.5, and
 `docs.yml` publishes the site to GitHub Pages on every push to `main`.
 
 ## Layout
@@ -45,6 +45,9 @@ migrate/             rowtype-migrate: the files, the record and its rules, over
                      rowtype-sqlite is
   bin/               the rowtype-migrate command, each dialect it was built
                      with through a dune select
+testing/             rowtype-test: a Postgres database a test run owns, in a
+                     server it is handed or one it starts in Podman and
+                     removes, a killed run's container removed by the next
 docs/                the documentation site, a Starlight site in Hypha's look,
                      from starlight-theme-hypha: its pages in
                      src/content/docs/, each example imported whole from
@@ -80,8 +83,10 @@ test/
                      command_postgres.t and command_sqlite.t each
                      dialect's, where that dialect is built
   test_docs          every .ml file in examples/ is imported by a page
-  db_target/         where a suite's database comes from: a library, so it
-                     reads no variable, prints nothing and never exits
+  test_testing       rowtype-test against the real Podman: its containers
+                     started, removed and reaped, its databases dropped
+  db_target/         where a suite's database comes from, through
+                     rowtype-test: a library, so it reads no variable
 ```
 
 Each module's contract is its `.mli`. Read the `.mli` before changing a
@@ -188,5 +193,5 @@ Each rule comes with why it exists and the test that catches a break.
 
 ## Changes and releases
 
-Its four packages are released together. A migration file's directive
+Its five packages are released together. A migration file's directive
 and the record's table are behaviour: changing either is breaking.

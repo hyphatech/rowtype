@@ -6,6 +6,7 @@
  (libraries
   rowtype
   rowtype-postgres
+  rowtype-test
   ptime
   uuidm
   eio

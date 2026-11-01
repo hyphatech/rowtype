@@ -797,13 +797,17 @@ let test_an_old_record_is_given_sources () =
         [ ("app", 20260101000000, "first"); ("spool", 20260101000000, "jobs") ]
         (recorded db))
 
-let pg_dump = Sys.getenv_opt "ROWTYPE_TEST_PG_DUMP"
+(* A command a runner names wins; else the suite's own server's pg_dump. *)
+let pg_dump () =
+  match Sys.getenv_opt "ROWTYPE_TEST_PG_DUMP" with
+  | Some command -> Some command
+  | None -> Db_target.pg_dump ()
 
 (* A dump is what the migrations make from nothing, the same on every run,
    with the versions of the server and of pg_dump left out, and never what
    the database the URL names holds. *)
 let test_a_dump_is_what_the_migrations_make () =
-  match pg_dump with
+  match pg_dump () with
   | None ->
       print_endline
         "  [dump skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -866,7 +870,7 @@ let dump_with target ~pg_dump ~migrations =
 (* An application's baseline leaves out what a library's own migrations
    make, so a database made from both never makes a library's table twice. *)
 let test_a_squash_leaves_a_library_out () =
-  match pg_dump with
+  match pg_dump () with
   | None ->
       print_endline
         "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -1046,7 +1050,7 @@ let test_a_cancelled_dump_leaves_nothing () =
    history makes, a database migrated before the squash takes the new list
    as its own, and a baseline that cannot be proved is not answered. *)
 let test_a_squash_stands_for_its_history () =
-  match pg_dump with
+  match pg_dump () with
   | None ->
       print_endline
         "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -1169,19 +1173,12 @@ let test_a_commands_connection_is_unbounded () =
                "no bound on what it runs" None (Pg.timeout conn);
              Ok ())))
 
-(* The server the suite's databases are made on, read where it starts:
-   without one, the suite says it is skipped, and passes. *)
-let server =
-  match Sys.getenv_opt Db_target.variable with
-  | Some server -> server
-  | None ->
-      print_endline (Db_target.skipped ~suite:"rowtype-migrate");
-      exit 0
-
 let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw ~server;
+  (* The server is the one TEST_DATABASE_URL names, or one of the
+     suite's own, removed as it ends. *)
+  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
   Alcotest.run ~and_exit:false "rowtype-migrate"
     [
       ( "the runner",

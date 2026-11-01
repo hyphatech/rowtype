@@ -59,6 +59,7 @@ export default defineConfig({
             "guide/sqlite",
             "guide/migrations",
             "guide/migrating-from-a-test",
+            "guide/test-databases",
             "guide/library-migrations",
           ],
         },

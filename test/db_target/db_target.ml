@@ -1,32 +1,32 @@
 (* Where a test's database comes from.
 
-   Every suite that touches a database needs a Postgres server, and its
-   runner names it with ROWTYPE_TEST_PG -- which `make test` sets after
-   bringing the tests' own container up. A bare `dune test` leaves it unset,
-   and those suites then skip themselves and SAY so, rather than failing on
-   a machine with no Docker or passing without having run. The suite reads
-   the variable where it starts, as an executable does; this is what it
-   reads it for. *)
+   Every suite that touches a database needs a Postgres server: the one
+   TEST_DATABASE_URL names, where a runner hands one, or else one of the
+   suite's own, which rowtype-test starts in Podman and removes as the suite
+   ends. The suite reads the variable where it starts, as an executable
+   does; this is what it reads it for. *)
 
-let variable = "ROWTYPE_TEST_PG"
-
-let skipped ~suite =
-  Printf.sprintf "  [%s skipped: no %s -- set it to a Postgres server's URL]"
-    suite variable
+let variable = "TEST_DATABASE_URL"
 
 (* The Eio loop a suite runs its cases in, a switch that lasts as long and
-   the server it was given: a connection is Eio's, and a suite's cases are
+   the server on it: a connection is Eio's, and a suite's cases are
    functions of nothing, so the one [Eio_main.run] a suite starts in hands
-   all three over once, with [eio env ~sw ~server]. *)
-let loop : (Eio_unix.Stdenv.base * Eio.Switch.t * string) option ref = ref None
+   them over once, with [start]. *)
+let loop :
+    (Eio_unix.Stdenv.base * Eio.Switch.t * Rowtype_test.server) option ref =
+  ref None
 
-let eio env ~sw ~server =
-  loop := Some ((env :> Eio_unix.Stdenv.base), sw, server)
+let start env ~sw ?url () =
+  match Rowtype_test.server ~sw ?url env with
+  | Ok server -> loop := Some ((env :> Eio_unix.Stdenv.base), sw, server)
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
 
 let io () =
   match !loop with
   | Some v -> v
-  | None -> Alcotest.fail "the suite did not call Db_target.eio env ~sw ~server"
+  | None -> Alcotest.fail "the suite did not call Db_target.start"
 
 let sw () =
   let _, sw, _ = io () in
@@ -41,7 +41,14 @@ let mono () = Eio.Stdenv.mono_clock (env ())
 
 let server () =
   let _, _, server = io () in
-  server
+  Rowtype_postgres.Conninfo.to_url (Rowtype_test.conninfo server)
+
+let pg_dump () =
+  let _, _, server = io () in
+  Option.map
+    (fun name ->
+      Printf.sprintf "podman exec %s pg_dump -U test -d {database}" name)
+    (Rowtype_test.container server)
 
 let conninfo url =
   match Rowtype_postgres.Conninfo.of_string url with
@@ -72,25 +79,13 @@ let exec db sql =
   | Error e -> Alcotest.failf "%s: %s" sql (Rowtype.error_to_string e)
 
 (* A database of its own per asking, so one case cannot see another's rows
-   and a failure leaves nothing behind for the next run to trip over. The
-   name carries the pid because `dune test` runs the executables in
-   parallel, and a counter because one executable asks many times.
-
-   [with (force)] because a connection the test failed to close would
-   otherwise make the drop fail and leave the database behind -- and a
-   leaked database is a slow leak nobody notices until the container is
-   full. *)
-let nth = ref 0
-
+   and a failure leaves nothing behind for the next run to trip over. *)
 let with_postgres f =
-  incr nth;
-  let name = Printf.sprintf "rowtype_test_%d_%d" (Unix.getpid ()) !nth in
-  admin (fun db -> exec db (Printf.sprintf "create database %s" name));
-  let finally () =
-    admin (fun db ->
-        exec db (Printf.sprintf "drop database if exists %s with (force)" name))
-  in
-  Fun.protect ~finally (fun () -> f (on_database name))
+  let _, _, server = io () in
+  match Rowtype_test.database server f with
+  | Ok v -> v
+  | Error e ->
+      Alcotest.failf "a database of its own: %s" (Rowtype.error_to_string e)
 
 (* The cases write an instant as epoch microseconds, a figure checked
    against Postgres's own; this is a shape of instants in that unit,

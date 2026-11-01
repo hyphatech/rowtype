@@ -1,5 +1,13 @@
 # Changes
 
+## Unreleased
+
+- `rowtype-test`, a Postgres database a test run owns, as Testcontainers
+  gives one in other languages: `Rowtype_test.server` is the server a URL
+  names, or one it starts in Podman and removes when its switch ends, a
+  container a killed run left removed by the next; `Rowtype_test.database`
+  is a database of a case's own in it, dropped after.
+
 ## 0.9.0 (2026-10-21)
 
 - `rowtype-sqlite`, a backend for SQLite: the same statements and shapes,

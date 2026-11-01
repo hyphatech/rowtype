@@ -1,0 +1,32 @@
+---
+title: A database for a test run
+---
+
+import { Code } from "@astrojs/starlight/components";
+import testServer from "@examples/test_server.ml?raw";
+
+`rowtype-test` gives a test run a Postgres database it owns, as
+Testcontainers does in other languages, and leaves nothing behind once the
+run ends -- whether it passed, failed or raised.
+
+<Code code={testServer} lang="ocaml" title="test_server.ml" />
+
+`Rowtype_test.server` is the server a run makes its databases in. Handed a
+server's URL, it starts nothing: a runner that has a server already, or
+that runs the tests where there is no container runtime, hands one. Handed
+none, it starts Postgres in Podman, by its command line -- its data in
+memory, its durability off, on a port the system chooses -- waits until it
+answers, and removes the container when the switch ends.
+
+`Rowtype_test.database` makes a database of its own in that server for
+each case that asks, which takes milliseconds where the server took a
+second or two, and drops it after, with `(force)`, so a connection the
+case left open does not keep it.
+
+A run killed while its container ran leaves it behind. Every container
+`rowtype-test` starts is labelled with the process that started it, and
+the next run's `server` removes each whose process has ended: the next run
+is the reaper, with no container of its own to do it.
+
+The library reads no variable; the test program reads `TEST_DATABASE_URL`
+where it starts, and hands it over.

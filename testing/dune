@@ -1,0 +1,7 @@
+; rowtype-test: a Postgres database a test run owns, in a server it is
+; handed or one it starts in Podman and removes.
+
+(library
+ (name rowtype_test)
+ (public_name rowtype-test)
+ (libraries rowtype rowtype-postgres eio mtime unix))

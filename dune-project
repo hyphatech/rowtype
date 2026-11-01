@@ -97,6 +97,31 @@
     (>= 6.3.0)))))
 
 (package
+ (name rowtype-test)
+ (synopsis "A Postgres database a test run owns, in Podman or a server it is handed")
+ (description
+  "A server for a test run -- one it is handed, or one it starts in Podman and removes -- and a database of its own in it for each case, dropped after; a container a killed run left is removed by the next.")
+ (depends
+  (ocaml
+   (>= 5.5))
+  (rowtype
+   (= :version))
+  (rowtype-postgres
+   (= :version))
+  (eio
+   (>= 1.5))
+  (mtime
+   (>= 2.1.0))
+  (eio_main
+   (and
+    :with-test
+    (>= 1.5)))
+  (alcotest
+   (and
+    :with-test
+    (>= 1.9.1)))))
+
+(package
  (name rowtype-sqlite)
  (synopsis "The SQLite backend for rowtype, over the sqlite3 binding")
  (description

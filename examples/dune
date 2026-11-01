@@ -14,6 +14,7 @@
   rowtype-migrate
   rowtype-migrate.postgres
   rowtype-migrate.sqlite
+  rowtype-test
   eio
   eio_main
   logs))

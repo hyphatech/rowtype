@@ -128,3 +128,12 @@
  (package rowtype-migrate)
  (enabled_if %{lib-available:rowtype-migrate.sqlite})
  (deps %{bin:rowtype-migrate}))
+
+; rowtype-test, against the real Podman: the containers it starts and
+; removes, and the databases it makes and drops.
+
+(test
+ (name test_testing)
+ (package rowtype-test)
+ (modules test_testing)
+ (libraries rowtype rowtype-postgres rowtype-test eio eio_main unix alcotest))

@@ -4,16 +4,19 @@
 (** {1 The server} *)
 
 val variable : string
-(** [ROWTYPE_TEST_PG], the variable a suite reads the server's URL from where it
-    starts. *)
+(** [TEST_DATABASE_URL], the variable a suite reads a server's URL from where it
+    starts, where its runner hands one. *)
 
-val skipped : suite:string -> string
-(** The line a suite prints when {!variable} is unset, saying it is skipped and
-    why. *)
+val start :
+  Eio_unix.Stdenv.base -> sw:Eio.Switch.t -> ?url:string -> unit -> unit
+(** [start env ~sw ?url ()] hands the suite's Eio loop and a switch that lasts
+    as long over once, before any case runs, with the server at [url] or one of
+    the suite's own ({!Rowtype_test.server}), removed as [sw] ends. Where none
+    can be had, it says why and exits. *)
 
-val eio : Eio_unix.Stdenv.base -> sw:Eio.Switch.t -> server:string -> unit
-(** [eio env ~sw ~server] hands the suite's Eio loop, a switch that lasts as
-    long and the server's URL over once, before any case runs. *)
+val pg_dump : unit -> string option
+(** The command that dumps a database, [{database}] its name, where the server
+    is the suite's own: [pg_dump] run in its container. *)
 
 (** {1 What a case reaches for} *)
 

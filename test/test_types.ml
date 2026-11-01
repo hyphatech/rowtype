@@ -547,19 +547,12 @@ let test_an_enum_is_read_by_its_labels () =
         (reads db mood "select row(1, 2)::pair");
       refused (format ^ ": text") (reads db mood "select 'calm'::text"))
 
-(* The server the suite's databases are made on, read where it starts:
-   without one, the suite says it is skipped, and passes. *)
-let server =
-  match Sys.getenv_opt Db_target.variable with
-  | Some server -> server
-  | None ->
-      print_endline (Db_target.skipped ~suite:"types");
-      exit 0
-
 let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  Db_target.eio env ~sw ~server;
+  (* The server is the one TEST_DATABASE_URL names, or one of the
+     suite's own, removed as it ends. *)
+  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
   Alcotest.run ~and_exit:false "types"
     [
       ( "scalars",
