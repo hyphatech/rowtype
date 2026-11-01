@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.9.1 (2026-11-01)
 
 - `rowtype-test`, a Postgres database a test run owns, as Testcontainers
   gives one in other languages: `Rowtype_test.server` is the server a URL
