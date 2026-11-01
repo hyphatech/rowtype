@@ -45,33 +45,35 @@ let alive pid =
   | exception Unix.Unix_error (Unix.ESRCH, _, _) -> false
   | exception Unix.Unix_error _ -> true
 
-(* The next run is the reaper: what a run that ended left, it removes. *)
+(* The next run is the reaper: what a run that ended left, it removes. A
+   label is read by [inspect], whose template is the same in every Podman;
+   [ps]'s changed between versions. *)
 let remove_left mgr =
-  match
-    podman mgr
-      [
-        "ps";
-        "-a";
-        "--filter";
-        "label=" ^ label;
-        "--format";
-        Printf.sprintf "{{.Names}} {{.Label %S}}" label;
-      ]
-  with
+  match podman mgr [ "ps"; "-a"; "-q"; "--filter"; "label=" ^ label ] with
   | Error _ -> ()
   | Ok listing ->
       List.iter
-        (fun line ->
-          match String.split_on_char ' ' line with
-          | [ name; pid ] -> (
+        (fun id ->
+          match
+            podman mgr
+              [
+                "inspect";
+                "--format";
+                Printf.sprintf "{{index .Config.Labels %S}}" label;
+                id;
+              ]
+          with
+          | Ok pid -> (
               match int_of_string_opt pid with
               | Some pid when not (alive pid) ->
                   ignore
-                    (podman mgr [ "rm"; "-f"; "-v"; name ]
+                    (podman mgr [ "rm"; "-f"; "-v"; id ]
                       : (string, [> error ]) result)
               | Some _ | None -> ())
-          | _ -> ())
-        (String.split_on_char '\n' listing)
+          | Error _ -> ())
+        (List.filter
+           (fun l -> not (String.equal l ""))
+           (String.split_on_char '\n' listing))
 
 let port_of listing =
   (* [podman port] answers "127.0.0.1:41234", or one line a family. *)

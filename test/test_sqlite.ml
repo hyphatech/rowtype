@@ -1077,9 +1077,13 @@ let test_raise_and_cancel () =
 (* A transaction cancelled while its statement waits on a lock: the
    statement ends once the lock goes, and the COMMIT after it, which a
    cancelled fiber may not start, still ends the transaction. *)
+(* The wait is long enough for a loaded machine -- CI's two cores beside
+   every suite's own Postgres -- since what is held is that cancelling a
+   waiting transaction leaves both connections usable, not how long it
+   waited. *)
 let test_cancelled_while_waiting () =
   on_two
-    ~timeout:Mtime.Span.(200 * ms)
+    ~timeout:Mtime.Span.(2 * s)
     [ "create table t (k integer)" ]
     (fun a b ->
       ok (Sq.exec_raw b "begin immediate");
