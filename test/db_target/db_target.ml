@@ -7,6 +7,14 @@
    and hands what [start] makes to each case that needs it. *)
 
 let variable = "TEST_DATABASE_URL"
+let container_variable = "ROWTYPE_TEST_CONTAINER"
+
+type error = [ Rowtype_test.error | Rowtype.error | `Container of string ]
+
+let error_to_string = function
+  | `Container words -> container_variable ^ " names no container: " ^ words
+  | #Rowtype_test.error as e -> Rowtype_test.error_to_string e
+  | #Rowtype.error as e -> Rowtype.error_to_string e
 
 type t = {
   env : Eio_unix.Stdenv.base;
@@ -16,8 +24,17 @@ type t = {
 }
 
 (* The suite's template is empty: each case makes its own tables. *)
-let start env ~sw ?url () =
-  Result.bind (Rowtype_test.server ~sw ?url env) (fun server ->
+let start env ~sw ?url ?container () =
+  let ( let* ) = Result.bind in
+  let* container =
+    match container with
+    | None -> Ok None
+    | Some words -> (
+        match Rowtype_test.container_of_string words with
+        | Some c -> Ok (Some c)
+        | None -> Error (`Container words))
+  in
+  Result.bind (Rowtype_test.server ~sw ?url ?container env) (fun server ->
       Result.map
         (fun template -> { env :> Eio_unix.Stdenv.base; sw; server; template })
         (Rowtype_test.template server))

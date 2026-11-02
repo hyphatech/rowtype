@@ -812,7 +812,8 @@ let test_a_dump_is_what_the_migrations_make suite () =
   match pg_dump suite with
   | None ->
       print_endline
-        "  [dump skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
+        "  [dump skipped: no pg_dump of the server's version -- the server \
+         runs in no container named, and ROWTYPE_TEST_PG_DUMP names none]";
       Alcotest.skip ()
   | Some pg_dump ->
       let migrations =
@@ -876,7 +877,8 @@ let test_a_squash_leaves_a_library_out suite () =
   match pg_dump suite with
   | None ->
       print_endline
-        "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
+        "  [squash skipped: no pg_dump of the server's version -- the server \
+         runs in no container named, and ROWTYPE_TEST_PG_DUMP names none]";
       Alcotest.skip ()
   | Some pg_dump ->
       let spool =
@@ -1059,7 +1061,8 @@ let test_a_squash_stands_for_its_history suite () =
   match pg_dump suite with
   | None ->
       print_endline
-        "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
+        "  [squash skipped: no pg_dump of the server's version -- the server \
+         runs in no container named, and ROWTYPE_TEST_PG_DUMP names none]";
       Alcotest.skip ()
   | Some pg_dump ->
       let m v name sql =
@@ -1186,9 +1189,14 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  match
+    Db_target.start env ~sw
+      ?url:(Sys.getenv_opt Db_target.variable)
+      ?container:(Sys.getenv_opt Db_target.container_variable)
+      ()
+  with
   | Error e ->
-      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      prerr_endline ("no test database: " ^ Db_target.error_to_string e);
       exit 1
   | Ok suite ->
       Alcotest.run ~and_exit:false "rowtype-migrate"

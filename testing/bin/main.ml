@@ -9,6 +9,7 @@ let usage =
   "usage: rowtype-test run [--runtime podman|docker] -- COMMAND [ARGUMENT...]"
 
 let variable = "TEST_DATABASE_URL"
+let container_variable = "ROWTYPE_TEST_CONTAINER"
 
 (* The runtime is named or Podman's, and a word but these two is the
    usage, not a binary looked for. *)
@@ -43,14 +44,28 @@ let () =
                   Rowtype_postgres.Conninfo.to_url
                     (Rowtype_test.conninfo server)
             in
+            (* What a process of the run needs to know of it: the server,
+               and the container it runs in, where this run started one; a
+               container handed already is handed on as it came. *)
+            let handed_on =
+              (variable, url)
+              :: Option.to_list
+                   (Option.map
+                      (fun c ->
+                        (container_variable, Rowtype_test.container_to_string c))
+                      (Rowtype_test.container server))
+            in
             let environment =
-              Array.append
-                [| variable ^ "=" ^ url |]
-                (Array.of_list
-                   (List.filter
-                      (fun kv ->
-                        not (String.starts_with ~prefix:(variable ^ "=") kv))
-                      (Array.to_list (Unix.environment ()))))
+              Array.of_list
+                (List.map (fun (k, v) -> k ^ "=" ^ v) handed_on
+                @ List.filter
+                    (fun kv ->
+                      not
+                        (List.exists
+                           (fun (k, _) ->
+                             String.starts_with ~prefix:(k ^ "=") kv)
+                           handed_on))
+                    (Array.to_list (Unix.environment ())))
             in
             match
               Eio.Process.await

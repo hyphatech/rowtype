@@ -20,6 +20,11 @@ The server handed is the one every process of the run is handed:
   $ rowtype-test run -- sh -c 'echo "$TEST_DATABASE_URL"'
   postgres://test@127.0.0.1:1/test
 
+The container a server handed runs in is handed on as it came:
+
+  $ ROWTYPE_TEST_CONTAINER='podman rowtype-test-1-2' rowtype-test run -- sh -c 'echo "$ROWTYPE_TEST_CONTAINER"'
+  podman rowtype-test-1-2
+
 The run's status is its command's, a signal's as a shell gives it:
 
   $ rowtype-test run -- sh -c 'exit 3'

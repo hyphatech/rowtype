@@ -43,6 +43,13 @@ let between_tries = Mtime.Span.(100 * ms)
 (* Podman's and Docker's command lines take the same arguments for all
    this library asks of them, so the runtime is its binary alone. *)
 let binary = function `Podman -> "podman" | `Docker -> "docker"
+let container_to_string (runtime, name) = binary runtime ^ " " ^ name
+
+let container_of_string words =
+  match String.split_on_char ' ' words with
+  | [ "podman"; name ] when not (String.equal name "") -> Some (`Podman, name)
+  | [ "docker"; name ] when not (String.equal name "") -> Some (`Docker, name)
+  | _ -> None
 
 let cli runtime mgr args =
   let out = Buffer.create 256 and err = Buffer.create 256 in
@@ -198,7 +205,8 @@ let started ~sw ~runtime ~image ~clock mgr connect =
   let* () = until_ready ~clock ~deadline connect conninfo in
   Ok { conninfo; container = Some (runtime, name); connect; sw }
 
-let server ~sw ?url ?(runtime = `Podman) ?(image = default_image) env =
+let server ~sw ?url ?container ?(runtime = `Podman) ?(image = default_image) env
+    =
   let mgr = Eio.Stdenv.process_mgr env and clock = Eio.Stdenv.mono_clock env in
   (* Each connection on a switch of its own, opened and closed by its use:
      one made as the run's switch ends, to drop what it made, must not be
@@ -209,7 +217,7 @@ let server ~sw ?url ?(runtime = `Podman) ?(image = default_image) env =
   match url with
   | Some url -> (
       match Pg.Conninfo.of_string url with
-      | Ok conninfo -> Ok { conninfo; container = None; connect; sw }
+      | Ok conninfo -> Ok { conninfo; container; connect; sw }
       | Error m -> Error (`Unreadable m))
   | None ->
       (started ~sw ~runtime ~image ~clock mgr connect

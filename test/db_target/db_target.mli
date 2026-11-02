@@ -11,19 +11,36 @@ val variable : string
 (** [TEST_DATABASE_URL], the variable a suite reads a server's URL from where it
     starts, where its runner hands one. *)
 
+val container_variable : string
+(** [ROWTYPE_TEST_CONTAINER], the variable a suite reads the container its
+    server runs in from, where its runner started one: [rowtype-test run] hands
+    it with the server. *)
+
+type error =
+  [ Rowtype_test.error
+  | Rowtype.error
+  | `Container of string
+    (** the container handed is not in {!Rowtype_test.container_to_string}'s
+        words *) ]
+
+val error_to_string : error -> string
+
 val start :
   Eio_unix.Stdenv.base ->
   sw:Eio.Switch.t ->
   ?url:string ->
+  ?container:string ->
   unit ->
-  (t, [> Rowtype_test.error | Rowtype.error ]) result
-(** [start env ~sw ?url ()] is the server at [url], or one of the suite's own
+  (t, [> error ]) result
+(** [start env ~sw ?url ?container ()] is the server at [url], which runs in
+    [container] where it is given, or one of the suite's own
     ({!Rowtype_test.server}), removed as [sw] ends, with an empty template each
     case's database is copied from. *)
 
 val pg_dump : t -> string option
 (** The command that dumps a database, [{database}] its name, where the server
-    is the suite's own: [pg_dump] run in its container. *)
+    runs in a container the suite knows -- its own, or the one it was handed:
+    [pg_dump] run there, of the server's version. *)
 
 (** {1 What a case reaches for} *)
 

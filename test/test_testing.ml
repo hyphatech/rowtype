@@ -5,17 +5,24 @@
 module Pg = Rowtype_postgres
 module T = Rowtype_test
 
-(* The runtime the cases start their containers in, Podman unless
-   ROWTYPE_TEST_RUNTIME names Docker, as CI's Docker job does. *)
+(* The runtime the cases start their containers in: the run's, where
+   rowtype-test run hands on the container it started, else Podman. *)
 let runtime =
-  match Sys.getenv_opt "ROWTYPE_TEST_RUNTIME" with
-  | None | Some "podman" -> `Podman
-  | Some "docker" -> `Docker
-  | Some other ->
-      prerr_endline ("ROWTYPE_TEST_RUNTIME is podman or docker, not " ^ other);
-      exit 2
+  match Sys.getenv_opt "ROWTYPE_TEST_CONTAINER" with
+  | None -> `Podman
+  | Some words -> (
+      match T.container_of_string words with
+      | Some (runtime, _) -> runtime
+      | None ->
+          prerr_endline ("ROWTYPE_TEST_CONTAINER names no container: " ^ words);
+          exit 2)
 
 let binary = match runtime with `Podman -> "podman" | `Docker -> "docker"
+
+let is_runtime a b =
+  match (a, b) with
+  | `Podman, `Podman | `Docker, `Docker -> true
+  | `Podman, `Docker | `Docker, `Podman -> false
 
 let is_ours = function
   | `Podman -> ( match runtime with `Podman -> true | `Docker -> false)
@@ -380,6 +387,44 @@ let test_a_failed_run_leaves_nothing () =
        "select count(*)::int from pg_database where datname like \
         'rowtype_template_%'")
 
+(* A server handed with its container names it, for a command run there,
+   and starts nothing. *)
+let test_a_handed_server_names_its_container () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let own = ok (T.server ~sw ~runtime env) in
+  let started =
+    match T.container own with
+    | Some c -> c
+    | None -> Alcotest.fail "no container was started"
+  in
+  let url = Pg.Conninfo.to_url (T.conninfo own) in
+  let handed = ok (T.server ~sw ~runtime ~url ~container:started env) in
+  Alcotest.(check (option string))
+    "the container it was handed"
+    (Some (snd started))
+    (Option.map snd (T.container handed))
+
+(* A container's words read back as the container, and nothing else reads
+   as one. *)
+let test_a_container_s_words_read_back () =
+  List.iter
+    (fun ((runtime, name) as container) ->
+      match T.container_of_string (T.container_to_string container) with
+      | Some (`Podman, n) when String.equal n name ->
+          Alcotest.(check bool) "podman" true (is_runtime `Podman runtime)
+      | Some (`Docker, n) when String.equal n name ->
+          Alcotest.(check bool) "docker" true (is_runtime `Docker runtime)
+      | Some _ | None -> Alcotest.fail (T.container_to_string container))
+    [ (`Podman, "rowtype-test-1-2"); (`Docker, "rowtype-test-3-4") ];
+  List.iter
+    (fun words ->
+      Alcotest.(check bool)
+        ("not a container: " ^ words)
+        true
+        (Option.is_none (T.container_of_string words)))
+    [ ""; "podman"; "podman "; "nerdctl x"; " podman x"; "podman x y" ]
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
@@ -454,6 +499,10 @@ let () =
             test_connections_left_open_hold_nothing;
           Alcotest.test_case "a failed run leaves nothing" `Slow
             test_a_failed_run_leaves_nothing;
+          Alcotest.test_case "a handed server names its container" `Slow
+            test_a_handed_server_names_its_container;
+          Alcotest.test_case "a container's words read back" `Quick
+            test_a_container_s_words_read_back;
           Alcotest.test_case "a template goes with the run" `Slow
             test_a_template_goes_with_the_run;
           Alcotest.test_case "a killed run's container is removed" `Slow

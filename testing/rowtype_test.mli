@@ -32,6 +32,13 @@ type runtime = [ `Podman | `Docker ]
 (** The container runtime a server is started in, by its command line: [podman]
     or [docker]. *)
 
+val container_to_string : runtime * string -> string
+(** A container in words a runner hands on -- [podman rowtype-test-1-2], its
+    runtime's binary and its name -- as [rowtype-test run] hands its own. *)
+
+val container_of_string : string -> (runtime * string) option
+(** A container from {!container_to_string}'s words; [None] for any other. *)
+
 type error =
   [ `Runtime of runtime * string
     (** the runtime could not be run, or could not start, read or remove the
@@ -47,6 +54,7 @@ val error_to_string : [< error | Rowtype.error ] -> string
 val server :
   sw:Eio.Switch.t ->
   ?url:string ->
+  ?container:runtime * string ->
   ?runtime:runtime ->
   ?image:string ->
   < process_mgr : _ Eio.Process.mgr
@@ -58,7 +66,9 @@ val server :
     unless given -- started in [runtime] -- Podman unless given -- waited on
     until it answers, and removed when [sw] ends. Before it starts one, every
     container a run of this library started whose process has ended is removed.
-*)
+    [container], with [url], is the container that server runs in, where its
+    runner says so: {!val-container} answers it, for a command run there.
+    Without [url], it is not read. *)
 
 val conninfo : server -> Rowtype_postgres.Conninfo.t
 (** The server's own database, to connect to as its owner. *)
