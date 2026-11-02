@@ -6,6 +6,8 @@
   cancelled while its last statement ran: the statement still answers, and
   the transaction now rolls back and the cancellation passes, as its
   documentation says.
+- `rowtype-test` installs without its tests: its command links
+  `eio_main`, which the package asked for only with them.
 
 ## 0.9.1 (2026-11-01)
 

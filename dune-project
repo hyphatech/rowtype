@@ -113,9 +113,7 @@
   (mtime
    (>= 2.1.0))
   (eio_main
-   (and
-    :with-test
-    (>= 1.5)))
+   (>= 1.5))
   (alcotest
    (and
     :with-test
