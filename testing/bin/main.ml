@@ -11,6 +11,8 @@ let variable = "TEST_DATABASE_URL"
 let () =
   match Array.to_list Sys.argv with
   | _ :: "run" :: "--" :: (_ :: _ as command) ->
+      (* The container this run could not remove is said on stderr. *)
+      Logs.set_reporter (Logs.format_reporter ());
       let code =
         Eio_main.run @@ fun env ->
         Eio.Switch.run @@ fun sw ->

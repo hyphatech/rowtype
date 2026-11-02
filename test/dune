@@ -136,4 +136,12 @@
  (name test_testing)
  (package rowtype-test)
  (modules test_testing)
- (libraries rowtype rowtype-postgres rowtype-test eio eio_main unix alcotest))
+ (libraries
+  rowtype
+  rowtype-postgres
+  rowtype-test
+  eio
+  eio_main
+  unix
+  logs
+  alcotest))

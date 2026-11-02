@@ -16,6 +16,7 @@ depends: [
   "rowtype-postgres" {= version}
   "eio" {>= "1.5"}
   "mtime" {>= "2.1.0"}
+  "logs" {>= "0.10.0"}
   "eio_main" {>= "1.5"}
   "alcotest" {with-test & >= "1.9.1"}
   "odoc" {with-doc}

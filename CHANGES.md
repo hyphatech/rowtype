@@ -11,6 +11,11 @@
 - `Rowtype_test.database` drops a case's copy when the case's fiber is
   cancelled, and lets the cancellation pass as itself, where the copy stayed
   and the cancellation came out as `Fun.Finally_raised`.
+- `rowtype-test` says what its cleanup could not remove: a case's database
+  that could not be dropped is `Rowtype_test.database`'s `Error`, and a
+  container, a template, or the database of a case that raised is a
+  warning on the `Logs` source `rowtype-test`, which `rowtype-test run`
+  prints. Each was dropped without a word.
 
 ## 0.9.1 (2026-11-01)
 

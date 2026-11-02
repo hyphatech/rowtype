@@ -13,6 +13,12 @@ let error_to_string = function
   | `Setup why -> "a template's setup failed: " ^ why
   | #Rowtype.error as e -> Rowtype.error_to_string e
 
+(* What a cleanup could not remove, which has no caller left to answer. *)
+let src =
+  Logs.Src.create "rowtype-test" ~doc:"What a run could not remove after it"
+
+module Log = (val Logs.src_log src : Logs.LOG)
+
 type server = {
   conninfo : Pg.Conninfo.t;
   container : string option;
@@ -71,10 +77,13 @@ let remove_left mgr =
           with
           | Ok pid -> (
               match int_of_string_opt pid with
-              | Some pid when not (alive pid) ->
-                  ignore
-                    (podman mgr [ "rm"; "-f"; "-v"; id ]
-                      : (string, [> error ]) result)
+              | Some pid when not (alive pid) -> (
+                  match podman mgr [ "rm"; "-f"; "-v"; id ] with
+                  | Ok _ -> ()
+                  | Error e ->
+                      Log.warn (fun m ->
+                          m "a container a killed run left, %s, stays: %s" id
+                            (error_to_string e)))
               | Some _ | None -> ())
           | Error _ -> ())
         (List.filter
@@ -146,9 +155,12 @@ let started ~sw ~image ~clock mgr connect =
      this matters most. *)
   Eio.Switch.on_release sw (fun () ->
       Eio.Cancel.protect (fun () ->
-          ignore
-            (podman mgr [ "rm"; "-f"; "-v"; name ]
-              : (string, [> error ]) result)));
+          match podman mgr [ "rm"; "-f"; "-v"; name ] with
+          | Ok _ -> ()
+          | Error e ->
+              Log.warn (fun m ->
+                  m "the run's container, %s, stays: %s" name
+                    (error_to_string e))));
   let* listing = podman mgr [ "port"; name; "5432" ] in
   let* port =
     Option.to_result
@@ -212,13 +224,18 @@ let template ?(setup = fun _ -> Ok ()) server =
      one query of two would be; protected, as the container's removal is. *)
   Eio.Switch.on_release server.sw (fun () ->
       Eio.Cancel.protect (fun () ->
-          List.iter
-            (fun sql ->
-              ignore (admin server sql : (unit, Rowtype.error) result))
-            [
-              Printf.sprintf "alter database %s is_template false" name;
-              Printf.sprintf "drop database if exists %s with (force)" name;
-            ]));
+          match
+            Result.bind
+              (admin server
+                 (Printf.sprintf "alter database %s is_template false" name))
+              (fun () ->
+                admin server
+                  (Printf.sprintf "drop database if exists %s with (force)" name))
+          with
+          | Ok () -> ()
+          | Error e ->
+              Log.warn (fun m ->
+                  m "the template %s stays: %s" name (Rowtype.error_to_string e))));
   let* () =
     Result.map_error
       (fun why -> `Setup why)
@@ -250,11 +267,19 @@ let database t f =
      connect to drop it. *)
   let drop () =
     Eio.Cancel.protect (fun () ->
-        ignore
-          (admin t.server
-             (Printf.sprintf "drop database if exists %s with (force)" name)
-            : (unit, Rowtype.error) result))
+        admin t.server
+          (Printf.sprintf "drop database if exists %s with (force)" name))
   in
-  Ok
-    (Fun.protect ~finally:drop (fun () ->
-         f (Pg.Conninfo.with_database t.server.conninfo name)))
+  (* A copy left is the case's failure where it answered; where it raised,
+     the raise is what the caller hears, and the copy is a warning. *)
+  match f (Pg.Conninfo.with_database t.server.conninfo name) with
+  | exception ex ->
+      let trace = Printexc.get_raw_backtrace () in
+      (match drop () with
+      | Ok () -> ()
+      | Error e ->
+          Log.warn (fun m ->
+              m "a case's database, %s, stays: %s" name
+                (Rowtype.error_to_string e)));
+      Printexc.raise_with_backtrace ex trace
+  | answer -> widen (Result.map (fun () -> answer) (drop ()))

@@ -4,4 +4,4 @@
  (name main)
  (public_name rowtype-test)
  (package rowtype-test)
- (libraries rowtype-postgres rowtype-test eio eio_main unix))
+ (libraries rowtype-postgres rowtype-test eio eio_main logs unix))

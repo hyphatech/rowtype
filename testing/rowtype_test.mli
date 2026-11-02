@@ -19,7 +19,11 @@
     memory, its durability off, on a port the system chooses, labelled with the
     process that started it; and it removes the container when [sw] ends. A
     container a run left when it was killed is removed by the next run's
-    {!val-server}, so the next run is the reaper. *)
+    {!val-server}, so the next run is the reaper.
+
+    What a cleanup could not remove, where no caller is left to answer -- a
+    container, a template, a case's database its case raised past -- is a
+    warning on the [Logs] source [rowtype-test], naming it. *)
 
 type server
 (** A Postgres server a run makes its databases in. *)
@@ -80,4 +84,6 @@ val database :
 (** [database template f] is [f] over a copy of [template] of its own --
     [CREATE DATABASE ... TEMPLATE], tens of milliseconds -- dropped after, even
     where [f] raises or its fiber is cancelled, and dropped with [(force)], so a
-    connection [f] left open does not keep it. *)
+    connection [f] left open does not keep it. A copy that could not be dropped
+    is the [Error], where [f] answered; where [f] raised, the raise passes and
+    the copy is a warning. *)

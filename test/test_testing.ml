@@ -171,6 +171,93 @@ let test_a_cancelled_case_s_database_is_dropped () =
        "select count(*)::int from pg_database where datname like \
         'rowtype_test_%'")
 
+exception Raised
+
+(* A case that makes its own copy a template, which DROP DATABASE refuses:
+   a copy left behind, and the name it was left under. *)
+let undroppable ~sw env conninfo =
+  let db =
+    fine
+      (Pg.connect ~sw ~net:(Eio.Stdenv.net env)
+         ~mono_clock:(Eio.Stdenv.mono_clock env)
+         conninfo)
+  in
+  Fun.protect
+    ~finally:(fun () -> Pg.close db)
+    (fun () ->
+      let name =
+        fine
+          (Pg.run db
+             (Rowtype.find ~params:Rowtype.unit ~row:Rowtype.text
+                "select current_database()")
+             ())
+      in
+      fine (Pg.exec_raw db ("alter database " ^ name ^ " is_template true"));
+      name)
+
+let remove ~sw env server name =
+  List.iter
+    (exec ~sw env (T.conninfo server))
+    [ "alter database " ^ name ^ " is_template false"; "drop database " ^ name ]
+
+(* What the run's cleanup could not remove is said: a copy left behind is
+   the case's failure, where the case answered. *)
+let test_a_copy_left_is_a_failure () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  let template = ok (T.template server) in
+  let named = ref "" in
+  (match
+     T.database template (fun conninfo -> named := undroppable ~sw env conninfo)
+   with
+  | Error _ -> ()
+  | Ok () -> Alcotest.fail "a copy left behind was not said");
+  remove ~sw env server !named
+
+(* Where the case raised, its exception passes, and the copy left is a
+   warning on rowtype-test, naming it. *)
+let test_a_copy_left_by_a_raise_is_a_warning () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  let template = ok (T.template server) in
+  let warned = ref [] in
+  let reporter =
+    {
+      Logs.report =
+        (fun src level ~over k msgf ->
+          msgf (fun ?header:_ ?tags:_ fmt ->
+              Format.kasprintf
+                (fun line ->
+                  (match level with
+                  | Logs.Warning
+                    when String.equal (Logs.Src.name src) "rowtype-test" ->
+                      warned := line :: !warned
+                  | _ -> ());
+                  over ();
+                  k ())
+                fmt));
+    }
+  in
+  let before = Logs.reporter () in
+  Logs.set_reporter reporter;
+  let named = ref "" in
+  Fun.protect
+    ~finally:(fun () -> Logs.set_reporter before)
+    (fun () ->
+      match
+        T.database template (fun conninfo ->
+            named := undroppable ~sw env conninfo;
+            raise Raised)
+      with
+      | exception Raised -> ()
+      | Ok () | Error _ -> Alcotest.fail "the case's raise was lost");
+  remove ~sw env server !named;
+  Alcotest.(check bool)
+    "a warning names the copy" true
+    (List.exists (String.includes ~affix:!named) !warned)
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
@@ -227,6 +314,10 @@ let () =
             test_a_case_s_database_is_dropped;
           Alcotest.test_case "a cancelled case's database is dropped" `Slow
             test_a_cancelled_case_s_database_is_dropped;
+          Alcotest.test_case "a copy left is a failure" `Slow
+            test_a_copy_left_is_a_failure;
+          Alcotest.test_case "a copy left by a raise is a warning" `Slow
+            test_a_copy_left_by_a_raise_is_a_warning;
           Alcotest.test_case "a handed server starts nothing" `Slow
             test_a_handed_server_starts_nothing;
           Alcotest.test_case "a copy is the setup's" `Slow
