@@ -28,16 +28,20 @@ let () =
       let code =
         Eio_main.run @@ fun env ->
         Eio.Switch.run @@ fun sw ->
-        (* A server handed already is the run's: nothing is started. *)
-        match
-          Rowtype_test.server ~sw ?url:(Sys.getenv_opt variable) ~runtime env
-        with
+        (* A server handed already is the run's: nothing is started, and
+           it is handed on as it came. *)
+        let handed = Sys.getenv_opt variable in
+        match Rowtype_test.server ~sw ?url:handed ~runtime env with
         | Error e ->
             prerr_endline ("rowtype-test: " ^ Rowtype_test.error_to_string e);
             2
         | Ok server -> (
             let url =
-              Rowtype_postgres.Conninfo.to_url (Rowtype_test.conninfo server)
+              match handed with
+              | Some url -> url
+              | None ->
+                  Rowtype_postgres.Conninfo.to_url
+                    (Rowtype_test.conninfo server)
             in
             let environment =
               Array.append
@@ -55,7 +59,9 @@ let () =
                    ~env:environment command)
             with
             | `Exited code -> code
-            | `Signaled signal -> 128 + abs signal
+            (* Eio names a signal by OCaml's number; a shell's status is
+               the system's. *)
+            | `Signaled signal -> 128 + Sys.signal_to_int signal
             | exception Eio.Io (e, _) ->
                 prerr_endline
                   (Format.asprintf "rowtype-test: %a" Eio.Exn.pp_err e);

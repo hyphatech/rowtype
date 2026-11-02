@@ -129,6 +129,13 @@
  (enabled_if %{lib-available:rowtype-migrate.sqlite})
  (deps %{bin:rowtype-migrate}))
 
+; rowtype-test's command, where it starts nothing.
+
+(cram
+ (applies_to command_test)
+ (package rowtype-test)
+ (deps %{bin:rowtype-test}))
+
 ; rowtype-test, against a real runtime: the containers it starts and
 ; removes, and the databases it makes and drops.
 

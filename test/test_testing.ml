@@ -308,6 +308,78 @@ let test_a_missing_runtime_is_named () =
   | Error e -> Alcotest.fail ("another failure: " ^ T.error_to_string e)
   | Ok _ -> Alcotest.fail "a server without its runtime"
 
+(* A url that is no connection string is refused before anything starts. *)
+let test_an_unreadable_url_is_refused () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  match T.server ~sw ~runtime ~url:"not a connection string" env with
+  | Error (`Unreadable _) -> ()
+  | Error e -> Alcotest.fail ("another failure: " ^ T.error_to_string e)
+  | Ok _ -> Alcotest.fail "a server from no connection string"
+
+(* A connection a setup or a case leaves open keeps nothing: the template
+   is still copied, and the copy still dropped. *)
+let test_connections_left_open_hold_nothing () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw ~runtime env) in
+  let leave_open conninfo =
+    ignore
+      (fine
+         (Pg.connect ~sw ~net:(Eio.Stdenv.net env)
+            ~mono_clock:(Eio.Stdenv.mono_clock env)
+            conninfo)
+        : Pg.conn)
+  in
+  let template =
+    ok
+      (T.template server ~setup:(fun conninfo ->
+           leave_open conninfo;
+           Ok ()))
+  in
+  fine (T.database template leave_open);
+  Alcotest.(check int)
+    "no database left, though the case left a connection" 0
+    (count ~sw env (T.conninfo server)
+       "select count(*)::int from pg_database where datname like \
+        'rowtype_test_%'")
+
+exception Failed
+
+(* A run whose switch fails leaves nothing: its container is removed, and
+   on a server handed, its template dropped. *)
+let test_a_failed_run_leaves_nothing () =
+  Eio_main.run @@ fun env ->
+  let name = ref "" in
+  (match
+     Eio.Switch.run (fun sw ->
+         let server = ok (T.server ~sw ~runtime env) in
+         (match T.container server with
+         | Some (_, n) -> name := n
+         | None -> Alcotest.fail "no container was started");
+         ignore (ok (T.template server) : T.template);
+         raise Failed)
+   with
+  | () -> Alcotest.fail "the run's failure was lost"
+  | exception Failed -> ());
+  Alcotest.(check bool) "its container is gone" false (exists env !name);
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw ~runtime env) in
+  let url = Pg.Conninfo.to_url (T.conninfo server) in
+  (match
+     Eio.Switch.run (fun inner ->
+         let handed = ok (T.server ~sw:inner ~runtime ~url env) in
+         ignore (ok (T.template handed) : T.template);
+         raise Failed)
+   with
+  | () -> Alcotest.fail "the run's failure was lost"
+  | exception Failed -> ());
+  Alcotest.(check int)
+    "and on a server handed, its template" 0
+    (count ~sw env (T.conninfo server)
+       "select count(*)::int from pg_database where datname like \
+        'rowtype_template_%'")
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
@@ -376,6 +448,12 @@ let () =
             test_a_setup_s_failure_is_its_own;
           Alcotest.test_case "a missing runtime is named" `Quick
             test_a_missing_runtime_is_named;
+          Alcotest.test_case "an unreadable url is refused" `Quick
+            test_an_unreadable_url_is_refused;
+          Alcotest.test_case "connections left open hold nothing" `Slow
+            test_connections_left_open_hold_nothing;
+          Alcotest.test_case "a failed run leaves nothing" `Slow
+            test_a_failed_run_leaves_nothing;
           Alcotest.test_case "a template goes with the run" `Slow
             test_a_template_goes_with_the_run;
           Alcotest.test_case "a killed run's container is removed" `Slow

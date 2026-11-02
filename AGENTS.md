@@ -87,6 +87,8 @@ test/
   command.t          the command, where it needs no database or dialect;
                      command_postgres.t and command_sqlite.t each
                      dialect's, where that dialect is built
+  command_test.t     rowtype-test run, where it starts nothing: its usage,
+                     the server it hands on, and its status
   test_docs          every .ml file in examples/ is imported by a page
   test_testing       rowtype-test against a real Podman or Docker: its containers
                      started, removed and reaped, its databases dropped

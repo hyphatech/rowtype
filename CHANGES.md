@@ -27,6 +27,9 @@
   `Rowtype_test.container` carry the runtime with what they said before.
 - A runtime that is not on `PATH` is named, with what to do, where its
   failure was empty.
+- `rowtype-test run` exits as a shell does when its command is killed by a
+  signal, 143 for `SIGTERM`, where it gave OCaml's number and so another
+  signal's status; and it hands on `TEST_DATABASE_URL` as it was handed.
 
 ## 0.9.1 (2026-11-01)
 
