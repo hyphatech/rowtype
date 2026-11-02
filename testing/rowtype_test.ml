@@ -246,12 +246,14 @@ let database t f =
          (Printf.sprintf "create database %s template %s" name t.name))
   in
   (* Dropped with (force), so a connection the case left open does not keep
-     it, and whatever the case did. *)
+     it, and whatever the case did; protected, since a cancelled case may not
+     connect to drop it. *)
   let drop () =
-    ignore
-      (admin t.server
-         (Printf.sprintf "drop database if exists %s with (force)" name)
-        : (unit, Rowtype.error) result)
+    Eio.Cancel.protect (fun () ->
+        ignore
+          (admin t.server
+             (Printf.sprintf "drop database if exists %s with (force)" name)
+            : (unit, Rowtype.error) result))
   in
   Ok
     (Fun.protect ~finally:drop (fun () ->

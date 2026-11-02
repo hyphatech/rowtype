@@ -8,6 +8,9 @@
   documentation says.
 - `rowtype-test` installs without its tests: its command links
   `eio_main`, which the package asked for only with them.
+- `Rowtype_test.database` drops a case's copy when the case's fiber is
+  cancelled, and lets the cancellation pass as itself, where the copy stayed
+  and the cancellation came out as `Fun.Finally_raised`.
 
 ## 0.9.1 (2026-11-01)
 

@@ -142,6 +142,35 @@ let test_a_copy_is_the_setup_s () =
   Alcotest.(check int) "the seeded row, in the first copy" 1 (rows ());
   Alcotest.(check int) "and only it in the next" 1 (rows ())
 
+(* A case cancelled inside its database -- a time limit, a sibling that
+   failed -- leaves no database, and its cancellation passes as itself. *)
+let test_a_cancelled_case_s_database_is_dropped () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  let template = ok (T.template server) in
+  let entered, enter = Eio.Promise.create () in
+  (match
+     Eio.Fiber.first
+       (fun () ->
+         match
+           T.database template (fun _ ->
+               Eio.Promise.resolve enter ();
+               Eio.Fiber.await_cancel ())
+         with
+         | Ok () | Error _ -> `Case)
+       (fun () ->
+         Eio.Promise.await entered;
+         `Limit)
+   with
+  | `Limit -> ()
+  | `Case -> Alcotest.fail "the case outlived its cancellation");
+  Alcotest.(check int)
+    "no database left, though the case was cancelled" 0
+    (count ~sw env (T.conninfo server)
+       "select count(*)::int from pg_database where datname like \
+        'rowtype_test_%'")
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
@@ -196,6 +225,8 @@ let () =
             test_a_run_owns_its_server;
           Alcotest.test_case "a case's database is dropped" `Slow
             test_a_case_s_database_is_dropped;
+          Alcotest.test_case "a cancelled case's database is dropped" `Slow
+            test_a_cancelled_case_s_database_is_dropped;
           Alcotest.test_case "a handed server starts nothing" `Slow
             test_a_handed_server_starts_nothing;
           Alcotest.test_case "a copy is the setup's" `Slow

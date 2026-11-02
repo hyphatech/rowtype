@@ -79,5 +79,5 @@ val database :
   ('a, [> Rowtype.error ]) result
 (** [database template f] is [f] over a copy of [template] of its own --
     [CREATE DATABASE ... TEMPLATE], tens of milliseconds -- dropped after, even
-    where [f] raises, and dropped with [(force)], so a connection [f] left open
-    does not keep it. *)
+    where [f] raises or its fiber is cancelled, and dropped with [(force)], so a
+    connection [f] left open does not keep it. *)
