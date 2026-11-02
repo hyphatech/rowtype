@@ -56,8 +56,11 @@ let server () =
 let pg_dump () =
   let _, _, server, _ = io () in
   Option.map
-    (fun name ->
-      Printf.sprintf "podman exec %s pg_dump -U test -d {database}" name)
+    (fun (runtime, name) ->
+      let binary =
+        match runtime with `Podman -> "podman" | `Docker -> "docker"
+      in
+      Printf.sprintf "%s exec %s pg_dump -U test -d {database}" binary name)
     (Rowtype_test.container server)
 
 let conninfo url =

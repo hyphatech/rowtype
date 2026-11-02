@@ -11,17 +11,19 @@ user-visible change updates.
 
 ```sh
 make setup   # once: the switch hypha-rowtype, all dependencies
-make test    # starts the test Postgres in Podman, runs every test
+make test    # starts the test Postgres in Podman, runs every test;
+             # RUNTIME=docker for Docker
 make lint    # formatting, odoc, and the release build
 make fmt     # format in place
 make docs    # the documentation site into _build/docs, as Pages publishes it
 make docs-serve  # the built site, served locally, search included
 ```
 
-`make test` needs Podman, and `make docs` Bun. It runs every suite under
-`rowtype-test run`, one Postgres for the whole run, removed at its end;
-each suite on Postgres makes a template and a copy per case in it, and
-`test_sqlite` needs none. CI runs `make lint` and `make test` on OCaml 5.5, and
+`make test` needs Podman, or Docker with `RUNTIME=docker`, and `make docs`
+Bun. It runs every suite under `rowtype-test run`, one Postgres for the
+whole run, removed at its end; each suite on Postgres makes a template and
+a copy per case in it, and `test_sqlite` needs none. CI runs `make lint`
+and `make test` on OCaml 5.5, and `make test` again in Docker, and
 `docs.yml` publishes the site to GitHub Pages on every push to `main`.
 
 ## Layout
@@ -86,7 +88,7 @@ test/
                      command_postgres.t and command_sqlite.t each
                      dialect's, where that dialect is built
   test_docs          every .ml file in examples/ is imported by a page
-  test_testing       rowtype-test against the real Podman: its containers
+  test_testing       rowtype-test against a real Podman or Docker: its containers
                      started, removed and reaped, its databases dropped
   db_target/         where a suite's database comes from, through
                      rowtype-test: a library, so it reads no variable

@@ -1,23 +1,41 @@
-(* rowtype-test against the real Podman: a run's own server, a database of
-   a case's own in it, a server handed by its URL, and the containers a
-   killed run left removed by the next. *)
+(* rowtype-test against a real container runtime: a run's own server, a
+   database of a case's own in it, a server handed by its URL, and the
+   containers a killed run left removed by the next. *)
 
 module Pg = Rowtype_postgres
 module T = Rowtype_test
 
-let podman env args =
+(* The runtime the cases start their containers in, Podman unless
+   ROWTYPE_TEST_RUNTIME names Docker, as CI's Docker job does. *)
+let runtime =
+  match Sys.getenv_opt "ROWTYPE_TEST_RUNTIME" with
+  | None | Some "podman" -> `Podman
+  | Some "docker" -> `Docker
+  | Some other ->
+      prerr_endline ("ROWTYPE_TEST_RUNTIME is podman or docker, not " ^ other);
+      exit 2
+
+let binary = match runtime with `Podman -> "podman" | `Docker -> "docker"
+
+let is_ours = function
+  | `Podman -> ( match runtime with `Podman -> true | `Docker -> false)
+  | `Docker -> ( match runtime with `Docker -> true | `Podman -> false)
+
+let cli env args =
   let out = Buffer.create 256 in
   match
     Eio.Process.run
       (Eio.Stdenv.process_mgr env)
       ~stdout:(Eio.Flow.buffer_sink out)
       ~stderr:(Eio.Flow.buffer_sink (Buffer.create 64))
-      ("podman" :: args)
+      (binary :: args)
   with
   | () -> Ok (String.trim (Buffer.contents out))
   | exception Eio.Io _ -> Error ()
 
-let exists env name = Result.is_ok (podman env [ "container"; "exists"; name ])
+let exists env name =
+  Result.is_ok (cli env [ "container"; "inspect"; "--format"; "{{.Id}}"; name ])
+
 let ok = function Ok v -> v | Error e -> Alcotest.fail (T.error_to_string e)
 
 let fine = function
@@ -39,10 +57,11 @@ let test_a_run_owns_its_server () =
   Eio_main.run @@ fun env ->
   let name =
     Eio.Switch.run @@ fun sw ->
-    let server = ok (T.server ~sw env) in
+    let server = ok (T.server ~sw ~runtime env) in
     let name =
       match T.container server with
-      | Some n -> n
+      | Some (r, n) when is_ours r -> n
+      | Some _ -> Alcotest.fail "started in another runtime"
       | None -> Alcotest.fail "no container was started"
     in
     Alcotest.(check bool) "its container runs" true (exists env name);
@@ -59,7 +78,7 @@ let test_a_run_owns_its_server () =
 let test_a_case_s_database_is_dropped () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let template = ok (T.template server) in
   let named = ref "" in
   (match
@@ -89,18 +108,17 @@ let test_a_case_s_database_is_dropped () =
 let test_a_handed_server_starts_nothing () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let own = ok (T.server ~sw env) in
-  let before =
-    podman env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ]
-  in
+  let own = ok (T.server ~sw ~runtime env) in
+  let before = cli env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ] in
   let handed =
-    ok (T.server ~sw ~url:(Pg.Conninfo.to_url (T.conninfo own)) env)
+    ok (T.server ~sw ~runtime ~url:(Pg.Conninfo.to_url (T.conninfo own)) env)
   in
   Alcotest.(check (option string))
-    "no container of its own" None (T.container handed);
+    "no container of its own" None
+    (Option.map snd (T.container handed));
   Alcotest.(check bool)
     "no container started" true
-    (before = podman env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ]);
+    (before = cli env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ]);
   let template = ok (T.template handed) in
   fine (T.database template (fun conninfo -> exec ~sw env conninfo "select 1"))
 
@@ -122,7 +140,7 @@ let count ~sw env conninfo sql =
 let test_a_copy_is_the_setup_s () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let template =
     ok
       (T.template server ~setup:(fun conninfo ->
@@ -147,7 +165,7 @@ let test_a_copy_is_the_setup_s () =
 let test_a_cancelled_case_s_database_is_dropped () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let template = ok (T.template server) in
   let entered, enter = Eio.Promise.create () in
   (match
@@ -205,7 +223,7 @@ let remove ~sw env server name =
 let test_a_copy_left_is_a_failure () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let template = ok (T.template server) in
   let named = ref "" in
   (match
@@ -220,7 +238,7 @@ let test_a_copy_left_is_a_failure () =
 let test_a_copy_left_by_a_raise_is_a_warning () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let template = ok (T.template server) in
   let warned = ref [] in
   let reporter =
@@ -264,20 +282,40 @@ let test_a_copy_left_by_a_raise_is_a_warning () =
 let test_a_setup_s_failure_is_its_own () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   match T.template server ~setup:(fun _ -> Error `Seeded_wrong) with
   | Error `Seeded_wrong -> ()
   | Error _ -> Alcotest.fail "the setup's failure came back as another"
   | Ok _ -> Alcotest.fail "a setup that failed made a template"
 
+(* A runtime that is not there is named, with what to do: the binary not
+   on PATH, rather than an empty failure. *)
+let test_a_missing_runtime_is_named () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let path = Sys.getenv_opt "PATH" in
+  Unix.putenv "PATH" "/nonexistent";
+  let answer =
+    Fun.protect
+      ~finally:(fun () -> Unix.putenv "PATH" (Option.value path ~default:""))
+      (fun () -> T.server ~sw ~runtime env)
+  in
+  match answer with
+  | Error (`Runtime (r, why)) when is_ours r ->
+      Alcotest.(check bool)
+        ("names PATH: " ^ why) true
+        (String.includes ~affix:"PATH" why)
+  | Error e -> Alcotest.fail ("another failure: " ^ T.error_to_string e)
+  | Ok _ -> Alcotest.fail "a server without its runtime"
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
-  let server = ok (T.server ~sw env) in
+  let server = ok (T.server ~sw ~runtime env) in
   let url = Pg.Conninfo.to_url (T.conninfo server) in
   Eio.Switch.run (fun inner ->
-      let handed = ok (T.server ~sw:inner ~url env) in
+      let handed = ok (T.server ~sw:inner ~runtime ~url env) in
       ignore (ok (T.template handed) : T.template));
   Alcotest.(check int)
     "no template left" 0
@@ -297,7 +335,7 @@ let test_a_killed_run_s_container_is_removed () =
   Eio_main.run @@ fun env ->
   let left = Printf.sprintf "rowtype-test-left-%d" (Unix.getpid ()) in
   (match
-     podman env
+     cli env
        [
          "run";
          "-d";
@@ -312,7 +350,7 @@ let test_a_killed_run_s_container_is_removed () =
    with
   | Ok _ -> ()
   | Error () -> Alcotest.fail "could not leave a container behind");
-  Eio.Switch.run (fun sw -> ignore (ok (T.server ~sw env) : T.server));
+  Eio.Switch.run (fun sw -> ignore (ok (T.server ~sw ~runtime env) : T.server));
   Alcotest.(check bool) "the next run removed it" false (exists env left)
 
 let () =
@@ -336,6 +374,8 @@ let () =
             test_a_copy_is_the_setup_s;
           Alcotest.test_case "a setup's failure is its own" `Slow
             test_a_setup_s_failure_is_its_own;
+          Alcotest.test_case "a missing runtime is named" `Quick
+            test_a_missing_runtime_is_named;
           Alcotest.test_case "a template goes with the run" `Slow
             test_a_template_goes_with_the_run;
           Alcotest.test_case "a killed run's container is removed" `Slow

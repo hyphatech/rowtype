@@ -129,7 +129,7 @@
  (enabled_if %{lib-available:rowtype-migrate.sqlite})
  (deps %{bin:rowtype-migrate}))
 
-; rowtype-test, against the real Podman: the containers it starts and
+; rowtype-test, against a real runtime: the containers it starts and
 ; removes, and the databases it makes and drops.
 
 (test

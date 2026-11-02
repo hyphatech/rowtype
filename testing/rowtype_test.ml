@@ -1,10 +1,13 @@
 module Pg = Rowtype_postgres
 
+type runtime = [ `Podman | `Docker ]
+
 type error =
-  [ `Runtime of string | `Not_ready of string | `Unreadable of string ]
+  [ `Runtime of runtime * string | `Not_ready of string | `Unreadable of string ]
 
 let error_to_string = function
-  | `Runtime why -> "Podman: " ^ why
+  | `Runtime (`Podman, why) -> "Podman: " ^ why
+  | `Runtime (`Docker, why) -> "Docker: " ^ why
   | `Not_ready why -> "Postgres did not answer: " ^ why
   | `Unreadable why -> "not a connection string: " ^ why
   | #Rowtype.error as e -> Rowtype.error_to_string e
@@ -17,7 +20,7 @@ module Log = (val Logs.src_log src : Logs.LOG)
 
 type server = {
   conninfo : Pg.Conninfo.t;
-  container : string option;
+  container : (runtime * string) option;
   connect : sw:Eio.Switch.t -> Pg.Conninfo.t -> (Pg.conn, Rowtype.error) result;
   sw : Eio.Switch.t;
 }
@@ -37,15 +40,34 @@ let default_image = "docker.io/library/postgres:18-alpine"
 let ready_within = Mtime.Span.(60 * s)
 let between_tries = Mtime.Span.(100 * ms)
 
-let podman mgr args =
+(* Podman's and Docker's command lines take the same arguments for all
+   this library asks of them, so the runtime is its binary alone. *)
+let binary = function `Podman -> "podman" | `Docker -> "docker"
+
+let cli runtime mgr args =
   let out = Buffer.create 256 and err = Buffer.create 256 in
   match
     Eio.Process.run mgr ~stdout:(Eio.Flow.buffer_sink out)
-      ~stderr:(Eio.Flow.buffer_sink err) ("podman" :: args)
+      ~stderr:(Eio.Flow.buffer_sink err) (binary runtime :: args)
   with
   | () -> Ok (String.trim (Buffer.contents out))
-  | exception Eio.Io _ ->
-      Error (`Runtime (String.trim (Buffer.contents err ^ Buffer.contents out)))
+  | exception Eio.Io (Eio.Process.E (Child_error _), _) ->
+      Error
+        (`Runtime
+           (runtime, String.trim (Buffer.contents err ^ Buffer.contents out)))
+  | exception Eio.Io (Eio.Process.E (Executable_not_found _), _) ->
+      Error
+        (`Runtime
+           ( runtime,
+             Printf.sprintf "%s is not on PATH: install it, or use %s"
+               (binary runtime)
+               (match runtime with `Podman -> "Docker" | `Docker -> "Podman") ))
+  | exception (Eio.Io _ as ex) ->
+      Error
+        (`Runtime
+           ( runtime,
+             Format.asprintf "%s could not be run: %a" (binary runtime)
+               Eio.Exn.pp ex ))
 
 let alive pid =
   match Unix.kill pid 0 with
@@ -56,14 +78,14 @@ let alive pid =
 (* The next run is the reaper: what a run that ended left, it removes. A
    label is read by [inspect], whose template is the same in every Podman;
    [ps]'s changed between versions. *)
-let remove_left mgr =
-  match podman mgr [ "ps"; "-a"; "-q"; "--filter"; "label=" ^ label ] with
+let remove_left runtime mgr =
+  match cli runtime mgr [ "ps"; "-a"; "-q"; "--filter"; "label=" ^ label ] with
   | Error _ -> ()
   | Ok listing ->
       List.iter
         (fun id ->
           match
-            podman mgr
+            cli runtime mgr
               [
                 "inspect";
                 "--format";
@@ -74,7 +96,7 @@ let remove_left mgr =
           | Ok pid -> (
               match int_of_string_opt pid with
               | Some pid when not (alive pid) -> (
-                  match podman mgr [ "rm"; "-f"; "-v"; id ] with
+                  match cli runtime mgr [ "rm"; "-f"; "-v"; id ] with
                   | Ok _ -> ()
                   | Error e ->
                       Log.warn (fun m ->
@@ -87,7 +109,7 @@ let remove_left mgr =
            (String.split_on_char '\n' listing))
 
 let port_of listing =
-  (* [podman port] answers "127.0.0.1:41234", or one line a family. *)
+  (* [port] answers "127.0.0.1:41234", or one line a family. *)
   match String.split_on_char '\n' listing with
   | first :: _ -> (
       match String.rindex_opt first ':' with
@@ -109,15 +131,15 @@ let rec until_ready ~clock ~deadline connect conninfo =
         Eio.Time.Mono.sleep_span clock between_tries;
         until_ready ~clock ~deadline connect conninfo)
 
-let started ~sw ~image ~clock mgr connect =
+let started ~sw ~runtime ~image ~clock mgr connect =
   let ( let* ) = Result.bind in
-  remove_left mgr;
+  remove_left runtime mgr;
   let name =
     Printf.sprintf "rowtype-test-%d-%d" (Unix.getpid ())
       (Random.State.bits (Random.State.make_self_init ()))
   in
   let* _ =
-    podman mgr
+    cli runtime mgr
       [
         "run";
         "-d";
@@ -151,16 +173,16 @@ let started ~sw ~image ~clock mgr connect =
      this matters most. *)
   Eio.Switch.on_release sw (fun () ->
       Eio.Cancel.protect (fun () ->
-          match podman mgr [ "rm"; "-f"; "-v"; name ] with
+          match cli runtime mgr [ "rm"; "-f"; "-v"; name ] with
           | Ok _ -> ()
           | Error e ->
               Log.warn (fun m ->
                   m "the run's container, %s, stays: %s" name
                     (error_to_string e))));
-  let* listing = podman mgr [ "port"; name; "5432" ] in
+  let* listing = cli runtime mgr [ "port"; name; "5432" ] in
   let* port =
     Option.to_result
-      ~none:(`Runtime ("no port in " ^ listing))
+      ~none:(`Runtime (runtime, "no port in " ^ listing))
       (port_of listing)
   in
   let* conninfo =
@@ -174,9 +196,9 @@ let started ~sw ~image ~clock mgr connect =
       (Mtime.add_span (Eio.Time.Mono.now clock) ready_within)
   in
   let* () = until_ready ~clock ~deadline connect conninfo in
-  Ok { conninfo; container = Some name; connect; sw }
+  Ok { conninfo; container = Some (runtime, name); connect; sw }
 
-let server ~sw ?url ?(image = default_image) env =
+let server ~sw ?url ?(runtime = `Podman) ?(image = default_image) env =
   let mgr = Eio.Stdenv.process_mgr env and clock = Eio.Stdenv.mono_clock env in
   (* Each connection on a switch of its own, opened and closed by its use:
      one made as the run's switch ends, to drop what it made, must not be
@@ -190,7 +212,8 @@ let server ~sw ?url ?(image = default_image) env =
       | Ok conninfo -> Ok { conninfo; container = None; connect; sw }
       | Error m -> Error (`Unreadable m))
   | None ->
-      (started ~sw ~image ~clock mgr connect :> (server, [> error ]) result)
+      (started ~sw ~runtime ~image ~clock mgr connect
+        :> (server, [> error ]) result)
 
 (* A database per asking, templates and copies alike: the process and a
    counter name it, since the suites of one run share a server and run at

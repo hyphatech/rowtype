@@ -1,5 +1,5 @@
 ; rowtype-test: a Postgres database a test run owns, in a server it is
-; handed or one it starts in Podman and removes.
+; handed or one it starts in Podman or Docker and removes.
 
 (library
  (name rowtype_test)

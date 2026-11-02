@@ -5,19 +5,33 @@
    it, so a run starts one container, not one a suite. A run killed while
    its container ran leaves it to the next run, which removes it. *)
 
-let usage = "usage: rowtype-test run -- COMMAND [ARGUMENT...]"
+let usage =
+  "usage: rowtype-test run [--runtime podman|docker] -- COMMAND [ARGUMENT...]"
+
 let variable = "TEST_DATABASE_URL"
 
+(* The runtime is named or Podman's, and a word but these two is the
+   usage, not a binary looked for. *)
+let parse = function
+  | "run" :: "--" :: (_ :: _ as command)
+  | "run" :: "--runtime" :: "podman" :: "--" :: (_ :: _ as command) ->
+      Some (`Podman, command)
+  | "run" :: "--runtime" :: "docker" :: "--" :: (_ :: _ as command) ->
+      Some (`Docker, command)
+  | _ -> None
+
 let () =
-  match Array.to_list Sys.argv with
-  | _ :: "run" :: "--" :: (_ :: _ as command) ->
+  match parse (List.drop 1 (Array.to_list Sys.argv)) with
+  | Some (runtime, command) ->
       (* The container this run could not remove is said on stderr. *)
       Logs.set_reporter (Logs.format_reporter ());
       let code =
         Eio_main.run @@ fun env ->
         Eio.Switch.run @@ fun sw ->
         (* A server handed already is the run's: nothing is started. *)
-        match Rowtype_test.server ~sw ?url:(Sys.getenv_opt variable) env with
+        match
+          Rowtype_test.server ~sw ?url:(Sys.getenv_opt variable) ~runtime env
+        with
         | Error e ->
             prerr_endline ("rowtype-test: " ^ Rowtype_test.error_to_string e);
             2
@@ -48,6 +62,6 @@ let () =
                 127)
       in
       exit code
-  | _ ->
+  | None ->
       prerr_endline usage;
       exit 2

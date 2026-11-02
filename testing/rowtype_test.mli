@@ -15,11 +15,11 @@
 
     Handed a server's [url], it starts nothing, which is how a test runs where
     there is no container runtime -- inside HAF's walled gates, which hand one.
-    Handed none, it starts Postgres in Podman, by its command line: its data in
-    memory, its durability off, on a port the system chooses, labelled with the
-    process that started it; and it removes the container when [sw] ends. A
-    container a run left when it was killed is removed by the next run's
-    {!val-server}, so the next run is the reaper.
+    Handed none, it starts Postgres in Podman or Docker, by its command line:
+    its data in memory, its durability off, on a port the system chooses,
+    labelled with the process that started it; and it removes the container when
+    [sw] ends. A container a run left when it was killed is removed by the next
+    run's {!val-server}, so the next run is the reaper.
 
     What a cleanup could not remove, where no caller is left to answer -- a
     container, a template, a case's database its case raised past -- is a
@@ -28,9 +28,14 @@
 type server
 (** A Postgres server a run makes its databases in. *)
 
+type runtime = [ `Podman | `Docker ]
+(** The container runtime a server is started in, by its command line: [podman]
+    or [docker]. *)
+
 type error =
-  [ `Runtime of string
-    (** Podman could not start, read or remove the container, in its words *)
+  [ `Runtime of runtime * string
+    (** the runtime could not be run, or could not start, read or remove the
+        container, in its words *)
   | `Not_ready of string
     (** Postgres did not answer within a minute, saying the last failure *)
   | `Unreadable of string  (** the [url] handed is no connection string *) ]
@@ -42,6 +47,7 @@ val error_to_string : [< error | Rowtype.error ] -> string
 val server :
   sw:Eio.Switch.t ->
   ?url:string ->
+  ?runtime:runtime ->
   ?image:string ->
   < process_mgr : _ Eio.Process.mgr
   ; net : _ Eio.Net.t
@@ -49,17 +55,18 @@ val server :
   ; .. > ->
   (server, [> error ]) result
 (** The server at [url], or a container of [image] -- Postgres 18 on Alpine
-    unless given -- started, waited on until it answers, and removed when [sw]
-    ends. Before it starts one, every container a run of this library started
-    whose process has ended is removed. *)
+    unless given -- started in [runtime] -- Podman unless given -- waited on
+    until it answers, and removed when [sw] ends. Before it starts one, every
+    container a run of this library started whose process has ended is removed.
+*)
 
 val conninfo : server -> Rowtype_postgres.Conninfo.t
 (** The server's own database, to connect to as its owner. *)
 
-val container : server -> string option
-(** The container's name, where it was started here: for a command run in it,
-    [pg_dump] say, as its owner, the user [test]. [None] for a server handed by
-    [url]. *)
+val container : server -> (runtime * string) option
+(** The runtime and the container's name, where it was started here: for a
+    command run in it, [pg_dump] say, as its owner, the user [test]. [None] for
+    a server handed by [url]. *)
 
 type template
 (** A database a suite's setup made once -- its migrations run, say -- that each

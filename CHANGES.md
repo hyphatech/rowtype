@@ -21,6 +21,12 @@
   `Rowtype_migrate_postgres.run`'s work does: a migration's error comes back
   as itself, where it had to be turned into a string. `` `Setup `` is gone,
   since the setup's own tags say what failed.
+- `rowtype-test` starts Postgres in Docker as it does in Podman:
+  ``Rowtype_test.server ~runtime:`Docker``, and `rowtype-test run --runtime
+  docker`. Podman stays the default. Breaking: `` `Runtime `` and
+  `Rowtype_test.container` carry the runtime with what they said before.
+- A runtime that is not on `PATH` is named, with what to do, where its
+  failure was empty.
 
 ## 0.9.1 (2026-11-01)
 

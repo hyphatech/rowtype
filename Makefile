@@ -2,6 +2,8 @@ SWITCH ?= hypha-rowtype
 OPAM = opam exec --switch=$(SWITCH) --
 
 DOCS_PORT ?= 4321
+# The container runtime the tests start Postgres in: podman or docker.
+RUNTIME ?= podman
 # The reference is odoc's, for rowtype's own packages and nothing under them.
 REFERENCE = rowtype rowtype-postgres rowtype-sqlite rowtype-migrate odoc.support
 
@@ -13,7 +15,7 @@ help: ## list targets
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
 setup: ## create the switch and install dependencies
-	@podman --version >/dev/null 2>&1 || echo "The tests need Podman."
+	@$(RUNTIME) --version >/dev/null 2>&1 || echo "The tests need $(RUNTIME), or RUNTIME=docker for Docker."
 	@command -v bun >/dev/null 2>&1 || echo "The documentation site needs Bun 1.3 or later."
 	@opam switch list --short | grep -qx $(SWITCH) || opam switch create $(SWITCH) --empty -y
 	opam repo add hypha https://github.com/hyphatech/opam-repository.git --switch=$(SWITCH) --rank=1
@@ -22,12 +24,14 @@ setup: ## create the switch and install dependencies
 build: ## build everything
 	$(OPAM) dune build @all
 
-# One Postgres for the whole run, in Podman, removed as the run ends
+# One Postgres for the whole run, in $(RUNTIME), removed as the run ends
 # whatever its result: rowtype-test hands it to every suite as
-# TEST_DATABASE_URL, and each makes its databases in it.
+# TEST_DATABASE_URL, and each makes its databases in it. rowtype-test's own
+# suite starts its containers in the same runtime.
 test: ## run the tests
 	$(OPAM) dune build testing/bin/main.exe
-	$(OPAM) ./_build/default/testing/bin/main.exe run -- $(OPAM) dune test --force
+	ROWTYPE_TEST_RUNTIME=$(RUNTIME) $(OPAM) ./_build/default/testing/bin/main.exe \
+	  run --runtime $(RUNTIME) -- $(OPAM) dune test --force
 
 # Release is the profile opam installs with.
 lint: ## check formatting, docs and the release build
