@@ -51,7 +51,7 @@ let mono () = Eio.Stdenv.mono_clock (env ())
 
 let server () =
   let _, _, server, _ = io () in
-  Rowtype_postgres.Conninfo.to_url (Rowtype_test.conninfo server)
+  Rowtype_test.conninfo server
 
 let pg_dump () =
   let _, _, server, _ = io () in
@@ -69,8 +69,7 @@ let conninfo url =
   | Error m -> Alcotest.failf "%s: %s" variable m
 
 (* The server the suite was given, naming another database. *)
-let on_database name =
-  Rowtype_postgres.Conninfo.with_database (conninfo (server ())) name
+let on_database name = Rowtype_postgres.Conninfo.with_database (server ()) name
 
 (* [statement_cache:0] is a connection that keeps no statements, whose
    results all arrive as text: the other way every cell is read. *)
@@ -83,7 +82,7 @@ let connect ?statement_cache target =
   | Error e -> Alcotest.failf "cannot connect: %s" (Rowtype.error_to_string e)
 
 let admin f =
-  let db = connect (conninfo (server ())) in
+  let db = connect (server ()) in
   Fun.protect ~finally:(fun () -> Rowtype_postgres.close db) (fun () -> f db)
 
 let exec db sql =
