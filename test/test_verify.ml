@@ -78,9 +78,9 @@ let setup =
     ^ ")";
   ]
 
-let test_every_scalar_against_every_type () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_every_scalar_against_every_type suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -149,9 +149,9 @@ let values =
 
 (* What [verify] says is what a read does: a pair it accepts reads, and a
    pair it refuses is refused, in binary and in text alike. *)
-let test_a_read_agrees_with_the_check () =
-  Db_target.with_postgres (fun target ->
-      let setup_db = Db_target.connect target in
+let test_a_read_agrees_with_the_check suite () =
+  Db_target.with_postgres suite (fun target ->
+      let setup_db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close setup_db)
         (fun () ->
@@ -160,7 +160,7 @@ let test_a_read_agrees_with_the_check () =
             (Pg.exec_raw setup_db
                ("insert into m values (" ^ String.concat ", " values ^ ")")));
       let reads_in format statement_cache =
-        let db = Db_target.connect ?statement_cache target in
+        let db = Db_target.connect suite ?statement_cache target in
         Fun.protect
           ~finally:(fun () -> Pg.close db)
           (fun () ->
@@ -202,9 +202,9 @@ let test_a_read_agrees_with_the_check () =
 (* A type no scalar reads is written as text cast twice, as the README
    says: [$1::numeric] alone types the parameter numeric, which a text is
    not, and [$1::text::numeric] types it text. *)
-let test_a_type_no_scalar_reads_is_written_as_text () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_type_no_scalar_reads_is_written_as_text suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -251,16 +251,21 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "verify"
-    [
-      ( "types",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "verify"
         [
-          Alcotest.test_case "every scalar against every type" `Quick
-            test_every_scalar_against_every_type;
-          Alcotest.test_case "a read agrees with the check" `Quick
-            test_a_read_agrees_with_the_check;
-          Alcotest.test_case "a type no scalar reads is written as text" `Quick
-            test_a_type_no_scalar_reads_is_written_as_text;
-        ] );
-    ]
+          ( "types",
+            [
+              Alcotest.test_case "every scalar against every type" `Quick
+                (test_every_scalar_against_every_type suite);
+              Alcotest.test_case "a read agrees with the check" `Quick
+                (test_a_read_agrees_with_the_check suite);
+              Alcotest.test_case "a type no scalar reads is written as text"
+                `Quick
+                (test_a_type_no_scalar_reads_is_written_as_text suite);
+            ] );
+        ]

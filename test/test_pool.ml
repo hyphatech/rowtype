@@ -9,11 +9,11 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
-let with_pool ?(size = 4) ?wait target f =
+let with_pool suite ?(size = 4) ?wait target f =
   let pool =
     ok
-      (Pg.Pool.create ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ~size ?wait target)
+      (Pg.Pool.create ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+         ~mono_clock:(Db_target.mono suite) ~size ?wait target)
   in
   Fun.protect ~finally:(fun () -> Pg.Pool.close pool) (fun () -> f pool)
 
@@ -26,9 +26,9 @@ let echo = S.find ~params:S.int ~row:S.int "select $1::int"
 
 (* More fibers than connections, each asking its own question many times:
    every answer is the asker's, and every connection comes back. *)
-let test_more_fibers_than_connections () =
-  Db_target.with_postgres (fun target ->
-      with_pool ~size:4 target (fun pool ->
+let test_more_fibers_than_connections suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_pool suite ~size:4 target (fun pool ->
           let fibers = 32 and each = 20 in
           let answered = Atomic.make 0 in
           Eio.Fiber.all
@@ -48,9 +48,9 @@ let test_more_fibers_than_connections () =
 (* A transaction in a borrowed connection answers the pool's failures, the
    transaction's and its statements' in one result, which one printer
    tells. *)
-let test_a_pooled_transaction_is_one_result () =
-  Db_target.with_postgres (fun target ->
-      with_pool ~size:1 target (fun pool ->
+let test_a_pooled_transaction_is_one_result suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_pool suite ~size:1 target (fun pool ->
           let echoed () : (int, Pg.error) result =
             Result.join
               (Pg.Pool.use pool (fun db ->
@@ -69,9 +69,9 @@ let test_a_pooled_transaction_is_one_result () =
 
 (* What one borrower leaves in its session -- a setting, a temporary table
    -- the next borrower of the same connection does not see. *)
-let test_a_borrower_leaves_nothing_behind () =
-  Db_target.with_postgres (fun target ->
-      with_pool ~size:1 target (fun pool ->
+let test_a_borrower_leaves_nothing_behind suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_pool suite ~size:1 target (fun pool ->
           let setting =
             S.find ~params:S.unit ~row:S.text "show application_name"
           in
@@ -93,9 +93,9 @@ let test_a_borrower_leaves_nothing_behind () =
 
 (* A borrow that finds no connection free within its wait is [`Pool `Busy], and
    the pool lends again once one comes back. *)
-let test_a_borrow_past_its_wait_is_busy () =
-  Db_target.with_postgres (fun target ->
-      with_pool ~size:1 target (fun pool ->
+let test_a_borrow_past_its_wait_is_busy suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_pool suite ~size:1 target (fun pool ->
           let release, released = Eio.Promise.create () in
           Eio.Fiber.both
             (fun () -> lent pool (fun _ -> Eio.Promise.await release))
@@ -115,9 +115,9 @@ let test_a_borrow_past_its_wait_is_busy () =
 (* A closed pool answers [`Pool `Closed] at once: no connection will ever come
    free, so the borrow does not wait. The wait is long, so a borrow that sat
    it out would answer [`Pool `Busy], whatever the machine's speed. *)
-let test_a_closed_pool_answers_closed () =
-  Db_target.with_postgres (fun target ->
-      with_pool ~size:1 target (fun pool ->
+let test_a_closed_pool_answers_closed suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_pool suite ~size:1 target (fun pool ->
           Pg.Pool.close pool;
           match Pg.Pool.use ~wait:Mtime.Span.(10 * s) pool (fun _ -> ()) with
           | Error (`Pool `Closed) -> ()
@@ -128,11 +128,11 @@ let test_a_closed_pool_answers_closed () =
 (* ------------------------------------------------------------------ *)
 (* Notifications *)
 
-let with_listener ?keep_alive target f =
+let with_listener suite ?keep_alive target f =
   let l =
     ok
-      (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-         ~mono_clock:(Db_target.mono ()) ?keep_alive target)
+      (Pg.Listener.connect ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+         ~mono_clock:(Db_target.mono suite) ?keep_alive target)
   in
   Fun.protect ~finally:(fun () -> Pg.Listener.close l) (fun () -> f l)
 
@@ -151,13 +151,13 @@ let notification = Alcotest.(pair string string)
 
 (* Notifications on every channel listened to, in the order they were
    sent, and none from a channel nobody listens to. *)
-let test_a_listener_hears_its_channels_in_order () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_listener_hears_its_channels_in_order suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
-          with_listener target (fun l ->
+          with_listener suite target (fun l ->
               ok (Pg.Listener.listen l "jobs");
               ok (Pg.Listener.listen l "Mail");
               notify db "jobs" "1";
@@ -171,13 +171,13 @@ let test_a_listener_hears_its_channels_in_order () =
 
 (* A listener whose connection the server dropped says so, listens again,
    and hears what is sent after. *)
-let test_a_listener_survives_a_lost_connection () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_listener_survives_a_lost_connection suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
-          with_listener
+          with_listener suite
             ~keep_alive:Mtime.Span.(100 * ms)
             target
             (fun l ->
@@ -200,13 +200,13 @@ let test_a_listener_survives_a_lost_connection () =
                 (heard l))))
 
 (* A channel unlistened is heard no more, and the others still are. *)
-let test_a_channel_unlistened_is_not_heard () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_channel_unlistened_is_not_heard suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
-          with_listener target (fun l ->
+          with_listener suite target (fun l ->
               ok (Pg.Listener.listen l "jobs");
               ok (Pg.Listener.listen l "Mail");
               ok (Pg.Listener.unlisten l "jobs");
@@ -216,16 +216,16 @@ let test_a_channel_unlistened_is_not_heard () =
                 ("Mail", "kept") (heard l))))
 
 (* Startup parameters reach the listener's session. *)
-let test_a_listener_takes_parameters () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_listener_takes_parameters suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
           let l =
             ok
-              (Pg.Listener.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-                 ~mono_clock:(Db_target.mono ())
+              (Pg.Listener.connect ~sw:(Db_target.sw suite)
+                 ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
                  ~parameters:[ ("application_name", "a listener") ]
                  target)
           in
@@ -243,9 +243,9 @@ let test_a_listener_takes_parameters () =
                           current_database()")
                       ())))))
 
-let test_a_closed_listener_hears_nothing () =
-  Db_target.with_postgres (fun target ->
-      with_listener target (fun l ->
+let test_a_closed_listener_hears_nothing suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_listener suite target (fun l ->
           Pg.Listener.close l;
           match Pg.Listener.next l with
           | Error (`Connection `Closed) -> ()
@@ -260,33 +260,37 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "pool"
-    [
-      ( "pool",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "pool"
         [
-          Alcotest.test_case "more fibers than connections" `Quick
-            test_more_fibers_than_connections;
-          Alcotest.test_case "a pooled transaction is one result" `Quick
-            test_a_pooled_transaction_is_one_result;
-          Alcotest.test_case "a borrower leaves nothing behind" `Quick
-            test_a_borrower_leaves_nothing_behind;
-          Alcotest.test_case "a borrow past its wait is busy" `Quick
-            test_a_borrow_past_its_wait_is_busy;
-          Alcotest.test_case "a closed pool answers closed" `Quick
-            test_a_closed_pool_answers_closed;
-        ] );
-      ( "listener",
-        [
-          Alcotest.test_case "it hears its channels in order" `Quick
-            test_a_listener_hears_its_channels_in_order;
-          Alcotest.test_case "it survives a lost connection" `Quick
-            test_a_listener_survives_a_lost_connection;
-          Alcotest.test_case "a closed one hears nothing" `Quick
-            test_a_closed_listener_hears_nothing;
-          Alcotest.test_case "a channel unlistened is not heard" `Quick
-            test_a_channel_unlistened_is_not_heard;
-          Alcotest.test_case "it takes parameters" `Quick
-            test_a_listener_takes_parameters;
-        ] );
-    ]
+          ( "pool",
+            [
+              Alcotest.test_case "more fibers than connections" `Quick
+                (test_more_fibers_than_connections suite);
+              Alcotest.test_case "a pooled transaction is one result" `Quick
+                (test_a_pooled_transaction_is_one_result suite);
+              Alcotest.test_case "a borrower leaves nothing behind" `Quick
+                (test_a_borrower_leaves_nothing_behind suite);
+              Alcotest.test_case "a borrow past its wait is busy" `Quick
+                (test_a_borrow_past_its_wait_is_busy suite);
+              Alcotest.test_case "a closed pool answers closed" `Quick
+                (test_a_closed_pool_answers_closed suite);
+            ] );
+          ( "listener",
+            [
+              Alcotest.test_case "it hears its channels in order" `Quick
+                (test_a_listener_hears_its_channels_in_order suite);
+              Alcotest.test_case "it survives a lost connection" `Quick
+                (test_a_listener_survives_a_lost_connection suite);
+              Alcotest.test_case "a closed one hears nothing" `Quick
+                (test_a_closed_listener_hears_nothing suite);
+              Alcotest.test_case "a channel unlistened is not heard" `Quick
+                (test_a_channel_unlistened_is_not_heard suite);
+              Alcotest.test_case "it takes parameters" `Quick
+                (test_a_listener_takes_parameters suite);
+            ] );
+        ]

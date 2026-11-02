@@ -33,9 +33,9 @@ let numbers = List.map number
 let names = List.map (fun (m : Rowtype_migrate.migration) -> number m.version)
 
 (* Each case gets a database of its own. See [db_target.ml]. *)
-let on_db setup f =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let on_db suite setup f =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -45,7 +45,7 @@ let on_db setup f =
 (* A connection bounded as a server bounds its own, so a migration has a
    bound to lift. Postgres reads the bound in whole milliseconds, so it is
    written rounded up. *)
-let connect ?statement_timeout target =
+let connect suite ?statement_timeout target =
   let parameters =
     match statement_timeout with
     | None -> []
@@ -55,8 +55,8 @@ let connect ?statement_timeout target =
         [ ("statement_timeout", Int64.to_string ms) ]
   in
   ok
-    (Pg.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-       ~mono_clock:(Db_target.mono ()) ~parameters target)
+    (Pg.connect ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+       ~mono_clock:(Db_target.mono suite) ~parameters target)
 
 let contains haystack needle =
   let n = String.length needle and h = String.length haystack in
@@ -68,9 +68,9 @@ let contains haystack needle =
 (* A migration is bounded by nothing but itself, whatever the connection
    carries for requests: the server's statement bound and the driver's on
    every read, each lifted for the run and each back after it. *)
-let test_a_migration_is_unbounded () =
-  Db_target.with_postgres (fun target ->
-      let db = connect ~statement_timeout:Mtime.Span.(100 * ms) target in
+let test_a_migration_is_unbounded suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = connect suite ~statement_timeout:Mtime.Span.(100 * ms) target in
       let reads = Some Mtime.Span.(200 * ms) in
       Pg.set_timeout db ~timeout:reads;
       Fun.protect
@@ -99,8 +99,8 @@ let test_a_migration_is_unbounded () =
 
 (* What would run, read without running it -- and without writing so much
    as the table that records it, so a status is safe against production. *)
-let test_a_status_says_what_is_pending_and_writes_nothing () =
-  on_db [] (fun db ->
+let test_a_status_says_what_is_pending_and_writes_nothing suite () =
+  on_db suite [] (fun db ->
       let m v name =
         {
           Rowtype_migrate.version = version v;
@@ -144,8 +144,8 @@ let test_a_status_says_what_is_pending_and_writes_nothing () =
 (* A migration is known by its text: one edited after it ran is refused,
    one merged after a later one ran is refused, and a database migrated
    before the digests were kept has them recorded on its next run. *)
-let test_a_migration_is_held_to_what_ran () =
-  on_db [] (fun db ->
+let test_a_migration_is_held_to_what_ran suite () =
+  on_db suite [] (fun db ->
       let m v name sql =
         { Rowtype_migrate.version = version v; name; kind = Transaction; sql }
       in
@@ -197,9 +197,10 @@ let test_a_migration_is_held_to_what_ran () =
 (* A migration that fails leaves the database at the version before it:
    what it ran and its row rolled back, what follows it not run, said by
    its name, and the lock given up for the run that comes after the fix. *)
-let test_a_failed_migration_stops_where_it_failed () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target and other = Db_target.connect target in
+let test_a_failed_migration_stops_where_it_failed suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target
+      and other = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () ->
           Pg.close db;
@@ -260,10 +261,10 @@ let test_a_failed_migration_stops_where_it_failed () =
    follows its [commit] fails, succeeds, or begins another: its record is
    removed, so the database does not say it is applied, and the refusal
    names the directive a file outside a transaction says it is with. *)
-let test_a_migration_that_ends_its_transaction_is_refused () =
+let test_a_migration_that_ends_its_transaction_is_refused suite () =
   List.iter
     (fun sql ->
-      on_db [] (fun db ->
+      on_db suite [] (fun db ->
           let first =
             {
               Rowtype_migrate.version = version 20260101000000;
@@ -307,8 +308,8 @@ let test_a_migration_that_ends_its_transaction_is_refused () =
 
 (* A migration whose connection is lost is the failure told, by its name,
    rather than the lock's release that cannot follow it. *)
-let test_a_lost_connection_names_its_migration () =
-  on_db [] (fun db ->
+let test_a_lost_connection_names_its_migration suite () =
+  on_db suite [] (fun db ->
       match
         Rowtype_migrate_postgres.apply db
           [
@@ -330,8 +331,8 @@ let test_a_lost_connection_names_its_migration () =
    the run stops there, saying so, rather than migrate beside another
    process. The backend is ended once the first migration is applied and
    its session reset, before the second begins. *)
-let test_a_run_that_loses_its_lock_stops () =
-  Db_target.with_postgres (fun target ->
+let test_a_run_that_loses_its_lock_stops suite () =
+  Db_target.with_postgres suite (fun target ->
       let pid = ref None and resets = ref 0 in
       let observe =
         {
@@ -343,7 +344,7 @@ let test_a_run_that_loses_its_lock_stops () =
                 if !resets = 1 then
                   Option.iter
                     (fun pid ->
-                      Db_target.admin (fun admin ->
+                      Db_target.admin suite (fun admin ->
                           ignore
                             (ok
                                (Pg.run admin
@@ -357,8 +358,8 @@ let test_a_run_that_loses_its_lock_stops () =
       in
       let db =
         ok
-          (Pg.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-             ~mono_clock:(Db_target.mono ()) ~observe target)
+          (Pg.connect ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+             ~mono_clock:(Db_target.mono suite) ~observe target)
       in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
@@ -384,7 +385,7 @@ let test_a_run_that_loses_its_lock_stops () =
           | Error (`Lock `Lost) -> ()
           | Ok () -> Alcotest.fail "migrated on after its lock was lost"
           | Error e -> Alcotest.failf "not the lock's: %s" (words e));
-          let other = Db_target.connect target in
+          let other = Db_target.connect suite target in
           Fun.protect
             ~finally:(fun () -> Pg.close other)
             (fun () ->
@@ -403,8 +404,8 @@ let test_a_run_that_loses_its_lock_stops () =
 (* What Postgres refuses inside a transaction runs on its own, and is
    recorded once it has; a run cut off before the row runs the file again,
    which is why it is written to run twice. *)
-let test_a_migration_can_run_outside_a_transaction () =
-  on_db [] (fun db ->
+let test_a_migration_can_run_outside_a_transaction suite () =
+  on_db suite [] (fun db ->
       let table =
         {
           Rowtype_migrate.version = version 20260101000000;
@@ -449,7 +450,7 @@ let test_a_migration_can_run_outside_a_transaction () =
    them takes it as applied and their rows as history, a database made after
    it runs it -- in the session a pg_dump leaves, which is put back for what
    follows -- and a database behind it is refused, by all three readers. *)
-let test_a_baseline_stands_for_what_it_replaced () =
+let test_a_baseline_stands_for_what_it_replaced suite () =
   let m v name kind sql =
     { Rowtype_migrate.version = version v; name; kind; sql }
   in
@@ -464,7 +465,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
        insert into public.a values (1);\n"
   in
   let squashed = [ baseline; c ] in
-  on_db [] (fun db ->
+  on_db suite [] (fun db ->
       ok_s (Rowtype_migrate_postgres.apply db [ a; b ]);
       ok_s (Rowtype_migrate_postgres.apply db squashed);
       let st = ok_s (app_status db squashed) in
@@ -477,7 +478,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
         (Option.map
            (fun (m : Rowtype_migrate.migration) -> number m.version)
            st.behind));
-  on_db [] (fun db ->
+  on_db suite [] (fun db ->
       ok_s (Rowtype_migrate_postgres.apply db squashed);
       Alcotest.(check int)
         "made from the baseline, rows and all" 1
@@ -507,7 +508,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
       Alcotest.(check (list int))
         "and a status says" [ 20260102000000 ]
         (names (ok_s (app_status db [ edited; c ])).edited));
-  on_db [] (fun db ->
+  on_db suite [] (fun db ->
       ok_s (Rowtype_migrate_postgres.apply db [ a ]);
       Alcotest.(check bool)
         "behind it, run refuses" true
@@ -521,7 +522,7 @@ let test_a_baseline_stands_for_what_it_replaced () =
            (ok_s (app_status db squashed)).behind));
   (* A migration may be named anything, baseline among them: what it ran
      below the baseline's version says the baseline did not run there. *)
-  on_db [] (fun db ->
+  on_db suite [] (fun db ->
       ok_s
         (Rowtype_migrate_postgres.apply db [ a; { b with name = "baseline" } ]);
       ok_s (Rowtype_migrate_postgres.apply db squashed);
@@ -533,11 +534,11 @@ let test_a_baseline_stands_for_what_it_replaced () =
 (* What a migration sets for its session ends with it, in a transaction or
    outside one: the schema is the same whether the next migration runs in
    the same run or in another. *)
-let test_what_a_migration_sets_ends_with_it () =
+let test_what_a_migration_sets_ends_with_it suite () =
   let m v name kind sql =
     { Rowtype_migrate.version = version v; name; kind; sql }
   in
-  on_db [ "create schema other" ] (fun db ->
+  on_db suite [ "create schema other" ] (fun db ->
       ok_s
         (Rowtype_migrate_postgres.apply ~table:"public.schema_migrations" db
            [
@@ -565,8 +566,8 @@ let test_what_a_migration_sets_ends_with_it () =
 (* A record may be kept in a table of its own, in a schema of its own, so
    two applications can share a database; a name that would have to be
    quoted is refused, since it goes into the statements as it is. *)
-let test_a_record_can_have_a_table_of_its_own () =
-  on_db [ "create schema app" ] (fun db ->
+let test_a_record_can_have_a_table_of_its_own suite () =
+  on_db suite [ "create schema app" ] (fun db ->
       let one =
         {
           Rowtype_migrate.version = version 20260101000000;
@@ -608,43 +609,44 @@ let test_a_record_can_have_a_table_of_its_own () =
         | Error (`Invalid_argument m) -> Some m
         | Ok () | Error _ -> None))
 
-let on_server f url =
-  f ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-    ~mono_clock:(Db_target.mono ()) url
+let on_server suite f url =
+  f ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+    ~mono_clock:(Db_target.mono suite) url
 
 (* The process manager a dump's or a squash's [pg_dump] runs through. *)
-let process_mgr () = Eio.Stdenv.process_mgr (Db_target.env ())
+let process_mgr suite = Eio.Stdenv.process_mgr (Db_target.env suite)
 
 (* A database is made and dropped by its URL, and one that is not there is
    said so, with the command that makes it. *)
-let test_a_database_is_made_and_dropped () =
+let test_a_database_is_made_and_dropped suite () =
   let name = Printf.sprintf "rowtype_migrate_made_%d" (Unix.getpid ()) in
-  let url = Db_target.on_database name in
+  let url = Db_target.on_database suite name in
   let connects () =
-    Rowtype_migrate_postgres.run (Db_target.env ()) url (fun _ -> Ok ())
+    Rowtype_migrate_postgres.run (Db_target.env suite) url (fun _ -> Ok ())
   in
   (match connects () with
   | Ok () -> Alcotest.fail "a database there before it was made"
   | Error (`No_database missing) ->
       Alcotest.(check string) "names it" name missing
   | Error e -> Alcotest.failf "not said missing: %s" (words e));
-  ok_s (on_server Rowtype_migrate_postgres.create url);
+  ok_s (on_server suite Rowtype_migrate_postgres.create url);
   Fun.protect
-    ~finally:(fun () -> ok_s (on_server Rowtype_migrate_postgres.drop url))
+    ~finally:(fun () ->
+      ok_s (on_server suite Rowtype_migrate_postgres.drop url))
     (fun () ->
       ok_s (connects ());
       Alcotest.(check bool)
         "made twice" false
-        (Result.is_ok (on_server Rowtype_migrate_postgres.create url)));
-  ok_s (on_server Rowtype_migrate_postgres.drop url);
+        (Result.is_ok (on_server suite Rowtype_migrate_postgres.create url)));
+  ok_s (on_server suite Rowtype_migrate_postgres.drop url);
   Alcotest.(check bool) "and gone" false (Result.is_ok (connects ()));
-  ok_s (on_server Rowtype_migrate_postgres.drop url)
+  ok_s (on_server suite Rowtype_migrate_postgres.drop url)
 
 (* Two processes migrating one database at once take turns under the
    advisory lock: both succeed, and every migration runs once. *)
-let test_two_migrators_take_turns () =
-  Db_target.with_postgres (fun target ->
-      let a = connect target and b = connect target in
+let test_two_migrators_take_turns suite () =
+  Db_target.with_postgres suite (fun target ->
+      let a = connect suite target and b = connect suite target in
       Fun.protect
         ~finally:(fun () ->
           Pg.close a;
@@ -704,8 +706,8 @@ let recorded db =
 (* A library is a history of its own: its migration older than the
    application's last is applied, not refused as late, and each source's rows
    say whose they are. *)
-let test_a_library_is_a_history_of_its_own () =
-  on_db [] (fun db ->
+let test_a_library_is_a_history_of_its_own suite () =
+  on_db suite [] (fun db ->
       let app =
         [ migration 20260201000000 "orders" "create table orders ()" ]
       in
@@ -728,8 +730,8 @@ let test_a_library_is_a_history_of_its_own () =
 
 (* Within a source the checks hold as they always did: a migration older
    than one its own source applied is late. *)
-let test_a_source_is_still_held_to_its_order () =
-  on_db [] (fun db ->
+let test_a_source_is_still_held_to_its_order suite () =
+  on_db suite [] (fun db ->
       let later = migration 20260102000000 "later" "select 1" in
       ok_s
         (Rowtype_migrate_postgres.apply
@@ -748,8 +750,8 @@ let test_a_source_is_still_held_to_its_order () =
 
 (* The libraries run first, so the application's migrations may stand on
    their tables; and a source given twice is refused. *)
-let test_libraries_run_before_the_application () =
-  on_db [] (fun db ->
+let test_libraries_run_before_the_application suite () =
+  on_db suite [] (fun db ->
       let spool =
         library "spool"
           [
@@ -772,8 +774,8 @@ let test_libraries_run_before_the_application () =
 (* A record kept before sources were is given them on the next run, every
    row the application's, and the key is the source and the version, so a
    library may use a version the application has. *)
-let test_an_old_record_is_given_sources () =
-  on_db
+let test_an_old_record_is_given_sources suite () =
+  on_db suite
     [
       "create table schema_migrations (version bigint primary key, name text \
        not null, applied_at timestamptz not null default now(), checksum text)";
@@ -798,16 +800,16 @@ let test_an_old_record_is_given_sources () =
         (recorded db))
 
 (* A command a runner names wins; else the suite's own server's pg_dump. *)
-let pg_dump () =
+let pg_dump suite =
   match Sys.getenv_opt "ROWTYPE_TEST_PG_DUMP" with
   | Some command -> Some command
-  | None -> Db_target.pg_dump ()
+  | None -> Db_target.pg_dump suite
 
 (* A dump is what the migrations make from nothing, the same on every run,
    with the versions of the server and of pg_dump left out, and never what
    the database the URL names holds. *)
-let test_a_dump_is_what_the_migrations_make () =
-  match pg_dump () with
+let test_a_dump_is_what_the_migrations_make suite () =
+  match pg_dump suite with
   | None ->
       print_endline
         "  [dump skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -823,16 +825,16 @@ let test_a_dump_is_what_the_migrations_make () =
           };
         ]
       in
-      Db_target.with_postgres (fun target ->
-          let db = Db_target.connect target in
+      Db_target.with_postgres suite (fun target ->
+          let db = Db_target.connect suite target in
           ok (Pg.exec_raw db "create table drifted (n int)");
           Pg.close db;
           let dump () =
             ok_s
-              (Rowtype_migrate_postgres.dump ~sw:(Db_target.sw ())
-                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                 ~process_mgr:(process_mgr ()) ~pg_dump ~restrict_key:"rowtype"
-                 ~migrations target)
+              (Rowtype_migrate_postgres.dump ~sw:(Db_target.sw suite)
+                 ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+                 ~process_mgr:(process_mgr suite) ~pg_dump
+                 ~restrict_key:"rowtype" ~migrations target)
           in
           let first = dump () in
           Alcotest.(check string) "the same on every run" first (dump ());
@@ -859,18 +861,19 @@ let script body =
       Sys.rmdir dir);
   path
 
-let dump_with target ~pg_dump ~migrations =
-  Rowtype_migrate_postgres.dump ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-    ~mono_clock:(Db_target.mono ()) ~process_mgr:(process_mgr ()) ~pg_dump
-    ~restrict_key:"rowtype" ~migrations target
+let dump_with suite target ~pg_dump ~migrations =
+  Rowtype_migrate_postgres.dump ~sw:(Db_target.sw suite)
+    ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+    ~process_mgr:(process_mgr suite) ~pg_dump ~restrict_key:"rowtype"
+    ~migrations target
 
 (* A pg_dump that fails is named with what it said, and never with its
    arguments: the URL in them holds the password, which is masked even
    where the program says its arguments back. *)
 (* An application's baseline leaves out what a library's own migrations
    make, so a database made from both never makes a library's table twice. *)
-let test_a_squash_leaves_a_library_out () =
-  match pg_dump () with
+let test_a_squash_leaves_a_library_out suite () =
+  match pg_dump suite with
   | None ->
       print_endline
         "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -889,11 +892,11 @@ let test_a_squash_leaves_a_library_out () =
           migration 20260202000000 "later" "alter table a add column note text";
         ]
       in
-      Db_target.with_postgres (fun target ->
+      Db_target.with_postgres suite (fun target ->
           match
-            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
-              ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-              ~process_mgr:(process_mgr ()) ~libraries:[ spool ] ~pg_dump
+            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw suite)
+              ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+              ~process_mgr:(process_mgr suite) ~libraries:[ spool ] ~pg_dump
               ~restrict_key:"rowtype" ~through:(version 20260201000000)
               ~migrations:history target
           with
@@ -911,11 +914,11 @@ let test_a_squash_leaves_a_library_out () =
         library "viewer"
           [ migration 20260101000000 "view" "create view v as select 1" ]
       in
-      Db_target.with_postgres (fun target ->
+      Db_target.with_postgres suite (fun target ->
           match
-            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
-              ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-              ~process_mgr:(process_mgr ()) ~libraries:[ viewer ] ~pg_dump
+            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw suite)
+              ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+              ~process_mgr:(process_mgr suite) ~libraries:[ viewer ] ~pg_dump
               ~restrict_key:"rowtype" ~through:(version 20260201000000)
               ~migrations:history target
           with
@@ -923,8 +926,8 @@ let test_a_squash_leaves_a_library_out () =
           | Ok _ -> Alcotest.fail "a library that made a view was squashed over"
           | Error e -> Alcotest.failf "refused otherwise: %s" (words e))
 
-let test_a_failed_dump_names_no_password () =
-  Db_target.with_postgres (fun target ->
+let test_a_failed_dump_names_no_password suite () =
+  Db_target.with_postgres suite (fun target ->
       let password =
         match (target : Pg.Conninfo.t).password with
         | Some p -> p
@@ -932,7 +935,9 @@ let test_a_failed_dump_names_no_password () =
       in
       let echoes = script "echo \"pg_dump: error: refused $*\" >&2\nexit 2" in
       (match
-         dump_with target ~pg_dump:(echoes ^ " --dbname={url}") ~migrations:[]
+         dump_with suite target
+           ~pg_dump:(echoes ^ " --dbname={url}")
+           ~migrations:[]
        with
       | Ok _ -> Alcotest.fail "a pg_dump that failed made a dump"
       | Error (`Dump m) ->
@@ -948,7 +953,7 @@ let test_a_failed_dump_names_no_password () =
             ]
       | Error e -> Alcotest.failf "not the dump's: %s" (words e));
       match
-        dump_with target ~pg_dump:"rowtype_no_such_pg_dump --dbname={url}"
+        dump_with suite target ~pg_dump:"rowtype_no_such_pg_dump --dbname={url}"
           ~migrations:[]
       with
       | Error (`Dump m) ->
@@ -961,14 +966,14 @@ let test_a_failed_dump_names_no_password () =
    cancel waits for the program to say it started, so it lands in pg_dump
    however long the migrating before it took, and five seconds is far past
    a kill and short of the thirty the program sleeps. *)
-let test_a_dump_cancelled_in_pg_dump_ends () =
-  Db_target.with_postgres (fun target ->
+let test_a_dump_cancelled_in_pg_dump_ends suite () =
+  Db_target.with_postgres suite (fun target ->
       let started = Filename.temp_file "pg_dump" ".started" in
       Sys.remove started;
       let sleeps =
         script (Printf.sprintf "touch %s\nsleep 30" (Filename.quote started))
       in
-      let mono = Db_target.mono () in
+      let mono = Db_target.mono suite in
       let rec in_pg_dump () =
         if not (Sys.file_exists started) then (
           Eio.Time.Mono.sleep_span mono Mtime.Span.(50 * ms);
@@ -979,7 +984,7 @@ let test_a_dump_cancelled_in_pg_dump_ends () =
         Eio.Fiber.first
           (fun () ->
             ignore
-              (dump_with target ~pg_dump:sleeps ~migrations:[]
+              (dump_with suite target ~pg_dump:sleeps ~migrations:[]
                 : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
@@ -995,7 +1000,7 @@ let test_a_dump_cancelled_in_pg_dump_ends () =
         true
         (Mtime.Span.is_shorter took ~than:Mtime.Span.(5 * s));
       let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
-      Db_target.admin (fun db ->
+      Db_target.admin suite (fun db ->
           Alcotest.(check bool)
             "its scratch database is gone" false
             (ok
@@ -1007,8 +1012,8 @@ let test_a_dump_cancelled_in_pg_dump_ends () =
 
 (* A dump cancelled while it migrates drops its scratch database, and its
    fiber ends cancelled, as itself. *)
-let test_a_cancelled_dump_leaves_nothing () =
-  Db_target.with_postgres (fun target ->
+let test_a_cancelled_dump_leaves_nothing suite () =
+  Db_target.with_postgres suite (fun target ->
       let migrations =
         [
           {
@@ -1023,19 +1028,20 @@ let test_a_cancelled_dump_leaves_nothing () =
         Eio.Fiber.first
           (fun () ->
             ignore
-              (Rowtype_migrate_postgres.dump ~sw:(Db_target.sw ())
-                 ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                 ~process_mgr:(process_mgr ()) ~pg_dump:"true"
+              (Rowtype_migrate_postgres.dump ~sw:(Db_target.sw suite)
+                 ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+                 ~process_mgr:(process_mgr suite) ~pg_dump:"true"
                  ~restrict_key:"rowtype" ~migrations target
                 : (string, Rowtype_migrate.error) result);
             "finished")
           (fun () ->
-            Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(500 * ms);
+            Eio.Time.Mono.sleep_span (Db_target.mono suite)
+              Mtime.Span.(500 * ms);
             "cancelled")
       in
       Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
       let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
-      Db_target.admin (fun db ->
+      Db_target.admin suite (fun db ->
           Alcotest.(check bool)
             "its scratch database is gone" false
             (ok
@@ -1049,8 +1055,8 @@ let test_a_cancelled_dump_leaves_nothing () =
    from it and what came after holds the schema and the rows the whole
    history makes, a database migrated before the squash takes the new list
    as its own, and a baseline that cannot be proved is not answered. *)
-let test_a_squash_stands_for_its_history () =
-  match pg_dump () with
+let test_a_squash_stands_for_its_history suite () =
+  match pg_dump suite with
   | None ->
       print_endline
         "  [squash skipped: no ROWTYPE_TEST_PG_DUMP -- make test names one]";
@@ -1066,13 +1072,14 @@ let test_a_squash_stands_for_its_history () =
           m 20260103000000 "later" "alter table a add column note text";
         ]
       in
-      Db_target.with_postgres (fun target ->
+      Db_target.with_postgres suite (fun target ->
           let baseline =
             match
-              Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
-                ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                ~process_mgr:(process_mgr ()) ~pg_dump ~restrict_key:"rowtype"
-                ~through:(version 20260102000000) ~migrations:history target
+              Rowtype_migrate_postgres.squash ~sw:(Db_target.sw suite)
+                ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+                ~process_mgr:(process_mgr suite) ~pg_dump
+                ~restrict_key:"rowtype" ~through:(version 20260102000000)
+                ~migrations:history target
             with
             | Ok baseline -> baseline
             | Error m -> Alcotest.failf "the squash was refused: %s" (words m)
@@ -1096,7 +1103,7 @@ let test_a_squash_stands_for_its_history () =
                  ())
           in
           (* A database made from nothing, from the squashed list. *)
-          let fresh = connect target in
+          let fresh = connect suite target in
           Fun.protect
             ~finally:(fun () -> Pg.close fresh)
             (fun () ->
@@ -1109,8 +1116,8 @@ let test_a_squash_stands_for_its_history () =
                 [ (1, None); (2, None) ]
                 (rows fresh)));
       (* A database migrated before the squash takes the new list. *)
-      Db_target.with_postgres (fun target ->
-          let before = connect target in
+      Db_target.with_postgres suite (fun target ->
+          let before = connect suite target in
           Fun.protect
             ~finally:(fun () -> Pg.close before)
             (fun () ->
@@ -1120,9 +1127,10 @@ let test_a_squash_stands_for_its_history () =
                   Alcotest.failf "the history was refused: %s" (words m));
               let baseline =
                 match
-                  Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
-                    ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-                    ~process_mgr:(process_mgr ()) ~pg_dump
+                  Rowtype_migrate_postgres.squash ~sw:(Db_target.sw suite)
+                    ~net:(Db_target.net suite)
+                    ~mono_clock:(Db_target.mono suite)
+                    ~process_mgr:(process_mgr suite) ~pg_dump
                     ~restrict_key:"rowtype" ~through:(version 20260102000000)
                     ~migrations:history target
                 with
@@ -1144,11 +1152,11 @@ let test_a_squash_stands_for_its_history () =
                     (words m)));
       (* A migration after the baseline whose rows differ on every run makes
          two databases that cannot dump the same: nothing is squashed. *)
-      Db_target.with_postgres (fun target ->
+      Db_target.with_postgres suite (fun target ->
           match
-            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw ())
-              ~net:(Db_target.net ()) ~mono_clock:(Db_target.mono ())
-              ~process_mgr:(process_mgr ()) ~pg_dump ~restrict_key:"rowtype"
+            Rowtype_migrate_postgres.squash ~sw:(Db_target.sw suite)
+              ~net:(Db_target.net suite) ~mono_clock:(Db_target.mono suite)
+              ~process_mgr:(process_mgr suite) ~pg_dump ~restrict_key:"rowtype"
               ~through:(version 20260101000000)
               ~migrations:
                 [
@@ -1165,10 +1173,10 @@ let test_a_squash_stands_for_its_history () =
 (* A command's connection bounds its connect and nothing after it, since an
    administrator's statement runs as long as it takes: the driver's bound
    on every read is lifted once it is made. *)
-let test_a_commands_connection_is_unbounded () =
-  Db_target.with_postgres (fun target ->
+let test_a_commands_connection_is_unbounded suite () =
+  Db_target.with_postgres suite (fun target ->
       ok_s
-        (Rowtype_migrate_postgres.run (Db_target.env ()) target (fun conn ->
+        (Rowtype_migrate_postgres.run (Db_target.env suite) target (fun conn ->
              Alcotest.(check (option span))
                "no bound on what it runs" None (Pg.timeout conn);
              Ok ())))
@@ -1178,64 +1186,72 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "rowtype-migrate"
-    [
-      ( "the runner",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "rowtype-migrate"
         [
-          Alcotest.test_case "a migration is unbounded" `Quick
-            test_a_migration_is_unbounded;
-          Alcotest.test_case "a status says what is pending, and writes nothing"
-            `Quick test_a_status_says_what_is_pending_and_writes_nothing;
-          Alcotest.test_case "a migration that ends its transaction is refused"
-            `Quick test_a_migration_that_ends_its_transaction_is_refused;
-          Alcotest.test_case "a failed migration stops where it failed" `Quick
-            test_a_failed_migration_stops_where_it_failed;
-          Alcotest.test_case "a lost connection names its migration" `Quick
-            test_a_lost_connection_names_its_migration;
-          Alcotest.test_case "a run that loses its lock stops" `Quick
-            test_a_run_that_loses_its_lock_stops;
-          Alcotest.test_case "a migration is held to what ran" `Quick
-            test_a_migration_is_held_to_what_ran;
-          Alcotest.test_case "a migration can run outside a transaction" `Quick
-            test_a_migration_can_run_outside_a_transaction;
-          Alcotest.test_case "a record can have a table of its own" `Quick
-            test_a_record_can_have_a_table_of_its_own;
-          Alcotest.test_case "what a migration sets ends with it" `Quick
-            test_what_a_migration_sets_ends_with_it;
-          Alcotest.test_case "a baseline stands for what it replaced" `Quick
-            test_a_baseline_stands_for_what_it_replaced;
-          Alcotest.test_case "two migrators take turns" `Quick
-            test_two_migrators_take_turns;
-          Alcotest.test_case "a dump is what the migrations make" `Quick
-            test_a_dump_is_what_the_migrations_make;
-          Alcotest.test_case "a squash stands for its history" `Quick
-            test_a_squash_stands_for_its_history;
-          Alcotest.test_case "a failed dump names no password" `Quick
-            test_a_failed_dump_names_no_password;
-          Alcotest.test_case "a cancelled dump leaves nothing" `Quick
-            test_a_cancelled_dump_leaves_nothing;
-          Alcotest.test_case "a dump cancelled in pg_dump ends" `Quick
-            test_a_dump_cancelled_in_pg_dump_ends;
-        ] );
-      ( "sources",
-        [
-          Alcotest.test_case "a library is a history of its own" `Quick
-            test_a_library_is_a_history_of_its_own;
-          Alcotest.test_case "a source is still held to its order" `Quick
-            test_a_source_is_still_held_to_its_order;
-          Alcotest.test_case "libraries run before the application" `Quick
-            test_libraries_run_before_the_application;
-          Alcotest.test_case "an old record is given sources" `Quick
-            test_an_old_record_is_given_sources;
-          Alcotest.test_case "a squash leaves a library out" `Quick
-            test_a_squash_leaves_a_library_out;
-        ] );
-      ( "the database",
-        [
-          Alcotest.test_case "a database is made and dropped" `Quick
-            test_a_database_is_made_and_dropped;
-          Alcotest.test_case "a command's connection is unbounded" `Quick
-            test_a_commands_connection_is_unbounded;
-        ] );
-    ]
+          ( "the runner",
+            [
+              Alcotest.test_case "a migration is unbounded" `Quick
+                (test_a_migration_is_unbounded suite);
+              Alcotest.test_case
+                "a status says what is pending, and writes nothing" `Quick
+                (test_a_status_says_what_is_pending_and_writes_nothing suite);
+              Alcotest.test_case
+                "a migration that ends its transaction is refused" `Quick
+                (test_a_migration_that_ends_its_transaction_is_refused suite);
+              Alcotest.test_case "a failed migration stops where it failed"
+                `Quick
+                (test_a_failed_migration_stops_where_it_failed suite);
+              Alcotest.test_case "a lost connection names its migration" `Quick
+                (test_a_lost_connection_names_its_migration suite);
+              Alcotest.test_case "a run that loses its lock stops" `Quick
+                (test_a_run_that_loses_its_lock_stops suite);
+              Alcotest.test_case "a migration is held to what ran" `Quick
+                (test_a_migration_is_held_to_what_ran suite);
+              Alcotest.test_case "a migration can run outside a transaction"
+                `Quick
+                (test_a_migration_can_run_outside_a_transaction suite);
+              Alcotest.test_case "a record can have a table of its own" `Quick
+                (test_a_record_can_have_a_table_of_its_own suite);
+              Alcotest.test_case "what a migration sets ends with it" `Quick
+                (test_what_a_migration_sets_ends_with_it suite);
+              Alcotest.test_case "a baseline stands for what it replaced" `Quick
+                (test_a_baseline_stands_for_what_it_replaced suite);
+              Alcotest.test_case "two migrators take turns" `Quick
+                (test_two_migrators_take_turns suite);
+              Alcotest.test_case "a dump is what the migrations make" `Quick
+                (test_a_dump_is_what_the_migrations_make suite);
+              Alcotest.test_case "a squash stands for its history" `Quick
+                (test_a_squash_stands_for_its_history suite);
+              Alcotest.test_case "a failed dump names no password" `Quick
+                (test_a_failed_dump_names_no_password suite);
+              Alcotest.test_case "a cancelled dump leaves nothing" `Quick
+                (test_a_cancelled_dump_leaves_nothing suite);
+              Alcotest.test_case "a dump cancelled in pg_dump ends" `Quick
+                (test_a_dump_cancelled_in_pg_dump_ends suite);
+            ] );
+          ( "sources",
+            [
+              Alcotest.test_case "a library is a history of its own" `Quick
+                (test_a_library_is_a_history_of_its_own suite);
+              Alcotest.test_case "a source is still held to its order" `Quick
+                (test_a_source_is_still_held_to_its_order suite);
+              Alcotest.test_case "libraries run before the application" `Quick
+                (test_libraries_run_before_the_application suite);
+              Alcotest.test_case "an old record is given sources" `Quick
+                (test_an_old_record_is_given_sources suite);
+              Alcotest.test_case "a squash leaves a library out" `Quick
+                (test_a_squash_leaves_a_library_out suite);
+            ] );
+          ( "the database",
+            [
+              Alcotest.test_case "a database is made and dropped" `Quick
+                (test_a_database_is_made_and_dropped suite);
+              Alcotest.test_case "a command's connection is unbounded" `Quick
+                (test_a_commands_connection_is_unbounded suite);
+            ] );
+        ]

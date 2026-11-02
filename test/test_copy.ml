@@ -9,9 +9,9 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
-let on_db setup f =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let on_db suite setup f =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -48,8 +48,8 @@ let texts =
     "\xc3\xa9t\xc3\xa9";
   ]
 
-let test_every_value_comes_back () =
-  on_db
+let test_every_value_comes_back suite () =
+  on_db suite
     [
       "create table v (k int8, f float8, t text, b bytea, ok bool, at \
        timestamptz, id uuid, doc json, tags text[], n int4)";
@@ -124,9 +124,9 @@ let test_every_value_comes_back () =
 
 (* An enum's labels, those COPY's format and an array's give a meaning to
    among them, alone and in an array. A label is never empty. *)
-let test_every_label_comes_back () =
+let test_every_label_comes_back suite () =
   let labels = List.filter (fun t -> not (String.equal t "")) texts in
-  on_db
+  on_db suite
     [
       "create type label as enum ("
       ^ String.concat ", "
@@ -155,8 +155,8 @@ let test_every_label_comes_back () =
         (column db (S.array label) "select ls from e order by k"))
 
 (* Columns named in the row's order, and names quoted as given. *)
-let test_columns_and_names_are_as_given () =
-  on_db
+let test_columns_and_names_are_as_given suite () =
+  on_db suite
     [
       "create schema \"Work\"";
       "create table \"Work\".\"Jobs\" (id int generated always as identity, \
@@ -176,8 +176,8 @@ let test_columns_and_names_are_as_given () =
 
 (* The sequence is read as the rows are sent: a million rows, made as they
    are asked for, never held at once. *)
-let test_a_load_is_held_a_row_at_a_time () =
-  on_db [ "create table big (k int8, t text)" ] (fun db ->
+let test_a_load_is_held_a_row_at_a_time suite () =
+  on_db suite [ "create table big (k int8, t text)" ] (fun db ->
       let n = 1_000_000 in
       let rows = Seq.init n (fun k -> (k, Printf.sprintf "row %d" k)) in
       Gc.compact ();
@@ -194,8 +194,8 @@ let test_a_load_is_held_a_row_at_a_time () =
       if grown > 2_000_000 then
         Alcotest.failf "the heap grew by %d words over the load" grown)
 
-let test_a_constraint_writes_nothing () =
-  on_db [ "create table u (k int constraint u_k_key unique)" ] (fun db ->
+let test_a_constraint_writes_nothing suite () =
+  on_db suite [ "create table u (k int constraint u_k_key unique)" ] (fun db ->
       (match
          Pg.copy_in db ~table:"u" ~columns:[ "k" ] S.int
            (List.to_seq [ 1; 2; 3; 1 ])
@@ -206,8 +206,8 @@ let test_a_constraint_writes_nothing () =
       Alcotest.(check int) "nothing written" 0 (count db "u");
       reads_on db "a conflict")
 
-let test_a_row_that_cannot_be_bound_writes_nothing () =
-  on_db [ "create table a (k int, xs int[])" ] (fun db ->
+let test_a_row_that_cannot_be_bound_writes_nothing suite () =
+  on_db suite [ "create table a (k int, xs int[])" ] (fun db ->
       let row = S.t2 S.int (S.array (S.t2 S.int S.int)) in
       (match
          Pg.copy_in db ~table:"a" ~columns:[ "k"; "xs" ] row
@@ -221,8 +221,8 @@ let test_a_row_that_cannot_be_bound_writes_nothing () =
 
 exception Source_failed
 
-let test_a_raise_from_the_rows_writes_nothing () =
-  on_db [ "create table r (k int)" ] (fun db ->
+let test_a_raise_from_the_rows_writes_nothing suite () =
+  on_db suite [ "create table r (k int)" ] (fun db ->
       let rows =
         Seq.init 10 (fun k -> if k = 5 then raise Source_failed else k)
       in
@@ -233,8 +233,8 @@ let test_a_raise_from_the_rows_writes_nothing () =
       Alcotest.(check int) "nothing written" 0 (count db "r");
       reads_on db "a raise")
 
-let test_columns_that_are_not_the_row_are_refused () =
-  on_db [ "create table c (a int, b int)" ] (fun db ->
+let test_columns_that_are_not_the_row_are_refused suite () =
+  on_db suite [ "create table c (a int, b int)" ] (fun db ->
       let sent = ref false in
       let rows =
         Seq.map
@@ -253,8 +253,8 @@ let test_columns_that_are_not_the_row_are_refused () =
       Alcotest.(check bool) "nothing read from the rows" false !sent;
       reads_on db "a refusal")
 
-let test_a_load_rolls_back_with_its_transaction () =
-  on_db [ "create table t (k int)" ] (fun db ->
+let test_a_load_rolls_back_with_its_transaction suite () =
+  on_db suite [ "create table t (k int)" ] (fun db ->
       (match
          Pg.Transaction.within db (fun db ->
              Result.bind
@@ -268,8 +268,8 @@ let test_a_load_rolls_back_with_its_transaction () =
 
 (* A value the database refuses is worded from its code, as a statement's
    is: COPY's own words quote the line. *)
-let test_no_value_in_a_failure () =
-  on_db [ "create table s (n int4)" ] (fun db ->
+let test_no_value_in_a_failure suite () =
+  on_db suite [ "create table s (n int4)" ] (fun db ->
       let secret = "secret-7f3a91" in
       match
         Pg.copy_in db ~table:"s" ~columns:[ "n" ] S.text
@@ -291,33 +291,39 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "copy"
-    [
-      ( "rows",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "copy"
         [
-          Alcotest.test_case "every value comes back as itself" `Quick
-            test_every_value_comes_back;
-          Alcotest.test_case "every label comes back as itself" `Quick
-            test_every_label_comes_back;
-          Alcotest.test_case "columns and names are as given" `Quick
-            test_columns_and_names_are_as_given;
-          Alcotest.test_case "a load is held a row at a time" `Quick
-            test_a_load_is_held_a_row_at_a_time;
-        ] );
-      ( "failures",
-        [
-          Alcotest.test_case "a constraint writes nothing" `Quick
-            test_a_constraint_writes_nothing;
-          Alcotest.test_case "a row that cannot be bound writes nothing" `Quick
-            test_a_row_that_cannot_be_bound_writes_nothing;
-          Alcotest.test_case "a raise from the rows writes nothing" `Quick
-            test_a_raise_from_the_rows_writes_nothing;
-          Alcotest.test_case "columns that are not the row are refused" `Quick
-            test_columns_that_are_not_the_row_are_refused;
-          Alcotest.test_case "a load rolls back with its transaction" `Quick
-            test_a_load_rolls_back_with_its_transaction;
-          Alcotest.test_case "no value in a failure" `Quick
-            test_no_value_in_a_failure;
-        ] );
-    ]
+          ( "rows",
+            [
+              Alcotest.test_case "every value comes back as itself" `Quick
+                (test_every_value_comes_back suite);
+              Alcotest.test_case "every label comes back as itself" `Quick
+                (test_every_label_comes_back suite);
+              Alcotest.test_case "columns and names are as given" `Quick
+                (test_columns_and_names_are_as_given suite);
+              Alcotest.test_case "a load is held a row at a time" `Quick
+                (test_a_load_is_held_a_row_at_a_time suite);
+            ] );
+          ( "failures",
+            [
+              Alcotest.test_case "a constraint writes nothing" `Quick
+                (test_a_constraint_writes_nothing suite);
+              Alcotest.test_case "a row that cannot be bound writes nothing"
+                `Quick
+                (test_a_row_that_cannot_be_bound_writes_nothing suite);
+              Alcotest.test_case "a raise from the rows writes nothing" `Quick
+                (test_a_raise_from_the_rows_writes_nothing suite);
+              Alcotest.test_case "columns that are not the row are refused"
+                `Quick
+                (test_columns_that_are_not_the_row_are_refused suite);
+              Alcotest.test_case "a load rolls back with its transaction" `Quick
+                (test_a_load_rolls_back_with_its_transaction suite);
+              Alcotest.test_case "no value in a failure" `Quick
+                (test_no_value_in_a_failure suite);
+            ] );
+        ]

@@ -8,9 +8,9 @@ let ok = function
   | Ok v -> v
   | Error e -> Alcotest.failf "unexpected error: %s" (S.error_to_string e)
 
-let on_db setup f =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let on_db suite setup f =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -71,8 +71,8 @@ let reads_on db what =
 
 (* Every failure a statement can meet on its own, each told as what it is,
    and none of them leaving the connection unable to read on. *)
-let test_each_failure_is_told_as_what_it_is () =
-  on_db
+let test_each_failure_is_told_as_what_it_is suite () =
+  on_db suite
     [
       "create table u (k int constraint u_k_key unique, n int not null, c int \
        constraint u_c_check check (c > 0))";
@@ -98,9 +98,10 @@ let test_each_failure_is_told_as_what_it_is () =
 
 (* A statement past its timeout, and a lock not given in time, are each a
    failure the connection survives. *)
-let test_timeouts_leave_the_connection_whole () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target and holder = Db_target.connect target in
+let test_timeouts_leave_the_connection_whole suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target
+      and holder = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () ->
           Pg.close db;
@@ -123,9 +124,10 @@ let test_timeouts_leave_the_connection_whole () =
 (* Two transactions each holding the row the other wants: Postgres breaks
    the cycle by refusing one, which is told as the one failure that
    running again may get past. *)
-let test_a_deadlock_is_not_serializable () =
-  Db_target.with_postgres (fun target ->
-      let a = Db_target.connect target and b = Db_target.connect target in
+let test_a_deadlock_is_not_serializable suite () =
+  Db_target.with_postgres suite (fun target ->
+      let a = Db_target.connect suite target
+      and b = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () ->
           Pg.close a;
@@ -196,8 +198,8 @@ let logged f =
 (* The secret is a parameter of every statement that fails here, in every
    way a statement can, and of ones that succeed: it reaches no failure's
    words and no line of the log, at any level. *)
-let test_no_value_in_a_failure_or_a_log () =
-  on_db
+let test_no_value_in_a_failure_or_a_log suite () =
+  on_db suite
     [
       "create table s (k text constraint s_k_key unique, n text not null, c \
        text constraint s_c_check check (c <> 'x'))";
@@ -284,23 +286,27 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "errors"
-    [
-      ( "told",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "errors"
         [
-          Alcotest.test_case "each failure is told as what it is" `Quick
-            test_each_failure_is_told_as_what_it_is;
-          Alcotest.test_case "timeouts leave the connection whole" `Quick
-            test_timeouts_leave_the_connection_whole;
-          Alcotest.test_case "a deadlock is not serializable" `Quick
-            test_a_deadlock_is_not_serializable;
-          Alcotest.test_case "every failure has its words" `Quick
-            test_every_failure_has_its_words;
-        ] );
-      ( "secrets",
-        [
-          Alcotest.test_case "no value in a failure or a log" `Quick
-            test_no_value_in_a_failure_or_a_log;
-        ] );
-    ]
+          ( "told",
+            [
+              Alcotest.test_case "each failure is told as what it is" `Quick
+                (test_each_failure_is_told_as_what_it_is suite);
+              Alcotest.test_case "timeouts leave the connection whole" `Quick
+                (test_timeouts_leave_the_connection_whole suite);
+              Alcotest.test_case "a deadlock is not serializable" `Quick
+                (test_a_deadlock_is_not_serializable suite);
+              Alcotest.test_case "every failure has its words" `Quick
+                test_every_failure_has_its_words;
+            ] );
+          ( "secrets",
+            [
+              Alcotest.test_case "no value in a failure or a log" `Quick
+                (test_no_value_in_a_failure_or_a_log suite);
+            ] );
+        ]

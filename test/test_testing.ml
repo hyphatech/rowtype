@@ -33,6 +33,15 @@ let cli env args =
   | () -> Ok (String.trim (Buffer.contents out))
   | exception Eio.Io _ -> Error ()
 
+(* The containers rowtype-test has labelled, or the case fails: a listing
+   that could not be had is no listing to compare. *)
+let labelled env =
+  match cli env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ] with
+  | Ok listing -> listing
+  | Error () -> Alcotest.fail "the runtime could not list its containers"
+
+exception Raised
+
 let exists env name =
   Result.is_ok (cli env [ "container"; "inspect"; "--format"; "{{.Id}}"; name ])
 
@@ -80,14 +89,9 @@ let test_a_case_s_database_is_dropped () =
   Eio.Switch.run @@ fun sw ->
   let server = ok (T.server ~sw ~runtime env) in
   let template = ok (T.template server) in
-  let named = ref "" in
-  (match
-     T.database template (fun conninfo ->
-         named := Pg.Conninfo.to_url conninfo;
-         failwith "a case that raises")
-   with
-  | exception Failure _ -> ()
-  | Ok () | Error _ -> Alcotest.fail "the case's failure was lost");
+  (match T.database template (fun _ -> raise Raised) with
+  | exception Raised -> ()
+  | Ok () | Error _ -> Alcotest.fail "the case's raise was lost");
   let db =
     fine
       (Pg.connect ~sw ~net:(Eio.Stdenv.net env)
@@ -109,16 +113,14 @@ let test_a_handed_server_starts_nothing () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let own = ok (T.server ~sw ~runtime env) in
-  let before = cli env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ] in
+  let before = labelled env in
   let handed =
     ok (T.server ~sw ~runtime ~url:(Pg.Conninfo.to_url (T.conninfo own)) env)
   in
   Alcotest.(check (option string))
     "no container of its own" None
     (Option.map snd (T.container handed));
-  Alcotest.(check bool)
-    "no container started" true
-    (before = cli env [ "ps"; "-aq"; "--filter"; "label=rowtype.test.pid" ]);
+  Alcotest.(check string) "no container started" before (labelled env);
   let template = ok (T.template handed) in
   fine (T.database template (fun conninfo -> exec ~sw env conninfo "select 1"))
 
@@ -188,8 +190,6 @@ let test_a_cancelled_case_s_database_is_dropped () =
     (count ~sw env (T.conninfo server)
        "select count(*)::int from pg_database where datname like \
         'rowtype_test_%'")
-
-exception Raised
 
 (* A case that makes its own copy a template, which DROP DATABASE refuses:
    a copy left behind, and the name it was left under. *)

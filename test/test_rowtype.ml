@@ -15,9 +15,9 @@ let contains haystack needle =
   go 0
 
 (* Each case gets a database of its own. See [db_target.ml]. *)
-let on_db setup f =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let on_db suite setup f =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
         (fun () ->
@@ -27,8 +27,9 @@ let on_db setup f =
 (* One shape drives both binding and decoding, so a roundtrip is the test
    that matters: anything that disagrees between the two directions fails
    here. *)
-let test_roundtrip_t4 () =
-  on_db [ "create table t (a integer, b double precision, c text, d integer)" ]
+let test_roundtrip_t4 suite () =
+  on_db suite
+    [ "create table t (a integer, b double precision, c text, d integer)" ]
     (fun db ->
       let shape = S.(t4 int float text (opt int)) in
       ok
@@ -44,8 +45,8 @@ let test_roundtrip_t4 () =
       | [ (42, 1.5, "hi", Some 7) ] -> ()
       | rows -> Alcotest.failf "unexpected rows (%d)" (List.length rows))
 
-let test_option_null () =
-  on_db [ "create table t (a integer, b integer)" ] (fun db ->
+let test_option_null suite () =
+  on_db suite [ "create table t (a integer, b integer)" ] (fun db ->
       let shape = S.(t2 int (opt int)) in
       ok
         (Pg.run db
@@ -64,8 +65,8 @@ let test_option_null () =
       | [ (1, None); (2, Some 9) ] -> ()
       | _ -> Alcotest.fail "NULL did not round-trip as None")
 
-let test_find_opt () =
-  on_db [ "create table t (k integer primary key, v text)" ] (fun db ->
+let test_find_opt suite () =
+  on_db suite [ "create table t (k integer primary key, v text)" ] (fun db ->
       ok
         (Pg.run db
            (S.exec ~params:S.(t2 int text) "insert into t values ($1, $2)")
@@ -99,8 +100,8 @@ let test_find_opt () =
 (* A uniqueness violation must be distinguishable from a real failure --
    that is what lets the HTTP layer answer 409 rather than 500, and what
    settles two writers racing for the same move. *)
-let test_conflict_is_distinct () =
-  on_db [ "create table u (k integer primary key)" ] (fun db ->
+let test_conflict_is_distinct suite () =
+  on_db suite [ "create table u (k integer primary key)" ] (fun db ->
       ok (Pg.run db (S.exec ~params:S.int "insert into u values ($1)") 1);
       match Pg.run db (S.exec ~params:S.int "insert into u values ($1)") 1 with
       | Error (`Conflict _) -> ()
@@ -113,8 +114,8 @@ let test_conflict_is_distinct () =
 (* And through a row, because that is how an [insert ... returning id] is
    run: a generated key read back on the ROW path, where a duplicate has to
    be a conflict just as it is on the DONE one. *)
-let test_conflict_through_returning () =
-  on_db [ "create table u (k integer primary key)" ] (fun db ->
+let test_conflict_through_returning suite () =
+  on_db suite [ "create table u (k integer primary key)" ] (fun db ->
       let first =
         ok
           (Pg.run db
@@ -138,8 +139,8 @@ let test_conflict_through_returning () =
 
 (* Which constraint refused is the answer's meaning when a table has two:
    a duplicate address and a duplicate name are different sentences. *)
-let test_a_conflict_names_its_constraint () =
-  on_db
+let test_a_conflict_names_its_constraint suite () =
+  on_db suite
     [
       "create table users (email text constraint users_email_key unique, name \
        text constraint users_name_key unique)";
@@ -167,8 +168,8 @@ let test_a_conflict_names_its_constraint () =
 (* A constraint refuses because of other rows -- a key taken, a range
    overlapped, a parent missing or still referenced -- and that is the
    caller's answer; one about the row alone is the program's mistake. *)
-let test_a_conflict_is_about_other_rows () =
-  on_db
+let test_a_conflict_is_about_other_rows suite () =
+  on_db suite
     [
       "create table parent (id int primary key)";
       "create table child (parent int constraint child_parent_fkey references \
@@ -210,8 +211,8 @@ let test_a_conflict_is_about_other_rows () =
 
 (* A fold sees what [run] would answer, in its order, without the list:
    a [list] statement's rows as they arrive, and a [find]'s one array. *)
-let test_fold_is_run_without_the_list () =
-  on_db [] (fun db ->
+let test_fold_is_run_without_the_list suite () =
+  on_db suite [] (fun db ->
       let numbers =
         S.list ~params:S.int ~row:S.int
           "select g from generate_series(1, $1) g order by g"
@@ -234,8 +235,8 @@ let test_fold_is_run_without_the_list () =
 
 (* A row that does not decode ends the fold as its answer: [f] sees the rows
    before it and none after, and the connection reads on. *)
-let test_a_fold_stops_at_a_row_it_cannot_read () =
-  on_db [] (fun db ->
+let test_a_fold_stops_at_a_row_it_cannot_read suite () =
+  on_db suite [] (fun db ->
       let mixed =
         S.list ~params:S.unit ~row:S.int
           "select v::int from (values ('1'), ('2'), (null), ('4')) t(v)"
@@ -257,8 +258,8 @@ let test_a_fold_stops_at_a_row_it_cannot_read () =
 (* A raise from a fold's function passes as itself, and leaves the
    connection closed, since its answer was read only in part; revived, it
    reads on. *)
-let test_a_raise_from_a_fold_closes_the_connection () =
-  on_db [] (fun db ->
+let test_a_raise_from_a_fold_closes_the_connection suite () =
+  on_db suite [] (fun db ->
       let three =
         S.list ~params:S.unit ~row:S.int "select generate_series(1, 3)"
       in
@@ -280,8 +281,9 @@ let test_a_raise_from_a_fold_closes_the_connection () =
 (* [find] promises one row, and a statement that answers none or several is
    an error saying how many -- never the first of several, never a made-up
    absence. *)
-let test_find_is_exactly_one_row () =
-  on_db [ "create table t (n int)"; "insert into t values (1), (2)" ] (fun db ->
+let test_find_is_exactly_one_row suite () =
+  on_db suite [ "create table t (n int)"; "insert into t values (1), (2)" ]
+    (fun db ->
       let one sql = Pg.run db (S.find ~params:S.unit ~row:S.int sql) () in
       Alcotest.(check int)
         "one row" 3
@@ -301,8 +303,9 @@ let test_find_is_exactly_one_row () =
         "several, said" true
         (contains (refused "select n from t where n < 3") "2 rows"))
 
-let test_type_mismatch_reported () =
-  on_db [ "create table t (a text)"; "insert into t values ('x')" ] (fun db ->
+let test_type_mismatch_reported suite () =
+  on_db suite [ "create table t (a text)"; "insert into t values ('x')" ]
+    (fun db ->
       match
         Pg.run db (S.list ~params:S.unit ~row:S.int "select a from t") ()
       with
@@ -317,8 +320,9 @@ let test_type_mismatch_reported () =
       | Ok _ -> Alcotest.fail "decoded TEXT as INT")
 
 (* A whole number in a float column arrives as "7", which must decode. *)
-let test_a_whole_double_reads_as_a_float () =
-  on_db [ "create table f (x double precision)"; "insert into f values (7)" ]
+let test_a_whole_double_reads_as_a_float suite () =
+  on_db suite
+    [ "create table f (x double precision)"; "insert into f values (7)" ]
     (fun db ->
       Alcotest.(check (option (float 0.001)))
         "7 decodes as 7.0" (Some 7.0)
@@ -331,8 +335,8 @@ let test_a_whole_double_reads_as_a_float () =
    Getting that order wrong is silent -- the query stays valid SQL about the
    wrong columns -- so it is pinned by the values landing where they were
    sent. *)
-let test_placeholder_order () =
-  on_db [ "create table q (a integer, b integer, c text)" ] (fun db ->
+let test_placeholder_order suite () =
+  on_db suite [ "create table q (a integer, b integer, c text)" ] (fun db ->
       ok
         (Pg.run db
            (S.exec
@@ -352,8 +356,8 @@ let test_placeholder_order () =
 (* A statement says [$1] as often as it asks about the value -- the
    library listing asks three columns about one account id -- and one value
    is bound for it. *)
-let test_a_parameter_used_twice () =
-  on_db [ "create table owned (a integer, b integer, c text)" ] (fun db ->
+let test_a_parameter_used_twice suite () =
+  on_db suite [ "create table owned (a integer, b integer, c text)" ] (fun db ->
       ok
         (Pg.run db
            (S.exec
@@ -370,8 +374,8 @@ let test_a_parameter_used_twice () =
 
 (* A statement reaches the database as written, so Postgres's own [?]
    operator is one a statement can use. *)
-let test_a_question_mark_is_postgres_s () =
-  on_db
+let test_a_question_mark_is_postgres_s suite () =
+  on_db suite
     [
       "create table tagged (n integer, tags jsonb)";
       {|insert into tagged values (1, '{"go": 1}'), (2, '{"chess": 1}')|};
@@ -386,8 +390,9 @@ let test_a_question_mark_is_postgres_s () =
 
 (* [run_many] is one round trip and all or nothing: every value applies,
    or the first failure is the answer and none does. *)
-let test_run_many_is_all_or_nothing () =
-  on_db [ "create table b (k int constraint b_k_key primary key)" ] (fun db ->
+let test_run_many_is_all_or_nothing suite () =
+  on_db suite [ "create table b (k int constraint b_k_key primary key)" ]
+    (fun db ->
       let insert = S.exec ~params:S.int "insert into b values ($1)" in
       let rows () =
         ok
@@ -429,8 +434,8 @@ let test_run_many_is_all_or_nothing () =
 
 (* [exec_count] is what makes a guarded update an answer: "did I get it",
    decided by the database in one statement. *)
-let test_exec_count_counts_rows () =
-  on_db
+let test_exec_count_counts_rows suite () =
+  on_db suite
     [
       "create table g (k integer primary key, owner text)";
       "insert into g (k, owner) values (1, null)";
@@ -446,8 +451,8 @@ let test_exec_count_counts_rows () =
 (* A value the database holds and this program cannot read -- an enum
    label nobody taught it -- is a decode error naming the column, never a
    raise and never a guess. *)
-let test_parse_refuses_what_it_cannot_read () =
-  on_db
+let test_parse_refuses_what_it_cannot_read suite () =
+  on_db suite
     [
       "create table e (c text, b boolean)"; "insert into e values ('red', true)";
     ] (fun db ->
@@ -486,8 +491,8 @@ let test_parse_refuses_what_it_cannot_read () =
 (* Bytes go out and come back as themselves, every byte value among them --
    a NUL, a backslash, a quote, one past ASCII -- and the database holds
    the bytes that were sent, not their spelling. *)
-let test_bytes_round_trip () =
-  on_db [ "create table b (x bytea)" ] (fun db ->
+let test_bytes_round_trip suite () =
+  on_db suite [ "create table b (x bytea)" ] (fun db ->
       let every = String.init 256 Char.chr in
       ok (Pg.run db (S.exec ~params:S.bytes "insert into b values ($1)") every);
       Alcotest.(check (option string))
@@ -517,8 +522,8 @@ let verified db statements =
    without running it: what agrees passes -- an enum read by labels it has,
    or through a cast and written as text, a domain as what it is made
    from -- and each disagreement is named. *)
-let test_statements_are_checked_against_the_database () =
-  on_db
+let test_statements_are_checked_against_the_database suite () =
+  on_db suite
     [
       "create type colour as enum ('black', 'white')";
       "create domain points as int4";
@@ -620,8 +625,8 @@ let test_statements_are_checked_against_the_database () =
 (* An array goes out as one parameter and comes back as a list, every
    element whatever it holds -- a comma, a quote, a backslash, a space, the
    word NULL -- and a NULL element only where it is one. *)
-let test_arrays_round_trip () =
-  on_db
+let test_arrays_round_trip suite () =
+  on_db suite
     [
       "create table a (n smallint[], f real[], t text[], b bytea[], at \
        timestamptz[], k uuid[])";
@@ -671,8 +676,9 @@ let test_arrays_round_trip () =
 
 (* An empty list is an empty array, and an array is a parameter wherever
    one is: [= any($1)] among them. *)
-let test_an_array_is_a_parameter () =
-  on_db [ "create table e (n int4)"; "insert into e values (1), (2), (3)" ]
+let test_an_array_is_a_parameter suite () =
+  on_db suite
+    [ "create table e (n int4)"; "insert into e values (1), (2), (3)" ]
     (fun db ->
       let among =
         S.list ~params:(S.array S.int) ~row:S.int
@@ -693,8 +699,8 @@ let test_an_array_is_a_parameter () =
 
 (* An element is one column: a shape of more is the statement's error, and
    nothing is sent. *)
-let test_an_element_of_two_columns_is_refused () =
-  on_db [] (fun db ->
+let test_an_element_of_two_columns_is_refused suite () =
+  on_db suite [] (fun db ->
       match
         Pg.run db
           (S.find ~params:(S.array (S.t2 S.int S.int)) ~row:S.int "select 1")
@@ -709,8 +715,8 @@ let test_an_element_of_two_columns_is_refused () =
       | Ok _ -> Alcotest.fail "an array of pairs was sent")
 
 (* The check reads an array by its element's type. *)
-let test_arrays_are_checked_by_their_elements () =
-  on_db [ "create table c (n smallint[], t text[])" ] (fun db ->
+let test_arrays_are_checked_by_their_elements suite () =
+  on_db suite [ "create table c (n smallint[], t text[])" ] (fun db ->
       Alcotest.(check (result unit (list string)))
         "agreeing" (Ok ())
         (verified db
@@ -735,8 +741,9 @@ let test_arrays_are_checked_by_their_elements () =
 (* An instant goes out as UTC and comes back from Postgres' own output,
    whatever the session's time zone -- including one with a half-hour
    offset -- to the microsecond, before the epoch as after it. *)
-let test_an_instant_round_trips () =
-  on_db [ "create table i (t timestamptz)"; "set time zone 'Asia/Kolkata'" ]
+let test_an_instant_round_trips suite () =
+  on_db suite
+    [ "create table i (t timestamptz)"; "set time zone 'Asia/Kolkata'" ]
     (fun db ->
       let moments =
         [
@@ -770,8 +777,8 @@ let test_an_instant_round_trips () =
 (* A uuid and a JSON document are each their own type: written as their
    text, read back as Postgres writes them, and checked against the
    column's type. *)
-let test_uuid_and_json_round_trip () =
-  on_db [ "create table d (id uuid, doc json, data jsonb)" ] (fun db ->
+let test_uuid_and_json_round_trip suite () =
+  on_db suite [ "create table d (id uuid, doc json, data jsonb)" ] (fun db ->
       let id = "0190c0fe-7a1b-7c3d-8e4f-a0b1c2d3e4f5"
       and doc = {|{"b": [1, 2], "a": "x"}|} in
       let insert =
@@ -802,8 +809,8 @@ let test_arity () =
     "nested option" 4
     S.(arity (t3 int text (opt (t2 int int))))
 
-let test_map_record () =
-  on_db [ "create table p (x integer, y integer)" ] (fun db ->
+let test_map_record suite () =
+  on_db suite [ "create table p (x integer, y integer)" ] (fun db ->
       let shape =
         S.map (S.t2 S.int S.int)
           ~parse:(fun (x, y) -> (x, y))
@@ -829,11 +836,12 @@ let test_map_record () =
    interval in the styles the driver sets. A parameter giving one of those
    styles another value is refused before anything runs, since every cell
    of that kind would be misread. *)
-let test_parameters_reach_the_session_but_the_styles () =
-  Db_target.with_postgres (fun target ->
+let test_parameters_reach_the_session_but_the_styles suite () =
+  Db_target.with_postgres suite (fun target ->
       let connect parameters =
-        Pg.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-          ~mono_clock:(Db_target.mono ()) ~statement_cache:0 ~parameters target
+        Pg.connect ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+          ~mono_clock:(Db_target.mono suite) ~statement_cache:0 ~parameters
+          target
       in
       (match connect [ ("datestyle", "SQL, DMY") ] with
       | Error (`Db _) -> ()
@@ -862,15 +870,15 @@ let test_parameters_reach_the_session_but_the_styles () =
             "an interval reads" (1, 2, 3_000_000)
             (interval.months, interval.days, interval.microseconds)))
 
-let test_a_lost_connection_is_an_error () =
-  on_db [] (fun db ->
+let test_a_lost_connection_is_an_error suite () =
+  on_db suite [] (fun db ->
       let pid =
         ok
           (Pg.run db
              (S.find_opt ~params:S.unit ~row:S.int "select pg_backend_pid()")
              ())
       in
-      Db_target.admin (fun admin ->
+      Db_target.admin suite (fun admin ->
           match pid with
           | None -> Alcotest.fail "no backend pid"
           | Some pid ->
@@ -916,8 +924,8 @@ exception Work_raised
 
 (* A raise inside the work is a bug, not an answer: the transaction rolls
    back, the raise passes, and the connection reads on. *)
-let test_a_raise_rolls_back_and_passes () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_raise_rolls_back_and_passes suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       (match
          T.within db (fun db ->
              ok (insert db 1);
@@ -934,7 +942,7 @@ let test_a_raise_rolls_back_and_passes () =
    reaches every such match. *)
 type outcome = Committed | Refused | Failed_transaction
 
-let test_a_caller_names_the_transactions_failures () =
+let test_a_caller_names_the_transactions_failures suite () =
   let outcome = function
     | Ok () -> Committed
     | Error `Refused -> Refused
@@ -948,7 +956,7 @@ let test_a_caller_names_the_transactions_failures () =
   let check what expected answer =
     Alcotest.(check string) what (show expected) (show (outcome answer))
   in
-  on_db
+  on_db suite
     [
       "create table t (n int, constraint u unique (n) deferrable initially \
        deferred)";
@@ -964,8 +972,8 @@ let test_a_caller_names_the_transactions_failures () =
 (* A transaction cancelled inside its work keeps nothing and holds nothing:
    the cancellation passes as itself, and the connection takes the next
    transaction. *)
-let test_a_cancelled_transaction_keeps_nothing () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_cancelled_transaction_keeps_nothing suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let answer =
         Eio.Fiber.first
           (fun () ->
@@ -976,7 +984,8 @@ let test_a_cancelled_transaction_keeps_nothing () =
                 : (unit, _) result);
             "finished")
           (fun () ->
-            Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(300 * ms);
+            Eio.Time.Mono.sleep_span (Db_target.mono suite)
+              Mtime.Span.(300 * ms);
             "cancelled")
       in
       Alcotest.(check string) "the work was cancelled" "cancelled" answer;
@@ -990,9 +999,10 @@ let test_a_cancelled_transaction_keeps_nothing () =
    nothing for it, and the next transaction makes the connection again.
    The cancel comes once the work has written, so where it lands does not
    depend on how fast the statement ran. *)
-let test_a_transaction_cancelled_between_statements_ends () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target and other = Db_target.connect target in
+let test_a_transaction_cancelled_between_statements_ends suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target
+      and other = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () ->
           Pg.close db;
@@ -1006,7 +1016,7 @@ let test_a_transaction_cancelled_between_statements_ends () =
                 (T.within db (fun db ->
                      let* () = insert db 1 in
                      Eio.Promise.resolve write ();
-                     Eio.Time.Mono.sleep_span (Db_target.mono ())
+                     Eio.Time.Mono.sleep_span (Db_target.mono suite)
                        Mtime.Span.(60 * s);
                      Ok ())
                   : (unit, _) result))
@@ -1042,15 +1052,15 @@ let test_a_transaction_cancelled_between_statements_ends () =
 
 (* A statement whose fiber is cancelled stops at the server too, rather
    than run on for nobody under whatever it holds. *)
-let test_a_cancelled_statement_stops_at_the_server () =
-  on_db [] (fun db ->
+let test_a_cancelled_statement_stops_at_the_server suite () =
+  on_db suite [] (fun db ->
       let sleeping = "select pg_sleep(10) -- cancelled" in
       Eio.Fiber.first
         (fun () -> ignore (Pg.exec_raw db sleeping : (unit, _) result))
         (fun () ->
-          Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(300 * ms));
+          Eio.Time.Mono.sleep_span (Db_target.mono suite) Mtime.Span.(300 * ms));
       let running () =
-        Db_target.admin (fun admin ->
+        Db_target.admin suite (fun admin ->
             ok
               (Pg.run admin
                  (S.find ~params:S.text ~row:S.int
@@ -1064,7 +1074,8 @@ let test_a_cancelled_statement_stops_at_the_server () =
         running () = 0
         || tries > 0
            &&
-           (Eio.Time.Mono.sleep_span (Db_target.mono ()) Mtime.Span.(100 * ms);
+           (Eio.Time.Mono.sleep_span (Db_target.mono suite)
+              Mtime.Span.(100 * ms);
             stopped (tries - 1))
       in
       Alcotest.(check bool) "it stopped at the server" true (stopped 30))
@@ -1073,8 +1084,8 @@ let test_a_cancelled_statement_stops_at_the_server () =
    ways and counts the connections made through it, a cancel request being
    one of its own. A cancel request waits for the server to close it, so it
    is counted by the time it returns. *)
-let with_counting_proxy (c : Pg.Conninfo.t) f =
-  let net = Db_target.net () in
+let with_counting_proxy suite (c : Pg.Conninfo.t) f =
+  let net = Db_target.net suite in
   let addresses =
     match c.hosts with
     | { host = Tcp host; port; _ } :: _ ->
@@ -1136,17 +1147,17 @@ let with_counting_proxy (c : Pg.Conninfo.t) f =
 (* A statement whose fiber is cancelled is cancelled at the server once:
    one cancel request, the driver's, and no second one from this library
    on top of it. *)
-let test_a_cancelled_statement_is_cancelled_once () =
-  Db_target.with_postgres (fun target ->
-      with_counting_proxy target (fun url connections ->
-          let db = Db_target.connect url in
+let test_a_cancelled_statement_is_cancelled_once suite () =
+  Db_target.with_postgres suite (fun target ->
+      with_counting_proxy suite target (fun url connections ->
+          let db = Db_target.connect suite url in
           Fun.protect
             ~finally:(fun () -> Pg.close db)
             (fun () ->
               let sleeping = "select pg_sleep(10) -- cancelled once" in
               let made = !connections in
               let running () =
-                Db_target.admin (fun admin ->
+                Db_target.admin suite (fun admin ->
                     ok
                       (Pg.run admin
                          (S.find ~params:S.text ~row:S.int
@@ -1169,8 +1180,8 @@ let test_a_cancelled_statement_is_cancelled_once () =
 (* A transaction inside another on one connection would have its COMMIT
    end the outer one too, which Postgres only warns about: it is refused
    before it begins, and the outer one goes on whole. *)
-let test_a_transaction_inside_another_is_refused () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_transaction_inside_another_is_refused suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let inner = ref None in
       (match
          T.within db (fun db ->
@@ -1190,15 +1201,15 @@ let test_a_transaction_inside_another_is_refused () =
 
 (* A connection the server dropped is made again before the transaction
    begins, the one point where starting again loses nothing. *)
-let test_a_dropped_connection_is_revived_before_begin () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_dropped_connection_is_revived_before_begin suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let pid =
         ok
           (Pg.run db
              (S.find ~params:S.unit ~row:S.int "select pg_backend_pid()")
              ())
       in
-      Db_target.admin (fun admin ->
+      Db_target.admin suite (fun admin ->
           ignore
             (ok
                (Pg.run admin
@@ -1215,8 +1226,8 @@ let test_a_dropped_connection_is_revived_before_begin () =
 
 (* A rollback on a connection the server dropped fails, and the connection
    is made again by the next transaction. *)
-let test_a_lost_rollback_is_revived () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_lost_rollback_is_revived suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let pid =
         ok
           (Pg.run db
@@ -1226,7 +1237,7 @@ let test_a_lost_rollback_is_revived () =
       (match
          T.within db (fun db ->
              ok (insert db 1);
-             Db_target.admin (fun admin ->
+             Db_target.admin suite (fun admin ->
                  ignore
                    (ok
                       (Pg.run admin
@@ -1250,9 +1261,9 @@ let test_a_lost_rollback_is_revived () =
 
 (* A connection its owner closed is closed for good: a transaction on it is
    not committed, and runs nothing, rather than opening it again. *)
-let test_a_closed_connection_stays_closed () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_closed_connection_stays_closed suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       ok (Pg.exec_raw db "create table t (n int)");
       Pg.close db;
       (match Pg.revive db with
@@ -1274,18 +1285,18 @@ let test_a_closed_connection_stays_closed () =
           Alcotest.failf "a closed connection, told as: %s"
             (S.error_to_string e)
       | Ok () -> Alcotest.fail "a closed connection was opened again");
-      let other = Db_target.connect target in
+      let other = Db_target.connect suite target in
       Fun.protect
         ~finally:(fun () -> Pg.close other)
         (fun () -> Alcotest.(check int) "nothing written" 0 (committed other)))
 
 (* A connection that cannot be made again says why: here its database is
    gone, and the transaction that asked is not committed for that reason. *)
-let test_a_revival_that_fails_says_why () =
-  Db_target.with_postgres (fun target ->
-      let db = Db_target.connect target in
+let test_a_revival_that_fails_says_why suite () =
+  Db_target.with_postgres suite (fun target ->
+      let db = Db_target.connect suite target in
       let name = (target : Pg.Conninfo.t).database in
-      Db_target.admin (fun admin ->
+      Db_target.admin suite (fun admin ->
           Db_target.exec admin
             (Printf.sprintf "drop database %s with (force)" name));
       ignore (Pg.exec_raw db "select 1" : (unit, S.error) result);
@@ -1314,10 +1325,11 @@ let test_a_revival_that_fails_says_why () =
 (* A connection that cannot be made again because nothing answers -- here
    the proxy it was made through is gone -- never sent the work, and says
    so: a revive is [`Unsent], and so is a transaction that needed one. *)
-let test_a_revival_that_reaches_nothing_is_unsent () =
-  Db_target.with_postgres (fun target ->
+let test_a_revival_that_reaches_nothing_is_unsent suite () =
+  Db_target.with_postgres suite (fun target ->
       let db =
-        with_counting_proxy target (fun through _ -> Db_target.connect through)
+        with_counting_proxy suite target (fun through _ ->
+            Db_target.connect suite through)
       in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
@@ -1338,8 +1350,8 @@ let test_a_revival_that_reaches_nothing_is_unsent () =
 
 (* A connection lost inside a transaction last heard it was in one; the
    next transaction revives it rather than refusing it as nested. *)
-let test_a_connection_lost_inside_a_transaction_is_revived () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_connection_lost_inside_a_transaction_is_revived suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let lost =
         T.within db (fun db ->
             let pid =
@@ -1348,7 +1360,7 @@ let test_a_connection_lost_inside_a_transaction_is_revived () =
                    (S.find ~params:S.unit ~row:S.int "select pg_backend_pid()")
                    ())
             in
-            Db_target.admin (fun admin ->
+            Db_target.admin suite (fun admin ->
                 ignore
                   (ok
                      (Pg.run admin
@@ -1372,8 +1384,8 @@ let test_a_connection_lost_inside_a_transaction_is_revived () =
    [COMMIT] has gone by, then lets the server answer it and hangs up on the
    client without passing the answer on: a COMMIT the server ran, and whose
    answer the client never read. *)
-let with_commit_cut (c : Pg.Conninfo.t) f =
-  let sw = Db_target.sw () and net = Db_target.net () in
+let with_commit_cut suite (c : Pg.Conninfo.t) f =
+  let sw = Db_target.sw suite and net = Db_target.net suite in
   let addresses =
     match c.hosts with
     | { host = Tcp host; port; _ } :: _ ->
@@ -1436,12 +1448,12 @@ let with_commit_cut (c : Pg.Conninfo.t) f =
 
 (* A COMMIT the server ran and whose answer was lost may have committed,
    and the transaction says so, where [`Not_committed] would be false. *)
-let test_a_lost_commit_is_lost () =
-  Db_target.with_postgres (fun target ->
-      let setup = Db_target.connect target in
+let test_a_lost_commit_is_lost suite () =
+  Db_target.with_postgres suite (fun target ->
+      let setup = Db_target.connect suite target in
       ok (Pg.exec_raw setup "create table t (n int)");
-      with_commit_cut target (fun url ->
-          let db = Db_target.connect url in
+      with_commit_cut suite target (fun url ->
+          let db = Db_target.connect suite url in
           (match T.within db (fun db -> insert db 1) with
           | Error (`Lost _) -> ()
           | Error (`Not_committed m | `Not_serializable m | `Db m) ->
@@ -1458,8 +1470,8 @@ let test_a_lost_commit_is_lost () =
    insert is when checked at once, naming its constraint: the server
    refused it, so the transaction is known rolled back. The work's Ok must
    not survive it, because nothing it wrote did. *)
-let test_a_deferred_violation_is_a_conflict () =
-  on_db
+let test_a_deferred_violation_is_a_conflict suite () =
+  on_db suite
     [
       "create table t (n int, constraint u unique (n) deferrable initially \
        deferred)";
@@ -1484,8 +1496,8 @@ let test_a_deferred_violation_is_a_conflict () =
 
 (* A COMMIT refused for anything but a conflict -- a deferred trigger that
    raises -- is not committed. *)
-let test_a_failed_commit_is_not_committed () =
-  on_db
+let test_a_failed_commit_is_not_committed suite () =
+  on_db suite
     [
       "create table t (n int)";
       "create function refuse() returns trigger language plpgsql as $$ begin \
@@ -1504,8 +1516,9 @@ let test_a_failed_commit_is_not_committed () =
 
 (* Postgres rolls an aborted transaction back without an error, so work
    that swallowed the failed statement would otherwise answer success. *)
-let test_ok_from_an_aborted_transaction_is_not_committed () =
-  on_db [ "create table t (n int primary key)"; "insert into t values (1)" ]
+let test_ok_from_an_aborted_transaction_is_not_committed suite () =
+  on_db suite
+    [ "create table t (n int primary key)"; "insert into t values (1)" ]
     (fun db ->
       match
         T.within db (fun db ->
@@ -1547,8 +1560,9 @@ let warnings f =
 (* ...while the same failure RETURNED is the work's own answer: a race lost
    to a unique index is a refusal, not a transaction gone wrong -- and a
    refusal that asked to keep its write is told it was not kept. *)
-let test_a_returned_failure_is_the_works_answer () =
-  on_db [ "create table t (n int primary key)"; "insert into t values (1)" ]
+let test_a_returned_failure_is_the_works_answer suite () =
+  on_db suite
+    [ "create table t (n int primary key)"; "insert into t values (1)" ]
     (fun db ->
       let said =
         warnings (fun () ->
@@ -1570,8 +1584,8 @@ let test_a_returned_failure_is_the_works_answer () =
            said))
 
 (* A refusal keeps nothing unless the work says it keeps what it wrote. *)
-let test_a_refusal_rolls_back_unless_it_says () =
-  on_db [ "create table t (n int)" ] (fun db ->
+let test_a_refusal_rolls_back_unless_it_says suite () =
+  on_db suite [ "create table t (n int)" ] (fun db ->
       let refuse ?keep () =
         match
           T.within ?keep db (fun db ->
@@ -1603,8 +1617,8 @@ let landed = function
 (* An observer is handed each statement's text -- a transaction's [begin]
    and [commit] among them, and never a value -- and answers what the
    statement did; a pool hands its observer to every connection it lends. *)
-let test_an_observer_sees_every_statement () =
-  Db_target.with_postgres (fun target ->
+let test_an_observer_sees_every_statement suite () =
+  Db_target.with_postgres suite (fun target ->
       let seen = ref [] in
       let observe =
         {
@@ -1621,8 +1635,8 @@ let test_an_observer_sees_every_statement () =
       in
       let db =
         ok
-          (Pg.connect ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-             ~mono_clock:(Db_target.mono ()) ~observe target)
+          (Pg.connect ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+             ~mono_clock:(Db_target.mono suite) ~observe target)
       in
       Fun.protect
         ~finally:(fun () -> Pg.close db)
@@ -1637,8 +1651,8 @@ let test_an_observer_sees_every_statement () =
       seen := [];
       let pool =
         ok
-          (Pg.Pool.create ~sw:(Db_target.sw ()) ~net:(Db_target.net ())
-             ~mono_clock:(Db_target.mono ()) ~size:1 ~observe target)
+          (Pg.Pool.create ~sw:(Db_target.sw suite) ~net:(Db_target.net suite)
+             ~mono_clock:(Db_target.mono suite) ~size:1 ~observe target)
       in
       Fun.protect
         ~finally:(fun () -> Pg.Pool.close pool)
@@ -1651,8 +1665,8 @@ let test_an_observer_sees_every_statement () =
         [ "select length($1)::int" ]
         !seen)
 
-let test_a_transaction_begins_at_its_level () =
-  on_db [] (fun db ->
+let test_a_transaction_begins_at_its_level suite () =
+  on_db suite [] (fun db ->
       let level ?isolation () =
         landed
           (T.within ?isolation db (fun db ->
@@ -1671,8 +1685,8 @@ let test_a_transaction_begins_at_its_level () =
 (* A statement Postgres could not order with a concurrent one -- 40001, and
    a deadlock, 40P01 -- is its own failure, because running the transaction
    again may get past it and nothing else here may. *)
-let test_a_serialization_failure_is_its_own () =
-  on_db [] (fun db ->
+let test_a_serialization_failure_is_its_own suite () =
+  on_db suite [] (fun db ->
       List.iter
         (fun code ->
           match
@@ -1711,8 +1725,8 @@ let flaky db = Pg.exec_raw db "select flaky()"
 
 (* Retried, the whole transaction runs again and lands once; not retried,
    or retried too few times, the failure is the answer and nothing lands. *)
-let test_retries_run_the_transaction_again () =
-  on_db (flaky_setup 2) (fun db ->
+let test_retries_run_the_transaction_again suite () =
+  on_db suite (flaky_setup 2) (fun db ->
       (match T.within db flaky with
       | Error (`Not_serializable _) -> ()
       | Error (`Conflict _ | `Db _ | `Not_committed _) ->
@@ -1728,8 +1742,8 @@ let test_retries_run_the_transaction_again () =
 (* A COMMIT can find the transaction not serializable as well -- here a
    deferred trigger that refuses the first time -- and that is the same
    failure, retried the same way, never [`Not_committed]. *)
-let test_a_commit_not_serializable_is_retried () =
-  on_db
+let test_a_commit_not_serializable_is_retried suite () =
+  on_db suite
     [
       "create table t (n int)";
       "create sequence tries";
@@ -1754,8 +1768,8 @@ let test_a_commit_not_serializable_is_retried () =
 (* A refusal kept by [keep] commits like an [Ok], so its COMMIT refused as
    not serializable is retried like one, and the refusal kept once it
    lands. *)
-let test_a_kept_refusal_not_serializable_is_retried () =
-  on_db
+let test_a_kept_refusal_not_serializable_is_retried suite () =
+  on_db suite
     [
       "create table t (n int)";
       "create sequence tries";
@@ -1782,8 +1796,8 @@ let test_a_kept_refusal_not_serializable_is_retried () =
 (* How many values a statement asks for is the database's to check: a
    shape that binds a number the statement does not ask for is refused by
    the server, and nothing runs. *)
-let test_a_count_that_disagrees_is_refused_by_the_server () =
-  on_db [] (fun db ->
+let test_a_count_that_disagrees_is_refused_by_the_server suite () =
+  on_db suite [] (fun db ->
       Alcotest.(check bool)
         "two parameters for one" true
         (match
@@ -1813,8 +1827,9 @@ let test_a_count_that_disagrees_is_refused_by_the_server () =
 
 (* A NULL is not empty text: text refuses one like every other scalar,
    and a column that may hold one is [opt]'s. *)
-let test_a_null_is_not_empty_text () =
-  on_db [ "create table n (a text)"; "insert into n values (null)" ] (fun db ->
+let test_a_null_is_not_empty_text suite () =
+  on_db suite [ "create table n (a text)"; "insert into n values (null)" ]
+    (fun db ->
       (match
          Pg.run db (S.find_opt ~params:S.unit ~row:S.text "select a from n") ()
        with
@@ -1832,8 +1847,8 @@ let test_a_null_is_not_empty_text () =
 
 (* A shape wider than the result is the caller's error, said as one rather
    than raised by the binding. *)
-let test_a_shape_wider_than_the_result () =
-  on_db [] (fun db ->
+let test_a_shape_wider_than_the_result suite () =
+  on_db suite [] (fun db ->
       match
         Pg.run db (S.find_opt ~params:S.unit ~row:S.(t2 int int) "select 1") ()
       with
@@ -1847,8 +1862,8 @@ let test_a_shape_wider_than_the_result () =
 (* A shape narrower than the result is refused as a wider one is, since a
    column read by nobody is a query and a shape that disagree, as [verify]
    says of it. *)
-let test_a_shape_narrower_than_the_result () =
-  on_db [] (fun db ->
+let test_a_shape_narrower_than_the_result suite () =
+  on_db suite [] (fun db ->
       let refused what = function
         | Error (`Db m) ->
             Alcotest.(check bool)
@@ -1872,135 +1887,158 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "rowtype"
-    [
-      ( "shapes",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "rowtype"
         [
-          Alcotest.test_case "arity" `Quick test_arity;
-          Alcotest.test_case "map" `Quick test_map_record;
-        ] );
-      ( "roundtrip",
-        [
-          Alcotest.test_case "t4 with option" `Quick test_roundtrip_t4;
-          Alcotest.test_case "an instant" `Quick test_an_instant_round_trips;
-          Alcotest.test_case "a uuid and JSON" `Quick
-            test_uuid_and_json_round_trip;
-          Alcotest.test_case "bytes" `Quick test_bytes_round_trip;
-          Alcotest.test_case "arrays" `Quick test_arrays_round_trip;
-          Alcotest.test_case "an array is a parameter" `Quick
-            test_an_array_is_a_parameter;
-          Alcotest.test_case "an element of two columns is refused" `Quick
-            test_an_element_of_two_columns_is_refused;
-          Alcotest.test_case "arrays are checked by their elements" `Quick
-            test_arrays_are_checked_by_their_elements;
-          Alcotest.test_case "statements are checked against the database"
-            `Quick test_statements_are_checked_against_the_database;
-          Alcotest.test_case "NULL as None" `Quick test_option_null;
-          Alcotest.test_case "find_opt" `Quick test_find_opt;
-          Alcotest.test_case "a whole double reads as a float" `Quick
-            test_a_whole_double_reads_as_a_float;
-          Alcotest.test_case "run_many is all or nothing" `Quick
-            test_run_many_is_all_or_nothing;
-          Alcotest.test_case "exec_count counts rows" `Quick
-            test_exec_count_counts_rows;
-        ] );
-      ( "placeholders",
-        [
-          Alcotest.test_case "order is preserved" `Quick test_placeholder_order;
-          Alcotest.test_case "a parameter used twice" `Quick
-            test_a_parameter_used_twice;
-          Alcotest.test_case "a ? is Postgres's" `Quick
-            test_a_question_mark_is_postgres_s;
-          Alcotest.test_case "a count that disagrees is refused by the server"
-            `Quick test_a_count_that_disagrees_is_refused_by_the_server;
-        ] );
-      ( "transactions",
-        [
-          Alcotest.test_case "a deferred violation is a conflict" `Quick
-            test_a_deferred_violation_is_a_conflict;
-          Alcotest.test_case "a failed commit is not committed" `Quick
-            test_a_failed_commit_is_not_committed;
-          Alcotest.test_case "a lost commit is lost" `Quick
-            test_a_lost_commit_is_lost;
-          Alcotest.test_case "a caller names the transaction's failures" `Quick
-            test_a_caller_names_the_transactions_failures;
-          Alcotest.test_case "Ok from an aborted transaction is not committed"
-            `Quick test_ok_from_an_aborted_transaction_is_not_committed;
-          Alcotest.test_case "a returned failure is the work's answer" `Quick
-            test_a_returned_failure_is_the_works_answer;
-          Alcotest.test_case "a refusal rolls back unless it says" `Quick
-            test_a_refusal_rolls_back_unless_it_says;
-          Alcotest.test_case "a transaction begins at its level" `Quick
-            test_a_transaction_begins_at_its_level;
-          Alcotest.test_case "a cancelled transaction keeps nothing" `Quick
-            test_a_cancelled_transaction_keeps_nothing;
-          Alcotest.test_case "a transaction cancelled between statements ends"
-            `Quick test_a_transaction_cancelled_between_statements_ends;
-          Alcotest.test_case "a cancelled statement stops at the server" `Quick
-            test_a_cancelled_statement_stops_at_the_server;
-          Alcotest.test_case "a cancelled statement is cancelled once" `Quick
-            test_a_cancelled_statement_is_cancelled_once;
-          Alcotest.test_case "a raise rolls back and passes" `Quick
-            test_a_raise_rolls_back_and_passes;
-          Alcotest.test_case "a transaction inside another is refused" `Quick
-            test_a_transaction_inside_another_is_refused;
-          Alcotest.test_case "a dropped connection is revived before begin"
-            `Quick test_a_dropped_connection_is_revived_before_begin;
-          Alcotest.test_case "a lost rollback is revived" `Quick
-            test_a_lost_rollback_is_revived;
-          Alcotest.test_case "a closed connection stays closed" `Quick
-            test_a_closed_connection_stays_closed;
-          Alcotest.test_case "a revival that fails says why" `Quick
-            test_a_revival_that_fails_says_why;
-          Alcotest.test_case "a revival that reaches nothing is unsent" `Quick
-            test_a_revival_that_reaches_nothing_is_unsent;
-          Alcotest.test_case "a connection lost in a transaction is revived"
-            `Quick test_a_connection_lost_inside_a_transaction_is_revived;
-          Alcotest.test_case "an observer sees every statement" `Quick
-            test_an_observer_sees_every_statement;
-          Alcotest.test_case "a serialization failure is its own" `Quick
-            test_a_serialization_failure_is_its_own;
-          Alcotest.test_case "retries run the transaction again" `Quick
-            test_retries_run_the_transaction_again;
-          Alcotest.test_case "a commit not serializable is retried" `Quick
-            test_a_commit_not_serializable_is_retried;
-          Alcotest.test_case "a kept refusal not serializable is retried" `Quick
-            test_a_kept_refusal_not_serializable_is_retried;
-        ] );
-      ( "connections",
-        [
-          Alcotest.test_case "parameters reach the session, but the styles"
-            `Quick test_parameters_reach_the_session_but_the_styles;
-        ] );
-      ( "errors",
-        [
-          Alcotest.test_case "a lost connection is an error" `Quick
-            test_a_lost_connection_is_an_error;
-          Alcotest.test_case "conflict is distinct" `Quick
-            test_conflict_is_distinct;
-          Alcotest.test_case "conflict through returning" `Quick
-            test_conflict_through_returning;
-          Alcotest.test_case "a conflict names its constraint" `Quick
-            test_a_conflict_names_its_constraint;
-          Alcotest.test_case "a conflict is about other rows" `Quick
-            test_a_conflict_is_about_other_rows;
-          Alcotest.test_case "find is exactly one row" `Quick
-            test_find_is_exactly_one_row;
-          Alcotest.test_case "a fold is run without the list" `Quick
-            test_fold_is_run_without_the_list;
-          Alcotest.test_case "a raise from a fold closes the connection" `Quick
-            test_a_raise_from_a_fold_closes_the_connection;
-          Alcotest.test_case "a fold stops at a row it cannot read" `Quick
-            test_a_fold_stops_at_a_row_it_cannot_read;
-          Alcotest.test_case "type mismatch" `Quick test_type_mismatch_reported;
-          Alcotest.test_case "an unreadable value" `Quick
-            test_parse_refuses_what_it_cannot_read;
-          Alcotest.test_case "a NULL is not empty text" `Quick
-            test_a_null_is_not_empty_text;
-          Alcotest.test_case "a shape wider than the result" `Quick
-            test_a_shape_wider_than_the_result;
-          Alcotest.test_case "a shape narrower than the result" `Quick
-            test_a_shape_narrower_than_the_result;
-        ] );
-    ]
+          ( "shapes",
+            [
+              Alcotest.test_case "arity" `Quick test_arity;
+              Alcotest.test_case "map" `Quick (test_map_record suite);
+            ] );
+          ( "roundtrip",
+            [
+              Alcotest.test_case "t4 with option" `Quick
+                (test_roundtrip_t4 suite);
+              Alcotest.test_case "an instant" `Quick
+                (test_an_instant_round_trips suite);
+              Alcotest.test_case "a uuid and JSON" `Quick
+                (test_uuid_and_json_round_trip suite);
+              Alcotest.test_case "bytes" `Quick (test_bytes_round_trip suite);
+              Alcotest.test_case "arrays" `Quick (test_arrays_round_trip suite);
+              Alcotest.test_case "an array is a parameter" `Quick
+                (test_an_array_is_a_parameter suite);
+              Alcotest.test_case "an element of two columns is refused" `Quick
+                (test_an_element_of_two_columns_is_refused suite);
+              Alcotest.test_case "arrays are checked by their elements" `Quick
+                (test_arrays_are_checked_by_their_elements suite);
+              Alcotest.test_case "statements are checked against the database"
+                `Quick
+                (test_statements_are_checked_against_the_database suite);
+              Alcotest.test_case "NULL as None" `Quick (test_option_null suite);
+              Alcotest.test_case "find_opt" `Quick (test_find_opt suite);
+              Alcotest.test_case "a whole double reads as a float" `Quick
+                (test_a_whole_double_reads_as_a_float suite);
+              Alcotest.test_case "run_many is all or nothing" `Quick
+                (test_run_many_is_all_or_nothing suite);
+              Alcotest.test_case "exec_count counts rows" `Quick
+                (test_exec_count_counts_rows suite);
+            ] );
+          ( "placeholders",
+            [
+              Alcotest.test_case "order is preserved" `Quick
+                (test_placeholder_order suite);
+              Alcotest.test_case "a parameter used twice" `Quick
+                (test_a_parameter_used_twice suite);
+              Alcotest.test_case "a ? is Postgres's" `Quick
+                (test_a_question_mark_is_postgres_s suite);
+              Alcotest.test_case
+                "a count that disagrees is refused by the server" `Quick
+                (test_a_count_that_disagrees_is_refused_by_the_server suite);
+            ] );
+          ( "transactions",
+            [
+              Alcotest.test_case "a deferred violation is a conflict" `Quick
+                (test_a_deferred_violation_is_a_conflict suite);
+              Alcotest.test_case "a failed commit is not committed" `Quick
+                (test_a_failed_commit_is_not_committed suite);
+              Alcotest.test_case "a lost commit is lost" `Quick
+                (test_a_lost_commit_is_lost suite);
+              Alcotest.test_case "a caller names the transaction's failures"
+                `Quick
+                (test_a_caller_names_the_transactions_failures suite);
+              Alcotest.test_case
+                "Ok from an aborted transaction is not committed" `Quick
+                (test_ok_from_an_aborted_transaction_is_not_committed suite);
+              Alcotest.test_case "a returned failure is the work's answer"
+                `Quick
+                (test_a_returned_failure_is_the_works_answer suite);
+              Alcotest.test_case "a refusal rolls back unless it says" `Quick
+                (test_a_refusal_rolls_back_unless_it_says suite);
+              Alcotest.test_case "a transaction begins at its level" `Quick
+                (test_a_transaction_begins_at_its_level suite);
+              Alcotest.test_case "a cancelled transaction keeps nothing" `Quick
+                (test_a_cancelled_transaction_keeps_nothing suite);
+              Alcotest.test_case
+                "a transaction cancelled between statements ends" `Quick
+                (test_a_transaction_cancelled_between_statements_ends suite);
+              Alcotest.test_case "a cancelled statement stops at the server"
+                `Quick
+                (test_a_cancelled_statement_stops_at_the_server suite);
+              Alcotest.test_case "a cancelled statement is cancelled once"
+                `Quick
+                (test_a_cancelled_statement_is_cancelled_once suite);
+              Alcotest.test_case "a raise rolls back and passes" `Quick
+                (test_a_raise_rolls_back_and_passes suite);
+              Alcotest.test_case "a transaction inside another is refused"
+                `Quick
+                (test_a_transaction_inside_another_is_refused suite);
+              Alcotest.test_case "a dropped connection is revived before begin"
+                `Quick
+                (test_a_dropped_connection_is_revived_before_begin suite);
+              Alcotest.test_case "a lost rollback is revived" `Quick
+                (test_a_lost_rollback_is_revived suite);
+              Alcotest.test_case "a closed connection stays closed" `Quick
+                (test_a_closed_connection_stays_closed suite);
+              Alcotest.test_case "a revival that fails says why" `Quick
+                (test_a_revival_that_fails_says_why suite);
+              Alcotest.test_case "a revival that reaches nothing is unsent"
+                `Quick
+                (test_a_revival_that_reaches_nothing_is_unsent suite);
+              Alcotest.test_case "a connection lost in a transaction is revived"
+                `Quick
+                (test_a_connection_lost_inside_a_transaction_is_revived suite);
+              Alcotest.test_case "an observer sees every statement" `Quick
+                (test_an_observer_sees_every_statement suite);
+              Alcotest.test_case "a serialization failure is its own" `Quick
+                (test_a_serialization_failure_is_its_own suite);
+              Alcotest.test_case "retries run the transaction again" `Quick
+                (test_retries_run_the_transaction_again suite);
+              Alcotest.test_case "a commit not serializable is retried" `Quick
+                (test_a_commit_not_serializable_is_retried suite);
+              Alcotest.test_case "a kept refusal not serializable is retried"
+                `Quick
+                (test_a_kept_refusal_not_serializable_is_retried suite);
+            ] );
+          ( "connections",
+            [
+              Alcotest.test_case "parameters reach the session, but the styles"
+                `Quick
+                (test_parameters_reach_the_session_but_the_styles suite);
+            ] );
+          ( "errors",
+            [
+              Alcotest.test_case "a lost connection is an error" `Quick
+                (test_a_lost_connection_is_an_error suite);
+              Alcotest.test_case "conflict is distinct" `Quick
+                (test_conflict_is_distinct suite);
+              Alcotest.test_case "conflict through returning" `Quick
+                (test_conflict_through_returning suite);
+              Alcotest.test_case "a conflict names its constraint" `Quick
+                (test_a_conflict_names_its_constraint suite);
+              Alcotest.test_case "a conflict is about other rows" `Quick
+                (test_a_conflict_is_about_other_rows suite);
+              Alcotest.test_case "find is exactly one row" `Quick
+                (test_find_is_exactly_one_row suite);
+              Alcotest.test_case "a fold is run without the list" `Quick
+                (test_fold_is_run_without_the_list suite);
+              Alcotest.test_case "a raise from a fold closes the connection"
+                `Quick
+                (test_a_raise_from_a_fold_closes_the_connection suite);
+              Alcotest.test_case "a fold stops at a row it cannot read" `Quick
+                (test_a_fold_stops_at_a_row_it_cannot_read suite);
+              Alcotest.test_case "type mismatch" `Quick
+                (test_type_mismatch_reported suite);
+              Alcotest.test_case "an unreadable value" `Quick
+                (test_parse_refuses_what_it_cannot_read suite);
+              Alcotest.test_case "a NULL is not empty text" `Quick
+                (test_a_null_is_not_empty_text suite);
+              Alcotest.test_case "a shape wider than the result" `Quick
+                (test_a_shape_wider_than_the_result suite);
+              Alcotest.test_case "a shape narrower than the result" `Quick
+                (test_a_shape_narrower_than_the_result suite);
+            ] );
+        ]

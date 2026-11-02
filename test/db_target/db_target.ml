@@ -2,66 +2,39 @@
 
    Every suite that touches a database needs a Postgres server: the one
    TEST_DATABASE_URL names, where a runner hands one, or else one of the
-   suite's own, which rowtype-test starts in Podman and removes as the suite
-   ends. The suite reads the variable where it starts, as an executable
-   does; this is what it reads it for. *)
+   suite's own, which rowtype-test starts and removes as the suite ends.
+   The suite reads the variable where it starts, as an executable does,
+   and hands what [start] makes to each case that needs it. *)
 
 let variable = "TEST_DATABASE_URL"
 
-(* The Eio loop a suite runs its cases in, a switch that lasts as long and
-   the server on it: a connection is Eio's, and a suite's cases are
-   functions of nothing, so the one [Eio_main.run] a suite starts in hands
-   them over once, with [start]. *)
-let loop :
-    (Eio_unix.Stdenv.base
-    * Eio.Switch.t
-    * Rowtype_test.server
-    * Rowtype_test.template)
-    option
-    ref =
-  ref None
+type t = {
+  env : Eio_unix.Stdenv.base;
+  sw : Eio.Switch.t;
+  server : Rowtype_test.server;
+  template : Rowtype_test.template;
+}
 
 (* The suite's template is empty: each case makes its own tables. *)
 let start env ~sw ?url () =
-  match
-    Result.bind (Rowtype_test.server ~sw ?url env) (fun server ->
-        Result.map (fun t -> (server, t)) (Rowtype_test.template server))
-  with
-  | Ok (server, template) ->
-      loop := Some ((env :> Eio_unix.Stdenv.base), sw, server, template)
-  | Error e ->
-      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
-      exit 1
+  Result.bind (Rowtype_test.server ~sw ?url env) (fun server ->
+      Result.map
+        (fun template -> { env :> Eio_unix.Stdenv.base; sw; server; template })
+        (Rowtype_test.template server))
 
-let io () =
-  match !loop with
-  | Some v -> v
-  | None -> Alcotest.fail "the suite did not call Db_target.start"
+let env t = t.env
+let sw t = t.sw
+let net t = Eio.Stdenv.net t.env
+let mono t = Eio.Stdenv.mono_clock t.env
 
-let sw () =
-  let _, sw, _, _ = io () in
-  sw
-
-let env () =
-  let env, _, _, _ = io () in
-  env
-
-let net () = Eio.Stdenv.net (env ())
-let mono () = Eio.Stdenv.mono_clock (env ())
-
-let server () =
-  let _, _, server, _ = io () in
-  Rowtype_test.conninfo server
-
-let pg_dump () =
-  let _, _, server, _ = io () in
+let pg_dump t =
   Option.map
     (fun (runtime, name) ->
       let binary =
         match runtime with `Podman -> "podman" | `Docker -> "docker"
       in
       Printf.sprintf "%s exec %s pg_dump -U test -d {database}" binary name)
-    (Rowtype_test.container server)
+    (Rowtype_test.container t.server)
 
 let conninfo url =
   match Rowtype_postgres.Conninfo.of_string url with
@@ -69,20 +42,21 @@ let conninfo url =
   | Error m -> Alcotest.failf "%s: %s" variable m
 
 (* The server the suite was given, naming another database. *)
-let on_database name = Rowtype_postgres.Conninfo.with_database (server ()) name
+let on_database t name =
+  Rowtype_postgres.Conninfo.with_database (Rowtype_test.conninfo t.server) name
 
 (* [statement_cache:0] is a connection that keeps no statements, whose
    results all arrive as text: the other way every cell is read. *)
-let connect ?statement_cache target =
+let connect t ?statement_cache target =
   match
-    Rowtype_postgres.connect ~sw:(sw ()) ~net:(net ()) ~mono_clock:(mono ())
+    Rowtype_postgres.connect ~sw:t.sw ~net:(net t) ~mono_clock:(mono t)
       ?statement_cache target
   with
   | Ok db -> db
   | Error e -> Alcotest.failf "cannot connect: %s" (Rowtype.error_to_string e)
 
-let admin f =
-  let db = connect (server ()) in
+let admin t f =
+  let db = connect t (Rowtype_test.conninfo t.server) in
   Fun.protect ~finally:(fun () -> Rowtype_postgres.close db) (fun () -> f db)
 
 let exec db sql =
@@ -92,9 +66,8 @@ let exec db sql =
 
 (* A database of its own per asking, so one case cannot see another's rows
    and a failure leaves nothing behind for the next run to trip over. *)
-let with_postgres f =
-  let _, _, _, template = io () in
-  match Rowtype_test.database template f with
+let with_postgres t f =
+  match Rowtype_test.database t.template f with
   | Ok v -> v
   | Error e ->
       Alcotest.failf "a database of its own: %s" (Rowtype.error_to_string e)

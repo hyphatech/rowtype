@@ -21,11 +21,11 @@ let ok = function
    of the case's own. *)
 let formats = [ ("binary", None); ("text", Some 0) ]
 
-let on_each_format setup f =
-  Db_target.with_postgres (fun target ->
+let on_each_format suite setup f =
+  Db_target.with_postgres suite (fun target ->
       List.iter
         (fun (format, statement_cache) ->
-          let db = Db_target.connect ?statement_cache target in
+          let db = Db_target.connect suite ?statement_cache target in
           Fun.protect
             ~finally:(fun () -> Pg.close db)
             (fun () ->
@@ -57,8 +57,8 @@ let back db ~column ty v =
        (S.find ~params:S.unit ~row:ty (Printf.sprintf "select x from %s" table))
        ())
 
-let round_trips ~column ty testable values =
-  on_each_format [] (fun format db ->
+let round_trips suite ~column ty testable values =
+  on_each_format suite [] (fun format db ->
       List.iter
         (fun v ->
           Alcotest.check testable
@@ -78,15 +78,15 @@ let refused what = function
       | `Lost _ | `Unsent _ ) ->
       Alcotest.failf "%s: not a decoding failure" what
 
-let test_integers () =
-  round_trips ~column:"int8" S.int Alcotest.int
+let test_integers suite () =
+  round_trips suite ~column:"int8" S.int Alcotest.int
     [ 0; 1; -1; 42; max_int; min_int ];
-  round_trips ~column:"int4" S.int Alcotest.int
+  round_trips suite ~column:"int4" S.int Alcotest.int
     [ 2_147_483_647; -2_147_483_648 ];
-  round_trips ~column:"int2" S.int Alcotest.int [ 32_767; -32_768 ];
+  round_trips suite ~column:"int2" S.int Alcotest.int [ 32_767; -32_768 ];
   (* An int8 past OCaml's 63 bits is refused, never wrapped into another
      number. *)
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       refused
         (format ^ ": an int8 past 63 bits")
         (reads db S.int "select 9223372036854775807::int8");
@@ -96,8 +96,8 @@ let test_integers () =
 
 let exact = Alcotest.testable (fun f x -> Format.fprintf f "%h" x) Float.equal
 
-let test_floats () =
-  round_trips ~column:"float8" S.float exact
+let test_floats suite () =
+  round_trips suite ~column:"float8" S.float exact
     [
       0.;
       -0.;
@@ -114,15 +114,15 @@ let test_floats () =
   (* A float4 holds single precision: what comes back is the single nearest
      the value, the same in either format. *)
   let single x = Int32.float_of_bits (Int32.bits_of_float x) in
-  round_trips ~column:"float4" S.float exact [ 1.5; 0.; Float.infinity ];
-  on_each_format [] (fun format db ->
+  round_trips suite ~column:"float4" S.float exact [ 1.5; 0.; Float.infinity ];
+  on_each_format suite [] (fun format db ->
       Alcotest.check exact
         (format ^ ": 0.1 in a float4")
         (single 0.1)
         (back db ~column:"float4" S.float 0.1))
 
-let test_text () =
-  round_trips ~column:"text" S.text Alcotest.string
+let test_text suite () =
+  round_trips suite ~column:"text" S.text Alcotest.string
     [
       "";
       "plain";
@@ -132,28 +132,28 @@ let test_text () =
       "NULL";
       String.make 1_000_000 'x';
     ];
-  round_trips ~column:"varchar(8)" S.text Alcotest.string [ "eight ch" ];
-  round_trips ~column:"char(3)" S.text Alcotest.string [ "abc" ];
+  round_trips suite ~column:"varchar(8)" S.text Alcotest.string [ "eight ch" ];
+  round_trips suite ~column:"char(3)" S.text Alcotest.string [ "abc" ];
   (* Postgres text holds no NUL: the server refuses it, and says so. *)
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       ok (Pg.exec_raw db "drop table if exists v; create table v (x text)");
       refused
         (format ^ ": a NUL in text")
         (Pg.run db (S.exec ~params:S.text "insert into v values ($1)") "a\000b"))
 
-let test_bytes () =
+let test_bytes suite () =
   let every_byte = String.init 256 Char.chr in
-  round_trips ~column:"bytea" S.bytes Alcotest.string
+  round_trips suite ~column:"bytea" S.bytes Alcotest.string
     [ ""; every_byte; "\000"; String.make 1_000_000 '\255' ]
 
-let test_bools () =
-  round_trips ~column:"bool" S.bool Alcotest.bool [ true; false ]
+let test_bools suite () =
+  round_trips suite ~column:"bool" S.bool Alcotest.bool [ true; false ]
 
 (* Microseconds since the epoch, before it as after, read the same in a
    session whose time zone is not UTC -- to a day inside years 1 and 9999,
    past which such a session prints a year no reader of text can read. *)
-let test_instants () =
-  on_each_format [ "set time zone 'America/St_Johns'" ] (fun format db ->
+let test_instants suite () =
+  on_each_format suite [ "set time zone 'America/St_Johns'" ] (fun format db ->
       List.iter
         (fun us ->
           Alcotest.(check int)
@@ -172,28 +172,28 @@ let test_instants () =
         (reads db S.instant "select 'infinity'::timestamptz"))
 
 (* An int8 over its whole range, where [S.int] is a bit short of it. *)
-let test_int64s () =
-  round_trips ~column:"int8" S.int64 Alcotest.int64
+let test_int64s suite () =
+  round_trips suite ~column:"int8" S.int64 Alcotest.int64
     [ 0L; 1L; -1L; Int64.max_int; Int64.min_int ];
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       Alcotest.(check (result int64 reject))
         (format ^ ": an int4, widened")
         (Ok (-2_147_483_648L))
         (reads db S.int64 "select (-2147483648)::int4"))
 
 (* A date at the edges of the years read, a leap day among them. *)
-let test_dates () =
-  round_trips ~column:"date" S.date
+let test_dates suite () =
+  round_trips suite ~column:"date" S.date
     Alcotest.(triple int int int)
     [ (2026, 9, 27); (1, 1, 1); (9999, 12, 31); (2024, 2, 29) ];
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       refused (format ^ ": infinity")
         (reads db S.date "select 'infinity'::date"))
 
 (* A timestamp is a reading on no clock: the same reading comes back in a
    session whose time zone is not UTC. *)
-let test_timestamps () =
-  on_each_format [ "set time zone 'America/St_Johns'" ] (fun format db ->
+let test_timestamps suite () =
+  on_each_format suite [ "set time zone 'America/St_Johns'" ] (fun format db ->
       List.iter
         (fun us ->
           Alcotest.(check int)
@@ -209,7 +209,7 @@ let test_timestamps () =
 
 (* An interval keeps its months, days and microseconds apart, each signed on
    its own, through a session whose own style would print it otherwise. *)
-let test_intervals () =
+let test_intervals suite () =
   let interval =
     Alcotest.testable
       (fun f (i : S.interval) ->
@@ -218,7 +218,7 @@ let test_intervals () =
         a.months = b.months && a.days = b.days
         && a.microseconds = b.microseconds)
   in
-  round_trips ~column:"interval" S.interval interval
+  round_trips suite ~column:"interval" S.interval interval
     [
       { months = 14; days = 3; microseconds = 14_706_789_000 };
       { months = -14; days = 3; microseconds = -14_706_000_000 };
@@ -226,7 +226,7 @@ let test_intervals () =
       { months = 0; days = 0; microseconds = -1_500_000 };
       { months = 0; days = 0; microseconds = 0 };
     ];
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       Alcotest.(check (result interval reject))
         (format ^ ": a month less a day is not 29 days")
         (Ok { months = 1; days = -1; microseconds = 0 })
@@ -236,7 +236,7 @@ let test_intervals () =
    63 bits, an infinity, a year outside 1 to 9999 -- is refused as what it
    is, with what to read it as, and never as a type it is not; and its
    words hold no value. *)
-let test_a_value_the_scalar_cannot_hold () =
+let test_a_value_the_scalar_cannot_hold suite () =
   let words what = function
     | Error (`Db m) -> m
     | Ok _ -> Alcotest.failf "%s was read" what
@@ -265,7 +265,7 @@ let test_a_value_the_scalar_cannot_hold () =
       [ "9223372036854775807"; "10000"; "BC"; "expected" ]
   in
   let beyond = [ "infinity"; "1 to 9999"; "Rowtype.opt" ] in
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       let row what ty sql needles =
         let what = format ^ ": " ^ what in
         says what (words what (reads db ty sql)) needles
@@ -297,24 +297,24 @@ let test_a_value_the_scalar_cannot_hold () =
       row "an infinite interval" S.interval "select 'infinity'::interval"
         [ "infinity"; "Rowtype.opt" ])
 
-let test_uuids () =
-  round_trips ~column:"uuid" Db_target.uuid_text Alcotest.string
+let test_uuids suite () =
+  round_trips suite ~column:"uuid" Db_target.uuid_text Alcotest.string
     [
       "00000000-0000-0000-0000-000000000000";
       "0190c0fe-7a1b-7c3d-8e4f-a0b1c2d3e4f5";
     ];
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       Alcotest.(check string)
         (format ^ ": written in capitals, read in lower case")
         "ffffffff-ffff-ffff-ffff-ffffffffffff"
         (back db ~column:"uuid" Db_target.uuid_text
            "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"))
 
-let test_json () =
+let test_json suite () =
   let doc = {|{"a": [1, 2.5, null], "b": "Ω", "c": {"d": true}}|} in
-  round_trips ~column:"json" S.json Alcotest.string
+  round_trips suite ~column:"json" S.json Alcotest.string
     [ doc; "[]"; "null"; "\"x\"" ];
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       Alcotest.(check string)
         (format ^ ": jsonb, as Postgres keeps it")
         {|{"a": [1, 2.5, null], "b": "Ω", "c": {"d": true}}|}
@@ -335,12 +335,12 @@ let hostile =
   let element = map (String.concat "") (list_size (int_range 0 6) piece) in
   list_size (int_range 0 8) (option element)
 
-let test_arrays_of_any_text () =
-  Db_target.with_postgres (fun target ->
+let test_arrays_of_any_text suite () =
+  Db_target.with_postgres suite (fun target ->
       let connections =
         List.map
           (fun (_, statement_cache) ->
-            Db_target.connect ?statement_cache target)
+            Db_target.connect suite ?statement_cache target)
           formats
       in
       Fun.protect
@@ -368,9 +368,9 @@ let test_arrays_of_any_text () =
                        (ok (Pg.run db echo xs)))
                    connections))))
 
-let test_arrays_of_bytes () =
+let test_arrays_of_bytes suite () =
   let ty = S.array S.bytes in
-  on_each_format [] (fun format db ->
+  on_each_format suite [] (fun format db ->
       let xs = [ ""; String.init 256 Char.chr; "\"{,}\\" ] in
       Alcotest.(check (list string))
         (format ^ ": every byte, in an array")
@@ -378,8 +378,8 @@ let test_arrays_of_bytes () =
         (ok (Pg.run db (S.find ~params:ty ~row:ty "select $1::bytea[]") xs)))
 
 (* A second dimension has no list to read into, and is refused. *)
-let test_a_second_dimension_is_refused () =
-  on_each_format [] (fun format db ->
+let test_a_second_dimension_is_refused suite () =
+  on_each_format suite [] (fun format db ->
       refused
         (format ^ ": a two-dimensional array")
         (reads db (S.array S.int) "select array[[1, 2], [3, 4]]");
@@ -389,8 +389,8 @@ let test_a_second_dimension_is_refused () =
 
 (* A list has no lower bound: an array that starts anywhere but 1 is read
    in order, as one that starts at 1 is. *)
-let test_any_lower_bound_is_read () =
-  on_each_format [] (fun format db ->
+let test_any_lower_bound_is_read suite () =
+  on_each_format suite [] (fun format db ->
       Alcotest.(check (list int))
         (format ^ ": from 0") [ 1; 2 ]
         (ok (reads db (S.array S.int) "select '[0:1]={1,2}'::int[]"));
@@ -404,8 +404,8 @@ let test_any_lower_bound_is_read () =
 
 (* An element that does not read is named by its column and its place,
    counted from 1 as Postgres counts them. *)
-let test_an_element_is_named () =
-  on_each_format [] (fun format db ->
+let test_an_element_is_named suite () =
+  on_each_format suite [] (fun format db ->
       let said ty sql =
         match reads db ty sql with
         | Error (`Db m) -> m
@@ -429,8 +429,8 @@ let test_an_element_is_named () =
 (* An element is read as its type alone is: a [real] rounded to single
    precision as a [real] column is, and a [text] refused as an [int] as a
    [text] column is, whatever its text says. *)
-let test_an_element_is_its_type () =
-  on_each_format [] (fun format db ->
+let test_an_element_is_its_type suite () =
+  on_each_format suite [] (fun format db ->
       Alcotest.(check (list (float 0.)))
         (format ^ ": 0.1 in a real[], as in a real")
         [ ok (reads db S.float "select 0.1::real") ]
@@ -447,8 +447,8 @@ let test_an_element_is_its_type () =
 
 (* A type the database made has no oid that says what it is, so it is read
    through a cast, and a read without one says so. *)
-let test_an_enum_is_read_through_a_cast () =
-  on_each_format
+let test_an_enum_is_read_through_a_cast suite () =
+  on_each_format suite
     [ "drop type if exists mood"; "create type mood as enum ('calm', 'cross')" ]
     (fun format db ->
       Alcotest.(check string)
@@ -504,8 +504,8 @@ let odd_labels = [ "a b"; "x,y"; "q\"q"; "back\\slash"; "{"; "NULL"; "it's" ]
 (* An enum is read by its labels with no cast, alone and in an array, as
    the label it is in binary and in text; and a label no value has, a
    composite's text, and text that is no enum are refused. *)
-let test_an_enum_is_read_by_its_labels () =
-  on_each_format
+let test_an_enum_is_read_by_its_labels suite () =
+  on_each_format suite
     [
       "drop type if exists mood, odd, pair cascade";
       "create type mood as enum ('calm', 'cross')";
@@ -552,42 +552,46 @@ let () =
   Eio.Switch.run @@ fun sw ->
   (* The server is the one TEST_DATABASE_URL names, or one of the
      suite's own, removed as it ends. *)
-  Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) ();
-  Alcotest.run ~and_exit:false "types"
-    [
-      ( "scalars",
+  match Db_target.start env ~sw ?url:(Sys.getenv_opt Db_target.variable) () with
+  | Error e ->
+      prerr_endline ("no test database: " ^ Rowtype_test.error_to_string e);
+      exit 1
+  | Ok suite ->
+      Alcotest.run ~and_exit:false "types"
         [
-          Alcotest.test_case "integers" `Quick test_integers;
-          Alcotest.test_case "floats" `Quick test_floats;
-          Alcotest.test_case "text" `Quick test_text;
-          Alcotest.test_case "bytes" `Quick test_bytes;
-          Alcotest.test_case "bools" `Quick test_bools;
-          Alcotest.test_case "instants" `Quick test_instants;
-          Alcotest.test_case "int64s" `Quick test_int64s;
-          Alcotest.test_case "dates" `Quick test_dates;
-          Alcotest.test_case "timestamps" `Quick test_timestamps;
-          Alcotest.test_case "intervals" `Quick test_intervals;
-          Alcotest.test_case "a value the scalar cannot hold" `Quick
-            test_a_value_the_scalar_cannot_hold;
-          Alcotest.test_case "uuids" `Quick test_uuids;
-          Alcotest.test_case "JSON" `Quick test_json;
-        ] );
-      ( "arrays",
-        [
-          Alcotest.test_case "any text comes back as itself" `Quick
-            test_arrays_of_any_text;
-          Alcotest.test_case "bytes" `Quick test_arrays_of_bytes;
-          Alcotest.test_case "a second dimension is refused" `Quick
-            test_a_second_dimension_is_refused;
-          Alcotest.test_case "any lower bound is read" `Quick
-            test_any_lower_bound_is_read;
-          Alcotest.test_case "an element is named" `Quick
-            test_an_element_is_named;
-          Alcotest.test_case "an element is its type" `Quick
-            test_an_element_is_its_type;
-          Alcotest.test_case "an enum is read through a cast" `Quick
-            test_an_enum_is_read_through_a_cast;
-          Alcotest.test_case "an enum is read by its labels" `Quick
-            test_an_enum_is_read_by_its_labels;
-        ] );
-    ]
+          ( "scalars",
+            [
+              Alcotest.test_case "integers" `Quick (test_integers suite);
+              Alcotest.test_case "floats" `Quick (test_floats suite);
+              Alcotest.test_case "text" `Quick (test_text suite);
+              Alcotest.test_case "bytes" `Quick (test_bytes suite);
+              Alcotest.test_case "bools" `Quick (test_bools suite);
+              Alcotest.test_case "instants" `Quick (test_instants suite);
+              Alcotest.test_case "int64s" `Quick (test_int64s suite);
+              Alcotest.test_case "dates" `Quick (test_dates suite);
+              Alcotest.test_case "timestamps" `Quick (test_timestamps suite);
+              Alcotest.test_case "intervals" `Quick (test_intervals suite);
+              Alcotest.test_case "a value the scalar cannot hold" `Quick
+                (test_a_value_the_scalar_cannot_hold suite);
+              Alcotest.test_case "uuids" `Quick (test_uuids suite);
+              Alcotest.test_case "JSON" `Quick (test_json suite);
+            ] );
+          ( "arrays",
+            [
+              Alcotest.test_case "any text comes back as itself" `Quick
+                (test_arrays_of_any_text suite);
+              Alcotest.test_case "bytes" `Quick (test_arrays_of_bytes suite);
+              Alcotest.test_case "a second dimension is refused" `Quick
+                (test_a_second_dimension_is_refused suite);
+              Alcotest.test_case "any lower bound is read" `Quick
+                (test_any_lower_bound_is_read suite);
+              Alcotest.test_case "an element is named" `Quick
+                (test_an_element_is_named suite);
+              Alcotest.test_case "an element is its type" `Quick
+                (test_an_element_is_its_type suite);
+              Alcotest.test_case "an enum is read through a cast" `Quick
+                (test_an_enum_is_read_through_a_cast suite);
+              Alcotest.test_case "an enum is read by its labels" `Quick
+                (test_an_enum_is_read_by_its_labels suite);
+            ] );
+        ]
