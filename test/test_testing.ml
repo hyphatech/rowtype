@@ -258,6 +258,18 @@ let test_a_copy_left_by_a_raise_is_a_warning () =
     "a warning names the copy" true
     (List.exists (String.includes ~affix:!named) !warned)
 
+(* A setup's failure is the template's, as itself: its own tags pass
+   through, merged with rowtype-test's, so a migration's refusal is matched
+   as the migration words it. *)
+let test_a_setup_s_failure_is_its_own () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw env) in
+  match T.template server ~setup:(fun _ -> Error `Seeded_wrong) with
+  | Error `Seeded_wrong -> ()
+  | Error _ -> Alcotest.fail "the setup's failure came back as another"
+  | Ok _ -> Alcotest.fail "a setup that failed made a template"
+
 (* A template goes with the run: on a server handed, nothing of it stays. *)
 let test_a_template_goes_with_the_run () =
   Eio_main.run @@ fun env ->
@@ -322,6 +334,8 @@ let () =
             test_a_handed_server_starts_nothing;
           Alcotest.test_case "a copy is the setup's" `Slow
             test_a_copy_is_the_setup_s;
+          Alcotest.test_case "a setup's failure is its own" `Slow
+            test_a_setup_s_failure_is_its_own;
           Alcotest.test_case "a template goes with the run" `Slow
             test_a_template_goes_with_the_run;
           Alcotest.test_case "a killed run's container is removed" `Slow

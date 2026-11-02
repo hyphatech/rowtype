@@ -1,16 +1,12 @@
 module Pg = Rowtype_postgres
 
 type error =
-  [ `Runtime of string
-  | `Not_ready of string
-  | `Unreadable of string
-  | `Setup of string ]
+  [ `Runtime of string | `Not_ready of string | `Unreadable of string ]
 
 let error_to_string = function
   | `Runtime why -> "Podman: " ^ why
   | `Not_ready why -> "Postgres did not answer: " ^ why
   | `Unreadable why -> "not a connection string: " ^ why
-  | `Setup why -> "a template's setup failed: " ^ why
   | #Rowtype.error as e -> Rowtype.error_to_string e
 
 (* What a cleanup could not remove, which has no caller left to answer. *)
@@ -236,11 +232,7 @@ let template ?(setup = fun _ -> Ok ()) server =
           | Error e ->
               Log.warn (fun m ->
                   m "the template %s stays: %s" name (Rowtype.error_to_string e))));
-  let* () =
-    Result.map_error
-      (fun why -> `Setup why)
-      (setup (Pg.Conninfo.with_database server.conninfo name))
-  in
+  let* () = setup (Pg.Conninfo.with_database server.conninfo name) in
   (* A copy is refused while anyone is connected to its template, so the
      setup's connections end here, and none may open after. *)
   let* () =

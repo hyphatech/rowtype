@@ -16,6 +16,11 @@
   container, a template, or the database of a case that raised is a
   warning on the `Logs` source `rowtype-test`, which `rowtype-test run`
   prints. Each was dropped without a word.
+- Breaking: `Rowtype_test.template`'s `setup` fails with its own error, an
+  open polymorphic variant merged with rowtype-test's, as
+  `Rowtype_migrate_postgres.run`'s work does: a migration's error comes back
+  as itself, where it had to be turned into a string. `` `Setup `` is gone,
+  since the setup's own tags say what failed.
 
 ## 0.9.1 (2026-11-01)
 

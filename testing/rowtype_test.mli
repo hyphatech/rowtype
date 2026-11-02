@@ -33,8 +33,7 @@ type error =
     (** Podman could not start, read or remove the container, in its words *)
   | `Not_ready of string
     (** Postgres did not answer within a minute, saying the last failure *)
-  | `Unreadable of string  (** the [url] handed is no connection string *)
-  | `Setup of string  (** a template's setup failed, in its words *) ]
+  | `Unreadable of string  (** the [url] handed is no connection string *) ]
 
 val error_to_string : [< error | Rowtype.error ] -> string
 (** In words for a log; a database's failure as {!Rowtype.error_to_string} words
@@ -67,15 +66,19 @@ type template
     case is handed a copy of. *)
 
 val template :
-  ?setup:(Rowtype_postgres.Conninfo.t -> (unit, string) result) ->
+  ?setup:
+    (Rowtype_postgres.Conninfo.t ->
+    (unit, ([> error | Rowtype.error ] as 'e)) result) ->
   server ->
-  (template, [> error | Rowtype.error ]) result
+  (template, 'e) result
 (** [template server ~setup] makes a database in the server, runs [setup] in it
     once, ends every connection to it -- one [setup] left open included -- and
     marks it a template no one may connect to: what every {!database} made from
     it is a copy of, rows the setup wrote included. With no [setup], an empty
-    database. It is dropped when the server's switch ends. Making it needs a
-    user allowed to create databases, which the container's owner is. *)
+    database. A [setup] that fails is the template's failure as itself, its tags
+    merged with these, so a migration's is matched as the migration words it. It
+    is dropped when the server's switch ends. Making it needs a user allowed to
+    create databases, which the container's owner is. *)
 
 val database :
   template ->

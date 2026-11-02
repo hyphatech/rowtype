@@ -41,7 +41,10 @@ nothing.
 alone, with none handed, starts one of its own and removes it when its
 switch ends. `Rowtype_test.template` makes a database, runs the suite's
 setup in it once -- its migrations -- ends every connection to it and
-marks it a template. `Rowtype_test.database` copies it for one case --
+marks it a template. A setup that fails is the template's failure as
+itself: a migration's error comes back as the migration's, for
+`Rowtype_migrate.error_to_string` to word. `Rowtype_test.database` copies
+it for one case --
 `CREATE DATABASE ... TEMPLATE`, tens of milliseconds -- rows the
 migrations seeded included, and drops the copy after, with `(force)`.
 
