@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.10.0 (2026-11-02)
 
 - `Rowtype_sqlite.Transaction.within` no longer commits the work of a fiber
   cancelled while its last statement ran: the statement still answers, and
