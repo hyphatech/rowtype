@@ -1,56 +1,93 @@
 ---
-title: rowtype
+title: Getting Started
 description: SQL queries and migrations for modern OCaml.
-template: splash
 ---
 
-import { Code } from "@astrojs/starlight/components";
+import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
 import users from "@examples/users.ml?raw";
-import Landing from "starlight-theme-hypha/components/Landing.astro";
-import Features from "starlight-theme-hypha/components/Features.astro";
-import Feature from "starlight-theme-hypha/components/Feature.astro";
 
-<Landing
-  title="SQL queries and migrations for modern OCaml."
-  tagline="Plain SQL, checked against your database. Postgres and SQLite alike."
-  actions={[
-    { text: "Get started", link: "/rowtype/install/", icon: "right-arrow" },
-    { text: "Reference", link: "/rowtype/reference/", variant: "secondary" },
-  ]}
->
+rowtype runs plain SQL from OCaml. A statement is written as the database
+reads it, and its parameters and its rows are described once, as OCaml
+values. The same statements run on Postgres and on SQLite. A test can ask
+the database to describe each one without running it, so a renamed column
+fails a test instead of a request. Migrations are plain SQL files, applied
+by one command for either database.
+
+<Code code={users} lang="ocaml" title="users.ml" />
+
+You need **opam**, OCaml's package manager, and **OCaml 5.5 or later**.
+
+## 1. Install opam
+
+<Tabs>
+<TabItem label="macOS">
+
+```sh
+brew install opam
+```
+
+</TabItem>
+<TabItem label="Linux">
+
+```sh
+bash -c "sh <(curl -fsSL https://opam.ocaml.org/install.sh)"
+```
+
+</TabItem>
+</Tabs>
+
+## 2. Set up OCaml
+
+```sh
+opam init
+eval $(opam env)
+```
+
+Answer yes when `opam init` offers to set up your shell. It installs the
+latest OCaml, which takes a few minutes. If you had opam already, check
+`ocaml -version`. Where it is older than 5.5, make a switch with the latest
+OCaml:
+
+```sh
+opam switch create rowtype ocaml-base-compiler
+eval $(opam env)
+```
+
+## 3. Install rowtype
 
 ```sh
 opam repo add hypha https://github.com/hyphatech/opam-repository.git
-opam install rowtype rowtype-postgres rowtype-migrate
+opam install rowtype rowtype-postgres rowtype-migrate   # Postgres
+opam install rowtype rowtype-sqlite rowtype-migrate     # SQLite, through its C library
 ```
 
-<Fragment slot="aside">
+| Package | What it is |
+|---|---|
+| `rowtype` | queries described once; links no database library |
+| `rowtype-postgres` | the Postgres backend, over [postgres-eio](https://hyphatech.github.io/postgres-eio/) |
+| `rowtype-sqlite` | the SQLite backend, over the [sqlite3](https://github.com/mmottl/sqlite3-ocaml) binding |
+| `rowtype-migrate` | the migrations and the `rowtype-migrate` command, for each dialect installed beside it |
+| `rowtype-test` | a Postgres database for a test run, in Podman or Docker, and the `rowtype-test` command |
 
-<Code code={users} lang="ocaml" />
+`rowtype-migrate` migrates the dialects whose backend is installed beside
+it, and links no other: its libraries are `rowtype-migrate.postgres` and
+`rowtype-migrate.sqlite`, each built where its backend is.
 
-</Fragment>
-</Landing>
+`rowtype-sqlite` links your system's SQLite. Where it is missing, opam
+offers to install it with your system's package manager.
 
-<Features>
-  <Feature title="Plain SQL" icon="code-xml" href="/rowtype/guide/statements/" linkText="Statements">
-    No ORM, no query DSL, no ppx.
-  </Feature>
-  <Feature title="Checked against your database" icon="shield-check" href="/rowtype/guide/checking-statements/" linkText="Checking statements">
-    Every statement described by the database from a test, without running
-    it, so a renamed column fails a test instead of a request.
-  </Feature>
-  <Feature title="Postgres and SQLite" icon="layers" href="/rowtype/guide/sqlite/" linkText="SQLite">
-    The same statements run on both.
-  </Feature>
-  <Feature title="Migrations in the box" icon="scroll-text" href="/rowtype/guide/migrations/" linkText="Migrations">
-    Plain SQL files and one command for every dialect, a library's own
-    migrations included.
-  </Feature>
-  <Feature title="Failures you can act on" icon="list-checks" href="/rowtype/guide/errors/" linkText="Errors">
-    A refused write names its constraint, and a lost write is told from one
-    never sent.
-  </Feature>
-  <Feature title="Any size" icon="zap" href="/rowtype/guide/bulk-writes/" linkText="Bulk writes">
-    Rows read in the memory of one, and loads through COPY.
-  </Feature>
-</Features>
+## 4. Name the libraries
+
+A program names the libraries it uses in its `dune` file. On Postgres:
+
+```lisp
+(libraries rowtype rowtype-postgres eio_main)
+```
+
+On SQLite:
+
+```lisp
+(libraries rowtype rowtype-sqlite eio_main)
+```
+
+The [quick start](/rowtype/quick-start/) writes a whole program, next.

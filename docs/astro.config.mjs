@@ -39,13 +39,12 @@ export default defineConfig({
         }),
         // The reference is odoc's, in public/, which the validator cannot see.
         links({
-          components: [["Feature", "href"]],
           errorOnLocalLinks: false,
           exclude: ["**/reference/rowtype*/**"],
         }),
       ],
       sidebar: [
-        { label: "Start here", items: ["install", "quick-start", "why-not-caqti"] },
+        { label: "Start here", items: ["index", "quick-start", "why-not-caqti"] },
         {
           label: "Guides",
           items: [
