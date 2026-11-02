@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+- `Rowtype_sqlite.Transaction.within` no longer commits the work of a fiber
+  cancelled while its last statement ran: the statement still answers, and
+  the transaction now rolls back and the cancellation passes, as its
+  documentation says.
+
 ## 0.9.1 (2026-11-01)
 
 - `rowtype-test`, Postgres for a test run as a pytest session fixture

@@ -1074,9 +1074,10 @@ let test_raise_and_cancel () =
       ok (Sq.Transaction.within db (fun db -> Sq.run db insert 1));
       Alcotest.(check int) "and the connection goes on" 1 (count db "t"))
 
-(* A transaction cancelled while its statement waits on a lock: the
-   statement ends once the lock goes, and the COMMIT after it, which a
-   cancelled fiber may not start, still ends the transaction. *)
+(* A transaction cancelled while its statement waits on a lock keeps
+   nothing, whether the cancellation lands before the statement starts or
+   while it runs and still answers. The rollback, which a cancelled fiber
+   may not start, still ends the transaction and lets its lock go. *)
 let test_cancelled_while_waiting () =
   on_two
     ~timeout:Mtime.Span.(200 * ms)
@@ -1096,7 +1097,12 @@ let test_cancelled_while_waiting () =
           ok (Sq.exec_raw b "rollback"));
       ok (Sq.Transaction.within a (fun a -> Sq.run a insert 2));
       ok (Sq.run b insert 3);
-      Alcotest.(check int) "each written" 3 (count b "t"))
+      Alcotest.(check (list int))
+        "the cancelled one kept nothing" [ 2; 3 ]
+        (ok
+           (Sq.run b
+              (S.list ~params:S.unit ~row:S.int "select k from t order by k")
+              ())))
 
 (* Work between a savepoint and its release that ended the transaction, as
    a script a caller did not write can, leaves nothing to release. *)

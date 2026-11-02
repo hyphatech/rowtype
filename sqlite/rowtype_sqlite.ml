@@ -843,7 +843,14 @@ module Transaction = struct
     | Error (`Not_serializable detail) -> Error (`Not_serializable detail)
     | Error e -> not_committed "begin" (S.error_to_string e)
     | Ok () -> (
-        match work db with
+        (* A statement cancelled as it ran still answers, as Eio waits for its
+           thread; the cancellation is passed before COMMIT, so a cancelled
+           fiber's transaction keeps nothing. *)
+        match
+          let answer = work db in
+          Eio.Fiber.check ();
+          answer
+        with
         | exception ex ->
             let trace = Printexc.get_raw_backtrace () in
             rollback db;
