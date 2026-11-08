@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.10.1 (2026-11-08)
 
 - `rowtype-test` names its databases at random, and `rowtype-migrate`'s dump
   its scratch database: runs in containers of their own, where every process
