@@ -1001,16 +1001,15 @@ let test_a_dump_cancelled_in_pg_dump_ends suite () =
         (Format.asprintf "at once: %a" Mtime.Span.pp took)
         true
         (Mtime.Span.is_shorter took ~than:Mtime.Span.(5 * s));
-      let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
       Db_target.admin suite (fun db ->
           Alcotest.(check bool)
             "its scratch database is gone" false
             (ok
                (Pg.run db
-                  (S.find ~params:S.text ~row:S.bool
-                     "select exists (select 1 from pg_database where datname = \
-                      $1)")
-                  scratch))))
+                  (S.find ~params:S.unit ~row:S.bool
+                     "select exists (select 1 from pg_database where datname ~ \
+                      '^rowtype_migrate_[0-9a-f]+$')")
+                  ()))))
 
 (* A dump cancelled while it migrates drops its scratch database, and its
    fiber ends cancelled, as itself. *)
@@ -1042,16 +1041,15 @@ let test_a_cancelled_dump_leaves_nothing suite () =
             "cancelled")
       in
       Alcotest.(check string) "the dump was cancelled" "cancelled" answer;
-      let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
       Db_target.admin suite (fun db ->
           Alcotest.(check bool)
             "its scratch database is gone" false
             (ok
                (Pg.run db
-                  (S.find ~params:S.text ~row:S.bool
-                     "select exists (select 1 from pg_database where datname = \
-                      $1)")
-                  scratch))))
+                  (S.find ~params:S.unit ~row:S.bool
+                     "select exists (select 1 from pg_database where datname ~ \
+                      '^rowtype_migrate_[0-9a-f]+$')")
+                  ()))))
 
 (* A squash's baseline stands for the history it replaced: a database made
    from it and what came after holds the schema and the rows the whole

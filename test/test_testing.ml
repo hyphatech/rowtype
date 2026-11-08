@@ -470,11 +470,34 @@ let test_a_killed_run_s_container_is_removed () =
   Eio.Switch.run (fun sw -> ignore (ok (T.server ~sw ~runtime env) : T.server));
   Alcotest.(check bool) "the next run removed it" false (exists env left)
 
+(* Suites in containers of their own share a server handed to them, and
+   every process in a container may have the same id: what a killed one
+   left, under the names a process of this id makes first, blocks nothing.
+   It runs first, so this process has made fewer names than it leaves. *)
+let names_left = 64
+
+let test_what_another_run_left_blocks_nothing () =
+  Eio_main.run @@ fun env ->
+  Eio.Switch.run @@ fun sw ->
+  let server = ok (T.server ~sw ~runtime env) in
+  List.iter
+    (fun kind ->
+      for n = 0 to names_left - 1 do
+        exec ~sw env (T.conninfo server)
+          (Printf.sprintf "create database rowtype_%s_%d_%d" kind
+             (Unix.getpid ()) n)
+      done)
+    [ "template"; "test" ];
+  let template = ok (T.template server) in
+  fine (T.database template (fun conninfo -> exec ~sw env conninfo "select 1"))
+
 let () =
   Alcotest.run "rowtype-test"
     [
       ( "server",
         [
+          Alcotest.test_case "what another run left blocks nothing" `Slow
+            test_what_another_run_left_blocks_nothing;
           Alcotest.test_case "a run owns its server" `Slow
             test_a_run_owns_its_server;
           Alcotest.test_case "a case's database is dropped" `Slow

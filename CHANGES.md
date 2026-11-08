@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+- `rowtype-test` names its databases at random, and `rowtype-migrate`'s dump
+  its scratch database: runs in containers of their own, where every process
+  may have the same id, share a server handed to them, where two at once, or
+  one after a killed one, were refused a name already taken.
+
 ## 0.10.0 (2026-11-02)
 
 - `Rowtype_sqlite.Transaction.within` no longer commits the work of a fiber

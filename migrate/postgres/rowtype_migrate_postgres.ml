@@ -363,12 +363,21 @@ let made_by_libraries conn =
   in
   if others > 0 then Error `Not_only_tables else Ok tables
 
+(* Named at random: dumps share a server and run at once, each perhaps in a
+   container of its own, where every process may have the same id. A state
+   a domain, seeded by the system, so no two processes draw the same
+   names. *)
+let random = Domain.DLS.new_key Random.State.make_self_init
+
 (* A database of its own, made empty, migrated, dumped, and dropped however
    that went -- so a schema is what the migrations make from nothing, and
    never what some database has drifted to. *)
 let migrated ~sw ~net ~mono_clock ~process_mgr ~table ~libraries ~apart
     ~migrations (c : Pg.Conninfo.t) dump =
-  let scratch = Printf.sprintf "rowtype_migrate_%d" (Unix.getpid ()) in
+  let scratch =
+    Printf.sprintf "rowtype_migrate_%x"
+      (Random.State.bits (Domain.DLS.get random))
+  in
   with_connection ~sw ~net ~mono_clock c (fun admin ->
       let* () = Pg.exec_raw admin ("create database " ^ quoted scratch) in
       (* A drop that fails leaves a database on the server, which is said,

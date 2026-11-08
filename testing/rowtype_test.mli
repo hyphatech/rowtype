@@ -21,6 +21,11 @@
     [sw] ends. A container a run left when it was killed is removed by the next
     run's {!val-server}, so the next run is the reaper.
 
+    Its databases are named at random, so runs in containers of their own --
+    where every process may have the same id -- share a server handed to them at
+    once. What a killed run left on a handed server stays, its owner's to
+    remove, and blocks no other run.
+
     What a cleanup could not remove, where no caller is left to answer -- a
     container, a template, a case's database its case raised past -- is a
     warning on the [Logs] source [rowtype-test], naming it. *)

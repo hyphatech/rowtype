@@ -223,14 +223,15 @@ let server ~sw ?url ?container ?(runtime = `Podman) ?(image = default_image) env
       (started ~sw ~runtime ~image ~clock mgr connect
         :> (server, [> error ]) result)
 
-(* A database per asking, templates and copies alike: the process and a
-   counter name it, since the suites of one run share a server and run at
-   once. *)
-let asked = Atomic.make 0
+(* A database per asking, templates and copies alike, named at random:
+   suites share a server and run at once, each perhaps in a container of
+   its own, where every process may have the same id. A state a domain,
+   seeded by the system, so no two processes draw the same names. *)
+let random = Domain.DLS.new_key Random.State.make_self_init
 
 let named kind =
-  Printf.sprintf "rowtype_%s_%d_%d" kind (Unix.getpid ())
-    (Atomic.fetch_and_add asked 1)
+  Printf.sprintf "rowtype_%s_%x" kind
+    (Random.State.bits (Domain.DLS.get random))
 
 let admin s sql =
   Eio.Switch.run @@ fun sw ->
