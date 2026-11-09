@@ -10,7 +10,7 @@ user-visible change updates.
 ## Commands
 
 ```sh
-make setup   # once: the switch hypha-rowtype, all dependencies
+make setup   # once: the switch rowtype, all dependencies
 make test    # starts the test Postgres in Podman, runs every test;
              # RUNTIME=docker for Docker
 make lint    # formatting, odoc, and the release build
