@@ -3,7 +3,7 @@ title: Getting Started
 description: SQL queries and migrations for modern OCaml.
 ---
 
-import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
+import { Code } from "@astrojs/starlight/components";
 import users from "@examples/users.ml?raw";
 
 rowtype runs plain SQL from OCaml. A statement is written as the database
@@ -15,45 +15,9 @@ by one command for either database.
 
 <Code code={users} lang="ocaml" title="users.ml" />
 
-You need **opam**, OCaml's package manager, and **OCaml 5.5 or later**.
+## Install
 
-## 1. Install opam
-
-<Tabs>
-<TabItem label="macOS">
-
-```sh
-brew install opam
-```
-
-</TabItem>
-<TabItem label="Linux">
-
-```sh
-bash -c "sh <(curl -fsSL https://opam.ocaml.org/install.sh)"
-```
-
-</TabItem>
-</Tabs>
-
-## 2. Set up OCaml
-
-```sh
-opam init
-eval $(opam env)
-```
-
-Answer yes when `opam init` offers to set up your shell. It installs the
-latest OCaml, which takes a few minutes. If you had opam already, check
-`ocaml -version`. Where it is older than 5.5, make a switch with the latest
-OCaml:
-
-```sh
-opam switch create rowtype ocaml-base-compiler
-eval $(opam env)
-```
-
-## 3. Install rowtype
+It needs opam, with a switch of OCaml 5.5 or later.
 
 ```sh
 opam repo add hypha https://github.com/hyphatech/opam-repository.git
@@ -76,7 +40,7 @@ it, and links no other: its libraries are `rowtype-migrate.postgres` and
 `rowtype-sqlite` links your system's SQLite. Where it is missing, opam
 offers to install it with your system's package manager.
 
-## 4. Name the libraries
+## Name the libraries
 
 A program names the libraries it uses in its `dune` file. On Postgres:
 
