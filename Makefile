@@ -8,7 +8,7 @@ RUNTIME ?= podman
 REFERENCE = rowtype rowtype-postgres rowtype-sqlite rowtype-migrate odoc.support
 
 .DEFAULT_GOAL := help
-.PHONY: help setup build test lint fmt docs docs-serve
+.PHONY: help setup build test lint fmt docs docs-serve release
 
 help: ## list targets
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -18,7 +18,7 @@ setup: ## create the switch and install dependencies
 	@$(RUNTIME) --version >/dev/null 2>&1 || echo "The tests need $(RUNTIME), or RUNTIME=docker for Docker."
 	@command -v bun >/dev/null 2>&1 || echo "The documentation site needs Bun 1.3 or later."
 	@opam switch list --short | grep -qx $(SWITCH) || opam switch create $(SWITCH) --empty -y
-	opam repo add hypha https://github.com/hyphatech/opam-repository.git --switch=$(SWITCH) --rank=1
+	opam repo add open-opam https://github.com/open-opam/opam-repository.git --switch=$(SWITCH) --rank=1
 	opam install . --switch=$(SWITCH) --deps-only --with-test --with-dev-setup -y
 
 build: ## build everything
@@ -64,3 +64,6 @@ docs: docs/node_modules ## build the documentation site
 docs-serve: docs ## serve the built documentation site
 	cd docs && bun --bun astro preview --open --port $(DOCS_PORT)
 
+release: ## release VERSION with open-opam: push, wait for CI, tag and release
+	@test -n "$(VERSION)" || { echo "Give the version: make release VERSION=1.2.3" >&2; exit 2; }
+	open-opam release $(VERSION)

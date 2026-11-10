@@ -23,7 +23,7 @@ Plain SQL, checked against your database. Postgres and SQLite alike.
 ## Install
 
 ```sh
-opam repo add hypha https://github.com/hyphatech/opam-repository.git
+opam repo add open-opam https://github.com/open-opam/opam-repository.git
 opam install rowtype rowtype-postgres rowtype-migrate   # Postgres
 opam install rowtype rowtype-sqlite rowtype-migrate     # SQLite, through its C library
 ```

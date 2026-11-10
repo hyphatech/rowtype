@@ -1,5 +1,11 @@
 # Changes
 
+## 0.10.2 (2026-11-10)
+
+- rowtype is published to open-opam, `opam repo add open-opam
+  https://github.com/open-opam/opam-repository.git`, and no longer to Hypha's
+  opam repository.
+
 ## 0.10.1 (2026-11-08)
 
 - `rowtype-test` names its databases at random, and `rowtype-migrate`'s dump
