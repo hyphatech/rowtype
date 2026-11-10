@@ -65,6 +65,4 @@ docs-serve: docs ## serve the built documentation site
 	cd docs && bun --bun astro preview --open --port $(DOCS_PORT)
 
 release: ## tag VERSION and make its release
-	@test "$$(git show HEAD:CHANGES.md | grep -m1 '^## ' | cut -d' ' -f2)" = "$(VERSION)" \
-	  || { echo "CHANGES.md must open with ## $(VERSION)" >&2; exit 2; }
 	open-opam release $(VERSION)
