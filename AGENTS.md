@@ -17,7 +17,7 @@ make lint    # formatting, odoc, and the release build
 make fmt     # format in place
 make docs    # the documentation site into _build/docs, as Pages publishes it
 make docs-serve  # the built site, served locally, search included
-make release VERSION=1.2.3  # push, wait for CI, then tag and release with open-opam
+make release VERSION=1.2.3  # once CHANGES.md names it: tag and release with open-opam
 ```
 
 `make test` needs Podman, or Docker with `RUNTIME=docker`, and `make docs`
