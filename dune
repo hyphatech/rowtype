@@ -6,3 +6,13 @@
  (_
   (flags
    (:standard -w +a-4-40-41-42-44-45-48-67-70))))
+
+; The documentation for a user's agent, agents/, written from the site's pages
+; by `make docs`: rowtype, which every other package depends on, installs it
+; whole, so $(opam var rowtype:doc) holds llms.txt and each page.
+
+(install
+ (package rowtype)
+ (section doc)
+ (source_trees
+  (agents as .)))

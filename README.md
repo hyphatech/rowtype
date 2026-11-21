@@ -77,6 +77,18 @@ let () =
 
 The same statements run on SQLite unchanged: [SQLite](https://hyphatech.github.io/rowtype/guide/sqlite/).
 
+## With an agent
+
+Each release installs its documentation for an agent with it, at
+`$(opam var rowtype:doc)`: `llms.txt`, and every page in Markdown. An agent
+reads it when your project's `AGENTS.md` tells it to:
+
+```md
+Before writing code with rowtype, read `$(opam var rowtype:doc)/llms.txt` and
+the pages it lists for the parts you need, and use those parts rather than
+writing your own.
+```
+
 ## Contributing
 
 See [AGENTS.md](AGENTS.md).

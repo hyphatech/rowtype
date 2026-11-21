@@ -1,5 +1,11 @@
 # Changes
 
+## Unreleased
+
+- The rowtype package installs its documentation for agents: each page as
+  Markdown and `llms.txt`, at `$(opam var rowtype:doc)`. The README's *With an
+  agent* gives the line for a project's `AGENTS.md` that sends an agent there.
+
 ## 0.10.2 (2026-11-10)
 
 - rowtype is published to open-opam, `opam repo add open-opam
