@@ -1,0 +1,28 @@
+# rowtype
+
+> SQL queries and migrations for modern OCaml.
+
+## Start here
+
+- [Getting Started](pages/index.md): SQL queries and migrations for modern OCaml.
+- [Quick start](pages/quick-start.md)
+- [Why not Caqti?](pages/why-not-caqti.md)
+
+## Guides
+
+- [Statements](pages/guide/statements.md)
+- [Columns and types](pages/guide/columns.md)
+- [Bulk writes](pages/guide/bulk-writes.md)
+- [Errors](pages/guide/errors.md)
+- [Transactions](pages/guide/transactions.md)
+- [Pools](pages/guide/pools.md)
+- [Checking statements](pages/guide/checking-statements.md)
+- [SQLite](pages/guide/sqlite.md)
+- [Migrations](pages/guide/migrations.md)
+- [Migrating from a test](pages/guide/migrating-from-a-test.md)
+- [A database for a test run](pages/guide/test-databases.md)
+- [A library's migrations](pages/guide/library-migrations.md)
+
+## Reference
+
+- [Reference](pages/reference.md)

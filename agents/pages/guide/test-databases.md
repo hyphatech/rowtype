@@ -1,0 +1,93 @@
+# A database for a test run
+
+`rowtype-test` gives a test run Postgres the way a pytest session fixture
+does: one server for the whole run, destroyed at its end whatever the
+result, and a clean database for every test -- here a copy of a template
+the suite's migrations made once, so no test sees another's rows and none
+needs a migration down.
+
+```
+one Postgres container, for the whole run
+├── suite_a_template     its migrations run once; nobody connects to it
+│   ├── a_test_1         copied from it for one test, dropped after
+│   └── …
+└── suite_b_template
+    └── …
+```
+
+## One server for a run
+
+```sh
+rowtype-test run -- dune test --force
+rowtype-test run --runtime docker -- dune test --force
+```
+
+The command starts Postgres in Podman, or in Docker with `--runtime
+docker`, by its command line -- its data in memory, its durability off, on
+a port the system chooses -- hands its address to the command and every
+process it runs as `TEST_DATABASE_URL`, with the container it runs in as
+`ROWTYPE_TEST_CONTAINER`, for a command such as `pg_dump` to run there, and
+removes the container when the command ends, whatever its result. Where `TEST_DATABASE_URL` is set already, it starts
+nothing.
+
+## A template a suite, a copy a test
+
+```ocaml title="test_server.ml"
+(* A suite's Postgres: the server its runner hands -- rowtype-test run
+   hands one for a whole run -- or one of its own in Podman, removed as the
+   switch ends; the suite's migrations run once into a template; and a copy
+   of it for each case, dropped after. *)
+
+let run_suite env ~migrations cases =
+  Eio.Switch.run @@ fun sw ->
+  let migrate conninfo =
+    Rowtype_migrate_postgres.run env conninfo (fun db ->
+        Rowtype_migrate_postgres.apply db migrations)
+  in
+  match
+    Result.bind
+      (Rowtype_test.server ~sw ?url:(Sys.getenv_opt "TEST_DATABASE_URL") env)
+      (Rowtype_test.template ~setup:migrate)
+  with
+  | Error (#Rowtype_test.error as e) -> Error (Rowtype_test.error_to_string e)
+  | Error (#Rowtype_migrate.error as e) ->
+      Error (Rowtype_migrate.error_to_string e)
+  | Ok template ->
+      Ok
+        (List.map
+           (fun case ->
+             Rowtype_test.database template (fun conninfo -> case env conninfo))
+           cases)
+```
+
+`Rowtype_test.server` is the server `TEST_DATABASE_URL` names; a suite run
+alone, with none handed, starts one of its own and removes it when its
+switch ends. `Rowtype_test.template` makes a database, runs the suite's
+setup in it once -- its migrations -- ends every connection to it and
+marks it a template. A setup that fails is the template's failure as
+itself: a migration's error comes back as the migration's, for
+`Rowtype_migrate.error_to_string` to word. `Rowtype_test.database` copies
+it for one case --
+`CREATE DATABASE ... TEMPLATE`, tens of milliseconds -- rows the
+migrations seeded included, and drops the copy after, with `(force)`.
+
+A copy is better than truncating between tests where correctness matters:
+it keeps the rows migrations seed, which truncating wipes, and undoes
+whatever else a test changed -- a table, a setting, a sequence. Roles and
+`ALTER SYSTEM` are the server's, not a database's, so a test that makes a
+role names it uniquely.
+
+## A killed run
+
+A run killed while its container ran leaves it behind. Every container
+`rowtype-test` starts is labelled with the process that started it, and
+the next run removes each whose process has ended: the next run is the
+reaper, with no container of its own to do it.
+
+What a cleanup could not remove is said. A case's database that could not
+be dropped is that case's `Error`. A container, a template, or the
+database of a case that raised is a warning on the `Logs` source
+`rowtype-test`, which `rowtype-test run` prints.
+
+The library reads no variable; a suite reads `TEST_DATABASE_URL` where it
+starts, and hands it over.
