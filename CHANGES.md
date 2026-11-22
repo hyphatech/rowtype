@@ -1,6 +1,6 @@
 # Changes
 
-## Unreleased
+## 0.10.3 (2026-11-22)
 
 - The rowtype package installs its documentation for agents: each page as
   Markdown and `llms.txt`, at `$(opam var rowtype:doc)`. The README's *With an
